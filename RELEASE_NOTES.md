@@ -1,4 +1,4 @@
-Honeydew 0.5.5 is the fork's first release from this repository: upstream Honeydew 0.5.4 with the fork's own features on top, and in-app updates from this repository's releases.
+Honeydew 0.0.0 is the fork's first release from this repository (its own version numbers, starting over): upstream Honeydew 0.5.4 with the fork's own features on top, and in-app updates from this repository's releases.
 
 - Updates. UPDATES in the main menu checks this repository's releases (jikk12kk-bot-bot/honeydew) and installs this build's download; the sound library still comes from upstream's `sounds-*` releases.
 - Main menu. A Quit button.
