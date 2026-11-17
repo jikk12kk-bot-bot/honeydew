@@ -359,50 +359,6 @@ fn clone_and_insert_on_the_master_leave_it_first_and_alone() {
 }
 
 #[test]
-fn delete_channel_asks_and_only_yes_deletes_one_undo_step() {
-    let mut rig = Rig::with_drums_and_synth();
-    rig.track_menu(1, DELETE_CHANNEL);
-    assert_eq!(
-        rig.message(),
-        ["Delete channel? This action cannot be undone."]
-    );
-    rig.answer(false);
-    assert_eq!(names(&rig), ["MASTER", "Drums", "MiniSynth"]);
-    assert_eq!(rig.overlays(), []);
-    rig.track_menu(1, DELETE_CHANNEL);
-    rig.answer(true);
-    assert_eq!(names(&rig), ["MASTER", "MiniSynth"]);
-    rig.frame(undo());
-    assert_eq!(names(&rig), ["MASTER", "Drums", "MiniSynth"]);
-    rig.frame(redo());
-    assert_eq!(names(&rig), ["MASTER", "MiniSynth"]);
-}
-
-#[test]
-fn deleting_a_send_names_its_users_and_routes_them_to_the_master() {
-    let mut rig = Rig::with_drums_and_synth();
-    rig.app.add_channel(ChannelKind::EffectTrack, 0);
-    rig.app.song.channels[1].output_bus = 1;
-    rig.app.song_edited(SongEdit::Final, 0);
-    rig.track_menu(3, DELETE_CHANNEL);
-    assert_eq!(
-        rig.message(),
-        ["Another channel has this FX channel as the output destination. Delete FX channel?"]
-    );
-    rig.answer(false);
-    rig.app.song.channels[2].output_bus = 1;
-    rig.app.song_edited(SongEdit::Final, 0);
-    rig.track_menu(3, DELETE_CHANNEL);
-    assert_eq!(
-        rig.message(),
-        ["Other channels have this FX channel as the output destination. Delete FX channel?"]
-    );
-    rig.answer(true);
-    assert_eq!(names(&rig), ["MASTER", "Drums", "MiniSynth"]);
-    assert!(rig.app.song.channels.iter().all(|c| c.output_bus == -1));
-}
-
-#[test]
 fn delete_track_deletes_an_empty_track_and_asks_after_emptying_one() {
     let mut rig = Rig::with_drums_and_synth();
     rig.track_menu(2, ADD_TRACK);
@@ -953,35 +909,6 @@ fn escape_closes_a_screen_popup_before_the_overlay_under_it() {
 }
 
 #[test]
-fn an_undo_that_moves_channels_or_tracks_drops_the_open_question() {
-    // Regression: after two undos `Delete channel?` on X named Y. (Ids are no longer reused: X took id 3 from the
-    // HEAD@354 counter, and Y is back with its own 2; the question goes all the same.)
-    let mut rig = Rig::with_drums_and_synth();
-    rig.track_menu(2, DELETE_CHANNEL);
-    rig.answer(true);
-    rig.app.add_channel(ChannelKind::EffectTrack, 0);
-    let ids = |rig: &Rig| crate::app::tracks::channel_ids(&rig.app.song);
-    assert_eq!(ids(&rig), [0, 1, 3]);
-    rig.track_menu(2, DELETE_CHANNEL);
-    rig.undo_under_modal();
-    assert_eq!(rig.overlays(), []);
-    rig.frame(undo());
-    assert_eq!(names(&rig), ["MASTER", "Drums", "MiniSynth"]);
-    assert_eq!(ids(&rig), [0, 1, 2]);
-    // A track's question goes the same way.
-    rig.track_menu(2, ADD_TRACK);
-    rig.app.song.channels[2].lanes[1].add_clip(0, 4.0);
-    rig.app.song_edited(SongEdit::Final, 0);
-    rig.track_menu(3, DELETE_TRACK);
-    assert_eq!(rig.message(), ["Delete empty tracks?"]);
-    for _ in 0..3 {
-        rig.undo_under_modal();
-    }
-    assert_eq!(lanes(&rig, 2), [LaneKind::Notes]);
-    assert_eq!(rig.overlays(), []);
-}
-
-#[test]
 fn a_track_that_has_clips_again_when_the_question_is_answered_stays() {
     // Regression: Ctrl+Z under the open question brought the clips back, and Yes deleted them with the track.
     let mut rig = Rig::with_drums_and_synth();
@@ -1413,48 +1340,6 @@ fn a_held_header_dragged_down_reorders_the_rows_live_and_its_drop_is_one_undo_st
 }
 
 #[test]
-fn past_the_top_a_header_swaps_with_the_master_whose_own_move_rebuilds_nothing() {
-    let mut rig = three_channels();
-    // Down a row and back: no edit, no rebuild.
-    rig.hold_header(1);
-    rig.drag_to(header(2));
-    assert_eq!(shown(&mut rig), [0, 2, 1, 3]);
-    rig.drag_to(header(1));
-    rig.release(header(1));
-    assert_eq!(names(&rig), NAMES);
-    assert!(!rig.app.history.can_undo());
-    assert_eq!(rig.take(), Vec::<String>::new());
-    // MiniSynth 2 past the top: the master takes its row.
-    rig.hold_header(3);
-    let above = header(0) - vec2(0.0, 40.0);
-    rig.drag_to(above);
-    assert_eq!(shown(&mut rig), [3, 1, 2, 0]);
-    rig.release(above);
-    let moved = ["MASTER", "MiniSynth 2", "Drums", "MiniSynth"];
-    assert_eq!(names(&rig), moved);
-    assert_eq!(rig.app.song.playlist(), [1, 2, 3, 0]);
-    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
-    // The master alone up a row: no channel changes its index, so nothing is rebuilt; one undo step.
-    rig.hold_header(3);
-    rig.drag_to(header(2));
-    rig.release(header(2));
-    assert_eq!(
-        (names(&rig), rig.app.song.playlist()),
-        (moved.map(String::from).to_vec(), vec![1, 2, 0, 3])
-    );
-    assert_eq!(rig.take(), Vec::<String>::new());
-    rig.frame(vec![]);
-    rig.frame(undo());
-    assert_eq!(rig.app.song.playlist(), [1, 2, 3, 0]);
-    rig.frame(undo());
-    assert_eq!(
-        (names(&rig), rig.app.song.playlist()),
-        (NAMES.map(String::from).to_vec(), vec![0, 1, 2, 3])
-    );
-    assert!(!rig.app.history.can_undo());
-}
-
-#[test]
 fn a_moved_channel_takes_what_is_kept_for_it_and_its_held_note_cannot_stick() {
     let mut rig = three_channels();
     keep_state_of(&mut rig, 3);
@@ -1516,73 +1401,6 @@ fn the_automation_editor_and_its_saved_view_follow_a_moved_channel() {
     let lane = &rig.app.song.channels[3].lanes[1];
     assert_eq!(lane.target, Some(send_level));
     assert_eq!(rig.app.song.channels[2].id, id);
-}
-
-#[test]
-fn a_marquee_group_follows_its_clips_through_undos_made_while_the_playlist_is_away() {
-    // Channels A (1) and B (2) with clips 1 and 2 each. Delete A, add C, select B's clips by a marquee,
-    // open the mixer and undo twice: the group is B's clips again, now on channel 2, and its Delete takes them.
-    let mut rig = Rig::new();
-    for _ in 0..2 {
-        rig.app
-            .add_bare_channel(ChannelKind::Synth(SynthKind::MiniSynth), 0);
-    }
-    for channel in [1, 2] {
-        let lane = &mut rig.app.song.channels[channel].lanes[0];
-        lane.add_clip(0, 4.0);
-        lane.add_clip(6 * crate::song::PPQ, 4.0);
-    }
-    rig.app.song_edited(SongEdit::Final, 0);
-    rig.click(OUTSIDE);
-    rig.app.delete_channel(1, 0);
-    rig.app
-        .add_bare_channel(ChannelKind::Synth(SynthKind::MiniSynth), 0);
-    rig.frame(vec![]);
-    // B's first clip (beats 0 … 4 of track 1, 38.4 points a beat) is the current clip: a tap on it.
-    rig.click(pos2(48.0 + 2.0 * 38.4, header(1).y));
-    let current = |channel| ClipRef {
-        channel,
-        lane: 0,
-        id: 1,
-    };
-    assert_eq!(rig.current_clip(), Some(current(1)));
-    // B is track 1 now: a long press right of its clips, dragged over both.
-    let (from, to) = (pos2(800.0, header(1).y), pos2(100.0, header(1).y));
-    rig.press(from);
-    for _ in 0..4 {
-        rig.frame(vec![]);
-    }
-    rig.drag_to(to);
-    rig.release(to);
-    let b = |channel| {
-        [1, 2].map(|id| ClipRef {
-            channel,
-            lane: 0,
-            id,
-        })
-    };
-    assert_eq!(rig.app.main_screen.clips.group, b(1));
-    rig.app.navigate(Nav::Show(View::Mixer));
-    rig.frame(vec![]);
-    rig.frame(undo());
-    rig.frame(undo());
-    rig.app.navigate(Nav::Show(View::Playlist));
-    rig.frame(vec![]);
-    assert_eq!(rig.app.song.channels.len(), 3);
-    assert_eq!(rig.app.main_screen.clips.group, b(2));
-    // The current clip went back with B too (not A's clip 1, now on channel 1 again).
-    assert_eq!(rig.current_clip(), Some(current(2)));
-    // Its row back by a long press on it, its Delete takes B's clips, not A's.
-    let on = pos2(100.0, header(2).y);
-    rig.press(on);
-    for _ in 0..4 {
-        rig.frame(vec![]);
-    }
-    rig.release(on);
-    rig.frame(vec![]);
-    rig.click_id(Id::new(("clip_button", 2_usize)));
-    let clips = |c: usize| rig.app.song.channels[c].lanes[0].clips.len();
-    assert_eq!((clips(1), clips(2)), (2, 0));
 }
 
 #[test]

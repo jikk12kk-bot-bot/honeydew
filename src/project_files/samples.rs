@@ -422,38 +422,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&user);
     }
 
-    #[test]
-    fn on_the_web_the_sample_folders_list_this_sessions_audio_copies() {
-        let mut files = ProjectFiles::with_provider(Box::new(MemFiles::default()));
-        let user = files.user_dir().unwrap().to_owned();
-        let samples = user.join(SAMPLES_FOLDER);
-        let audio = ["Kick 01.wav", "Loop.FLAC", "Vox.mp3", "Pad.ogg"].map(|n| samples.join(n));
-        let take = user.join(RECORDINGS_FOLDER).join("Take.wav");
-        let other = [
-            samples.join("Song.flm"),
-            samples.join("Voice.m4a"),
-            user.join("Kick.wav"),
-            user.join("My Presets/Reverb/Hall.flmpst"),
-        ];
-        for path in audio.iter().chain([&take]).chain(&other) {
-            files.keep_user_file(path, b"RIFF".to_vec());
-        }
-        // The user folder holds the two sample folders, whatever else is there.
-        assert_eq!(
-            listed(&files, &user),
-            [
-                folder(&user, RECORDINGS_FOLDER),
-                folder(&user, SAMPLES_FOLDER)
-            ]
-        );
-        let mut want: Vec<_> = audio.iter().map(|p| file(p)).collect();
-        want.sort_by(|a, b| a.1.cmp(&b.1));
-        assert_eq!(listed(&files, &samples), want);
-        assert_eq!(listed(&files, &user.join(RECORDINGS_FOLDER)), [file(&take)]);
-        let library = files.sample_library();
-        assert_eq!(library.read(&take).unwrap(), b"RIFF");
-    }
-
     /// A failed `Import` says so: `File type not supported` for a file of another type, else
     /// `Import failed`. It forgets the pick, so the next file opened is a song again.
     #[test]

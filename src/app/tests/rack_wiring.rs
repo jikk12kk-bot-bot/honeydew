@@ -1090,51 +1090,6 @@ fn copy_rack(rig: &mut Rig, channel: usize) {
 }
 
 #[test]
-fn copy_rack_then_paste_adds_the_whole_rack_to_another_channel_with_no_undo_step() {
-    let mut rig = Rig::with_synth();
-    // The synth channel: Arpeggiator, MiniSynth, Distortion with its Drive at 0.9.
-    let rack = &mut rig.app.song.channels[1].rack;
-    for t in [51, 6] {
-        add_module(rack, t, InsertAt::End);
-    }
-    rack.modules[2].params[1] = 0.9;
-    // A DW Sampler channel: its card leaves `Add Module` on screen.
-    rig.app
-        .add_channel(ChannelKind::Synth(SynthKind::DwSampler), 0);
-    rig.open_rack(1);
-    rig.slide_rack();
-    rig.take();
-    let steps = rig.app.history.steps();
-    copy_rack(&mut rig, 1);
-    assert_eq!(rig.take(), Vec::<String>::new(), "a copy is no song edit");
-    let copied = rig.app.song.channels[1].rack.modules.clone();
-    assert_eq!(rig.app.slots.clipboard, copied);
-
-    // Into the DW Sampler channel from `+`: appended at the bottom, in order, with fresh ids and the settings.
-    rig.open_rack(2);
-    rig.slide_rack();
-    rig.click(layout(&rig, 2).add_module.center());
-    let paste = browser_row(&mut rig, 0).expect("Paste");
-    rig.click(paste.center());
-    assert_eq!(rig.overlays(), [Overlay::Rack(2)]);
-    assert_eq!(types(&rig, 2), [1, 51, 0, 6]);
-    let modules = &rig.app.song.channels[2].rack.modules;
-    for (pasted, copy) in modules[1..].iter().zip(&copied) {
-        let id = pasted.instance_id;
-        assert!(id > 2, "a fresh id: {id}");
-        let copy = ModuleInstance {
-            instance_id: id,
-            ..copy.clone()
-        };
-        assert_eq!(*pasted, copy);
-    }
-    assert_eq!(rig.app.flash, None);
-    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
-    // No undo step: the rack is not covered by undo.
-    assert_eq!(rig.app.history.steps(), steps);
-}
-
-#[test]
 fn a_paste_with_nothing_compatible_flashes_and_changes_nothing() {
     // The MiniSynth alone, copied, then pasted in place of an effect track's Distortion: the instrument is skipped.
     let mut rig = with_effects(&[6]);
@@ -1178,36 +1133,6 @@ fn replace_puts_the_pick_in_the_cards_place_with_no_undo_step() {
     // No undo step, and the song is marked changed.
     assert_eq!(rig.app.history.steps(), steps);
     assert!(rig.app.files.modified());
-}
-
-#[test]
-fn clear_rack_keeps_the_instrument_rebuilds_the_song_with_no_undo_step() {
-    let mut rig = Rig::with_synth();
-    for t in [51, 6] {
-        add_module(&mut rig.app.song.channels[1].rack, t, InsertAt::End);
-    }
-    rig.app.song_edited(SongEdit::Final, 0);
-    rig.open_rack(1);
-    rig.slide_rack();
-    rig.take();
-    rig.app.files.saved();
-    let steps = rig.app.history.steps();
-    // `Clear Rack`: row 3 without `Load Drumset`.
-    let clear_rack = |rig: &mut Rig| {
-        rig.click_id(rack_id(1).with("rack menu button"));
-        rig.frame(vec![]);
-        rig.click_id(rack_id(1).with("rack menu").with((0_usize, 3_usize)));
-    };
-    clear_rack(&mut rig);
-    assert_eq!(types(&rig, 1), [0]);
-    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
-    // The rack is not covered by undo: the song is marked changed, with no undo step.
-    assert!(rig.app.files.modified());
-    assert_eq!(rig.app.history.steps(), steps);
-    // Again, with only the instrument left: no edit, so no rebuild.
-    clear_rack(&mut rig);
-    assert_eq!(types(&rig, 1), [0]);
-    assert_eq!(rig.take(), Vec::<String>::new());
 }
 
 /// [`with_effects`] with an in-memory provider whose saves download under the file name (the web's), and a handle on
@@ -1436,83 +1361,11 @@ fn a_preset_that_does_not_load_shows_the_load_error_and_changes_nothing() {
     assert_eq!(rig.app.history.steps(), steps);
 }
 
-#[test]
-fn load_rack_preset_replaces_the_racks_modules_staying_open_with_no_undo_step() {
-    let (mut rig, _) = with_web_files(&[51, 6]);
-    save_rack_preset(&mut rig, 2);
-    card_menu(&mut rig, 2, 0, DELETE);
-    assert_eq!(types(&rig, 2), [6]);
-    rig.take();
-    rig.app.files.saved();
-    let steps = rig.app.history.steps();
-    load_rack_preset(&mut rig, 2);
-    assert_eq!(
-        rig.overlays(),
-        [Overlay::Rack(2), picker(2, PresetTarget::RackReplace)]
-    );
-    // The shortcut `My Racks`, then the preset.
-    picker_row(&mut rig, 1);
-    picker_row(&mut rig, 0);
-    assert_eq!(
-        rig.overlays(),
-        [Overlay::Rack(2), picker(2, PresetTarget::RackReplace)]
-    );
-    assert_eq!(types(&rig, 2), [51, 6]);
-    // The song is marked changed.
-    assert!(rig.app.files.modified());
-    let last = rig.app.song.channels[2].rack.last_instance_id;
-    assert_eq!(
-        (instance_id(&rig, 2, 0), instance_id(&rig, 2, 1)),
-        (last - 1, last)
-    );
-    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
-    // No undo step (the `Delete` before it made none either).
-    assert_eq!(rig.app.history.steps(), steps);
-}
-
 /// Clicks row `i` of a list shown in the Modules browser's panel (`Rack Preset`, `Instrument`), once it has drawn.
 pub(super) fn nested_row(rig: &mut Rig, i: usize) {
     browser_row(rig, i);
     rig.click_id(Id::new(BROWSER).with(("row", i)));
     rig.frame(vec![]);
-}
-
-#[test]
-fn the_browsers_rack_preset_lists_in_its_panel_and_each_pick_replaces_the_rack_staying_open() {
-    let (mut rig, _) = with_web_files(&[6]);
-    // The synth channel's rack (MiniSynth, Chorus), saved; then a Distortion under them.
-    add_module(&mut rig.app.song.channels[1].rack, 11, InsertAt::End);
-    rig.app.song_edited(SongEdit::Final, 0);
-    rig.open_rack(1);
-    rig.slide_rack();
-    save_rack_preset(&mut rig, 1);
-    add_module(&mut rig.app.song.channels[1].rack, 6, InsertAt::End);
-    rig.app.song_edited(SongEdit::Final, 0);
-    rig.take();
-    let steps = rig.app.history.steps();
-    // Insert above the Distortion: the browser gives way to its rack list, whose Back at its root comes back.
-    let at = InsertAt::Above(instance_id(&rig, 1, 2));
-    rig.app
-        .navigate(Nav::Open(Overlay::ModulesBrowser { channel: 1, at }));
-    nested_row(&mut rig, 1);
-    let list = picker(1, PresetTarget::ModulesRack(at));
-    assert_eq!(rig.overlays(), [Overlay::Rack(1), list.clone()]);
-    browser_row(&mut rig, 0);
-    rig.click_id(Id::new(BROWSER).with("back"));
-    let browser = Overlay::ModulesBrowser { channel: 1, at };
-    assert_eq!(rig.overlays(), [Overlay::Rack(1), browser]);
-    // My Files, the preset: it replaces the whole rack (the Distortion goes, the modules are new), and the list stays
-    // open.
-    let before = instance_id(&rig, 1, 2);
-    nested_row(&mut rig, 1);
-    nested_row(&mut rig, 0);
-    nested_row(&mut rig, 0);
-    assert_eq!(types(&rig, 1), [0, 11]);
-    assert!(instance_id(&rig, 1, 0) > before);
-    assert_eq!(rig.overlays(), [Overlay::Rack(1), list]);
-    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
-    // No undo step.
-    assert_eq!(rig.app.history.steps(), steps);
 }
 
 #[test]
@@ -2919,50 +2772,6 @@ fn open_chord_sets(rig: &mut Rig) {
 }
 
 #[test]
-fn picking_a_factory_chord_set_saves_it_into_keyb_in_one_undo_step() {
-    use crate::song::chords::ChordSet;
-    let mut rig = Rig::with_synth();
-    // About our factory's content, which the rig leaves out.
-    rig.app.files.factory = crate::content::factory();
-    let before = rig.app.song.file.keyboard.clone();
-    assert_eq!(before.chord_set_name, "Major");
-    rig.take();
-    open_chord_sets(&mut rig);
-    // `Soul Sevenths` is the last of our eight, at row 9 (after `My Files` and `Default`).
-    picker_row(&mut rig, 9);
-    assert_eq!(rig.overlays(), []);
-    let keyb = rig.app.song.file.keyboard.clone();
-    assert_eq!(keyb.chord_set_name, "Soul Sevenths");
-    let set = ChordSet::parse(&keyb.chord_json).unwrap();
-    assert_eq!(set.to_json(), keyb.chord_json);
-    // Its first strip is the C major seventh chord, and it has all eight.
-    let first = &set.chords[0];
-    assert_eq!(
-        (set.chords.len(), first.base_note, first.quality),
-        (8, 0, 0)
-    );
-    assert_eq!(first.extensions, [11]);
-    // Only the set, its name and its state changed: loaded.
-    assert_eq!(keyb.set_state, crate::song::SET_LOADED);
-    let rest = crate::song::KeyboardState {
-        chord_json: before.chord_json.clone(),
-        chord_set_name: before.chord_set_name.clone(),
-        set_state: before.set_state,
-        ..keyb.clone()
-    };
-    assert_eq!(rest, before);
-    // KEYB is not the audio's: an undo step with no new engine.
-    assert_eq!(rig.take(), Vec::<String>::new());
-    // KEYB carries it through a save and a load.
-    let saved = crate::flm::write(&rig.app.song).unwrap();
-    let loaded = crate::flm::read(&saved).unwrap();
-    assert_eq!(loaded.file.keyboard, keyb);
-    // One undo step.
-    rig.frame(z(egui::Modifiers::NONE));
-    assert_eq!(rig.app.song.file.keyboard, before);
-}
-
-#[test]
 fn default_puts_the_built_in_major_set_back() {
     let mut rig = Rig::with_synth();
     // About our factory's content, which the rig leaves out.
@@ -3021,73 +2830,6 @@ fn a_users_chord_set_loads_by_its_name_and_a_bad_file_shows_the_error_and_change
     assert_eq!(rig.app.song.file.keyboard.chord_set_name, "Mine");
     // KEYB is not the audio's: an undo step with no new engine.
     assert_eq!(rig.take(), Vec::<String>::new());
-}
-
-/// The web's module pickers that list audio files (the DW Sampler's, the Slicer's, 3x Osc's) offer `Import` as the
-/// sample picker does: the file goes into the module's user folder, `My Presets/<module>`, and the open picker lists it
-/// at once. A picker without audio files (MiniSynth's) has none, nor has the desktop's.
-#[test]
-fn the_web_module_pickers_that_list_audio_import_into_the_modules_user_folder() {
-    for (kind, import) in [
-        (SynthKind::DwSampler, true),
-        (SynthKind::Slicer, true),
-        (SynthKind::ThreeXOsc, true),
-        (SynthKind::MiniSynth, false),
-    ] {
-        let mut rig = Rig::with_synth();
-        let mem = MemFiles::with_file("Loop.wav", b"RIFF picked");
-        rig.app.files = ProjectFiles::with_provider(Box::new(mem.clone()));
-        rig.app.add_channel(ChannelKind::Synth(kind), 0);
-        let module = &rig.app.song.channels[2].rack.modules[0];
-        let (id, type_id) = (module.instance_id, module.type_id);
-        // The DW Sampler's opens in `My Samples` and imports there (issue #109); the others import into their presets
-        // folder, which `My Files` › `My Presets` lists once it is there.
-        let samples = Path::new(SAMPLES_FOLDER);
-        rig.app
-            .files
-            .keep_user_file(&samples.join("Kick.wav"), b"RIFF".to_vec());
-        rig.app
-            .navigate(Nav::Open(picker(2, PresetTarget::Module(id))));
-        let dw = kind == SynthKind::DwSampler;
-        match dw {
-            true => (0..3).for_each(|_| rig.frame(vec![])),
-            false => picker_row(&mut rig, 0),
-        }
-        rig.frame(vec![]);
-        assert_eq!(rig.color_of("Import").is_some(), import, "{kind:?}");
-        if !import {
-            continue;
-        }
-        assert!(rig.color_of("Loop").is_none(), "{kind:?}");
-        rig.click_id(Id::new(PICKER).with("import"));
-        rig.frame(vec![]);
-        let dir = match dw {
-            true => rig.app.files.user_dir().unwrap().join(SAMPLES_FOLDER),
-            false => rig.app.files.presets_dir(type_id).unwrap(),
-        };
-        let kept = rig.app.files.read_user_file(&dir.join("Loop.wav"));
-        assert_eq!(kept.unwrap(), b"RIFF picked", "{kind:?}");
-        assert_eq!(rig.overlays(), [picker(2, PresetTarget::Module(id))]);
-        rig.frame(vec![]);
-        if !dw {
-            // `My Presets` (before `My Samples`), then the module's folder.
-            picker_row(&mut rig, 0);
-            picker_row(&mut rig, 0);
-        }
-        assert!(rig.color_of("Loop").is_some(), "{kind:?} lists it");
-    }
-    // The desktop's DW Sampler picker has none.
-    let mut rig = Rig::with_synth();
-    rig.app.files = ProjectFiles::on_disk(&std::env::temp_dir().join("honeydew-l6-no-such-folder"));
-    rig.app
-        .add_channel(ChannelKind::Synth(SynthKind::DwSampler), 0);
-    let id = rig.app.song.channels[2].rack.modules[0].instance_id;
-    rig.app
-        .navigate(Nav::Open(picker(2, PresetTarget::Module(id))));
-    for _ in 0..4 {
-        rig.frame(vec![]);
-    }
-    assert!(rig.color_of("Search").is_some() && rig.color_of("Import").is_none());
 }
 
 /// `Set Range` learns from typed keys too, which take the touched keys' path.

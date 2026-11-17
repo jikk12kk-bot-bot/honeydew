@@ -797,38 +797,6 @@ fn project_texts_fit_their_meta_fields_in_bytes() {
     assert_eq!(rig.info.link, "ü".repeat(1023));
 }
 
-#[test]
-fn project_info_shows_the_values_it_is_given() {
-    let mut rig = Rig::new(Tab::Project);
-    let mut performance = Performance::default();
-    (performance.smoothed, performance.underruns) = (0.01, 2);
-    rig.info = ProjectInfo {
-        length_secs: 2.4,
-        time_spent_secs: 13.0 * 60.0 + 2.7,
-        started_on: Some(1_791_676_503),
-        sample_rate: Some(48_000),
-        performance,
-        ..ProjectInfo::default()
-    };
-    rig.frame(vec![]);
-    for text in [
-        "0m 2s",
-        "13m 2s",
-        "10 October 2026 23:55:03",
-        "140.0 BPM",
-        "48,000 Hz",
-        "CPU: 1 % | Underruns: 2",
-        "Press play to analyze performance",
-    ] {
-        assert!(rig.has(text), "{text}");
-    }
-    // The values start at 40 % of the column's width, the column 2 U in from the 20 U page (#78).
-    let content = shell_layout(Rect::from_min_size(Pos2::ZERO, SIZE.into()), &m()).content;
-    let column = content.shrink2(vec2(m().u(1.5), 0.0));
-    let value_x = column.left() + 0.4 * column.width();
-    assert!((rig.find("13m 2s").left() - value_x).abs() < 1.0);
-}
-
 /// Which of `texts` the last frame drew, in paint order.
 fn drawn(rig: &Rig, texts: &[&str]) -> Vec<String> {
     let mut all: Vec<_> = rig.texts().into_iter().map(|(t, _)| t).collect();

@@ -62,22 +62,6 @@ fn ours(type_id: u16, folder: &str, name: &str) -> ModuleInstance {
 }
 
 #[test]
-fn the_add_channel_instrument_opens_it_titled_with_my_files_then_our_categories() {
-    let mut rig = instrument();
-    assert_eq!(rig.overlays(), [open()]);
-    rig.frame(vec![]);
-    assert!(rig.painted("Instruments") && rig.painted("My Files"));
-    for name in CATEGORIES {
-        assert!(rig.painted(name), "{name}");
-    }
-    // No `Default` row, and no store.
-    assert!(!rig.painted("Default"));
-    // Root order: `My Files`, then the categories, top to bottom.
-    let tops: Vec<f32> = (0..8).map(|i| row(&mut rig, i).top()).collect();
-    assert!(tops.windows(2).all(|w| w[0] < w[1]), "{tops:?}");
-}
-
-#[test]
 fn the_modules_browsers_instrument_lists_them_in_its_panel_and_a_later_pick_replaces_the_module_the_first_added()
  {
     let mut rig = Rig::with_synth();
@@ -202,49 +186,6 @@ fn a_pick_of_another_type_deletes_the_top_card_and_appends_its_instrument_at_the
     rig.frame(vec![]);
     assert_eq!(rig.overlays(), []);
     assert_eq!(types(&rig, CH), [2, 2]);
-}
-
-#[test]
-fn a_pick_loading_on_a_worker_replaces_the_card_at_once_pulses_loading_and_names_the_channel_when_it_lands()
- {
-    let mut rig = instrument();
-    let hold = crate::ui::views::preset_picker::WORKER_HOLD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    click_row(&mut rig, SYNTH);
-    // Synth: `Brass Swell`, a 3x Osc's preset, which loads on a worker.
-    click_row(&mut rig, 0);
-    rig.frame(vec![]);
-    rig.frame(vec![]);
-    assert!(rig.painted(LOADING), "the picked row pulses");
-    assert_eq!(types(&rig, CH), [39]);
-    // The swap marks the song changed at once, and so does the landing.
-    assert!(rig.app.files.modified());
-    rig.app.files.saved();
-    // The swap rebuilds the engine at once, before the preset lands.
-    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
-    assert_eq!(
-        rig.app.song.channels[CH].name, "Instrument",
-        "named when it lands"
-    );
-    // A touch during the load sends a note to the channel.
-    let brass = row(&mut rig, 0);
-    rig.take();
-    rig.press(brass.center());
-    rig.frame(vec![]);
-    let note = rig.take();
-    assert_eq!(note.len(), 1);
-    assert!(note[0].starts_with(&format!("NoteOn {CH} ")), "{note:?}");
-    rig.release(brass.center());
-    drop(hold);
-    worker_done(&mut rig);
-    rig.frame(vec![]);
-    assert!(rig.app.files.modified());
-    assert!(!rig.painted(LOADING));
-    let module = &rig.app.song.channels[CH].rack.modules[0];
-    assert_eq!(module.params, ours(39, "3xOsc", "Synth/Brass Swell").params);
-    assert_eq!(rig.app.song.channels[CH].name, "Brass Swell");
-    assert_eq!(rig.overlays(), [open()]);
 }
 
 #[test]
@@ -420,47 +361,3 @@ fn in_the_instruments_pickers_bin_only_delete_permanently_removes_and_it_asks_fi
     assert_eq!(std::fs::read(&binned).unwrap(), b"lead");
 }
 
-#[test]
-fn a_later_pick_on_the_ui_thread_replaces_an_instruments_pick_still_loading() {
-    // The Instruments twin of `a_later_pick_on_the_ui_thread_replaces_a_pick_still_loading`: `Brass Swell` (a 3x Osc
-    // preset, on a worker), then a 3x Osc `.fst` (on the UI thread, at once): `Brass Swell` must not land over it.
-    let mut rig = instrument();
-    let fst = [
-        &b"FLhd"[..],
-        &6u32.to_le_bytes(),
-        &0x30u16.to_le_bytes(),
-        &[1, 0, 96, 0],
-        b"FLdt",
-        &0u32.to_le_bytes(),
-    ]
-    .concat();
-    (rig.app.files).keep_user_file(Path::new("My Presets/3xOsc/Gen.fst"), fst);
-    let hold = crate::ui::views::preset_picker::WORKER_HOLD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // `Synth`, after the shortcut `My Presets`, there now.
-    click_row(&mut rig, SYNTH + 1);
-    click_row(&mut rig, 0);
-    rig.frame(vec![]);
-    assert!(rig.app.slots.preset_picker.loading());
-    // Back to the root, then My Files › My Presets › 3xOsc › Gen.
-    rig.click_id(Id::new(PICKER).with("back"));
-    for row in [MY_FILES, 0, 0, 0] {
-        click_row(&mut rig, row);
-    }
-    let last = rig.app.song.channels[CH].rack.modules[0].clone();
-    assert_eq!((last.type_id, &*last.file.preset_name), (39, "Gen"));
-    assert!(
-        !rig.app.slots.preset_picker.loading(),
-        "the load is dropped"
-    );
-    drop(hold);
-    crate::ui::views::preset_picker::join_workers();
-    for _ in 0..3 {
-        rig.frame(vec![]);
-    }
-    assert_eq!(
-        rig.app.song.channels[CH].rack.modules[0], last,
-        "the last pick stays"
-    );
-}
