@@ -81,7 +81,7 @@ fn views(song: &mut Song, local: Option<&Song>) {
     local_fields!(SongFileState, to, from;
         version, selected_channel, playhead_beats, playlist_view, show_sharps, versions;
         last_send_bus, guid, play_truncated_notes, next_channel_id, head_extra,
-        time_sig_extra, meta, keyboard, unknown_chunks);
+        time_sig_extra, meta, keyboard, unknown_chunks, folders);
     let to = &mut song.file.meta;
     let from = &from.meta;
     local_fields!(MetaState, to, from; created, modified, editing_seconds;

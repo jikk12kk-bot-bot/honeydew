@@ -22,7 +22,7 @@
 //! nor labels); the expanded meters are drawn under the level slider, the left peak on the lower bar.
 
 use eframe::egui::{
-    Align2, Color32, Id, Painter, Rect, Shape, Stroke, Ui, UiBuilder, pos2, vec2,
+    Align2, Color32, Id, Rect, Shape, Stroke, Ui, UiBuilder, pos2, vec2,
 };
 use honeydew_audio::device::ModuleMeter;
 

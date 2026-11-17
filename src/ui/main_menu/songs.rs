@@ -1499,17 +1499,17 @@ mod tests {
     fn the_breadcrumb_names_the_folders_above_the_open_one() {
         let mut tab = SongsTab::default();
         assert_eq!(
-            (tab.breadcrumb(false).as_str(), tab.title()),
+            (tab.breadcrumb(false).as_str(), tab.title(false)),
             ("", "My Songs")
         );
         tab.folders.push(entry("Demo songs", true, 0));
         assert_eq!(
-            (tab.breadcrumb(false).as_str(), tab.title()),
+            (tab.breadcrumb(false).as_str(), tab.title(false)),
             ("My Songs", "Demo songs")
         );
         tab.folders.push(entry("Old", true, 0));
         assert_eq!(
-            (tab.breadcrumb(false).as_str(), tab.title()),
+            (tab.breadcrumb(false).as_str(), tab.title(false)),
             ("My Songs / Demo songs", "Old")
         );
     }
@@ -1521,18 +1521,18 @@ mod tests {
         let mut tab = SongsTab::default();
         tab.folders.push(entry("Recently Deleted", true, 0));
         assert_eq!(
-            (tab.breadcrumb(true).as_str(), tab.title()),
+            (tab.breadcrumb(true).as_str(), tab.title(false)),
             (note, "Recently Deleted")
         );
         // The bin stands in for the root in the trail.
         tab.folders.push(entry("My Songs", true, 0));
         assert_eq!(
-            (tab.breadcrumb(true).as_str(), tab.title()),
+            (tab.breadcrumb(true).as_str(), tab.title(false)),
             (note, "My Songs")
         );
         tab.folders.push(entry("F", true, 0));
         assert_eq!(
-            (tab.breadcrumb(true), tab.title()),
+            (tab.breadcrumb(true), tab.title(false)),
             (format!("{note} / My Songs"), "F")
         );
     }

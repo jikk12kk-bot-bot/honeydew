@@ -423,7 +423,7 @@ impl MainMenu {
             self.help_menu = Some(help.center());
         }
         let quit_response = crate::ui::focus::interact(ui, quit, id.with("Quit"), Sense::click());
-        if crate::ui::buttons::hovered(ui, &quit_response) {
+        if crate::ui::widgets::hovered(ui, &quit_response) {
             let r = 0.375 * quit.width().min(quit.height());
             (ui.painter()).circle_filled(
                 quit.center(),
