@@ -10,7 +10,6 @@ use super::*;
 use crate::song::ModuleInstance;
 use crate::ui::rack::PresetTarget;
 
- 7] = ["Bass", "Bells", "Keyboard", "Lead", "Pad", "Pluck", "Synth"];
 const MY_FILES: usize = 0;
 const BELLS: usize = 2;
 pub(super) const PLUCK: usize = 6;
