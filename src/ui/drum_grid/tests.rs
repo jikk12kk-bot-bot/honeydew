@@ -1385,11 +1385,6 @@ fn another_clip_takes_no_fling_from_the_last_one() {
     assert_eq!(second(&rig), Some(0.0));
 }
 
-// The keymap's editing and zoom actions (`ui/edit_keys.rs`).
-
-impl Rig {
-}
-
 /// The play box fades as the drum editor's (`timeline::knob_shown`, through `timeline::PlayheadKnob`): out while
 /// playing, so that only the line shows, and back in once stopped.
 #[test]

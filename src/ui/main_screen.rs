@@ -3631,7 +3631,6 @@ mod tests {
             (f.shapes.iter())
                 .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "New Clip"))
         }
-
     }
 
     /// The MiniSynth's clip of [`song_with_a_clip`].
@@ -4952,10 +4951,6 @@ mod tests {
 
     /// Empty space on the MiniSynth's track (row 2, y 176 … 239), at beat 12, on the row's middle.
     const EMPTY_2: Pos2 = pos2(GRID_X + 12.0 * BEAT_PT, 207.5);
-
-    impl Rig {
-
-    }
 
     #[test]
     fn a_press_on_empty_space_held_over_a_focus_loss_is_no_tap() {
