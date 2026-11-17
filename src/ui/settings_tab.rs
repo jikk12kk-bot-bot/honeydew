@@ -533,18 +533,18 @@ impl SettingsTab {
             .iter()
             .filter(|r| {
                 let (web, desktop) = (cfg!(target_arch = "wasm32"), cfg!(desktop));
-                !(web
+                let hidden = web
                     && matches!(
                         r.kind,
                         Kind::Dropdown(Choice::SampleMemory) | Kind::AudioInput
-                    ))
-                    && (desktop
-                        || !matches!(
+                    )
+                    || !desktop
+                        && matches!(
                             r.kind,
                             Kind::Dropdown(Choice::SoundMode) | Kind::InstallSounds
-                        ))
+                        )
                     // The app serves MCP itself everywhere but the web.
-                    && !(web
+                    || web
                         && matches!(
                             r.label,
                             "MCP:"
@@ -554,7 +554,8 @@ impl SettingsTab {
                                 | "Authentication token"
                                 | "Address"
                                 | "Status"
-                        ))
+                        );
+                !hidden
             })
             .collect();
         let plugins = if self.plugins { &PLUGIN_ROWS[..] } else { &[] };
