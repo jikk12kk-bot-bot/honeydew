@@ -1541,4 +1541,3 @@ fn the_flash_skips_folders_starts_the_frame_after_the_tap_and_stays_on_its_rows_
     let shapes = frame(&mut panel, &moved, vec![]);
     assert!(!bare_flash(&ctx, &shapes, 1) && !bare_flash(&ctx, &shapes, 2));
 }
-

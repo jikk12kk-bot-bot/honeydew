@@ -360,4 +360,3 @@ fn in_the_instruments_pickers_bin_only_delete_permanently_removes_and_it_asks_fi
     assert!(rig.painted("Delete 1 file?"));
     assert_eq!(std::fs::read(&binned).unwrap(), b"lead");
 }
-

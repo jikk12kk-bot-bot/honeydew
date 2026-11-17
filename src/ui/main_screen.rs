@@ -5156,7 +5156,6 @@ mod tests {
         assert_eq!(rig.selected, 1, "no track made current");
         assert!(!rig.plus_shown());
     }
-
 }
 
 #[cfg(test)]

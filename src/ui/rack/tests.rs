@@ -4775,4 +4775,3 @@ fn a_moved_rack_tab_keeps_to_its_bounds() {
         assert!(near(tab.bottom(), 100.0 - 0.25 * u), "{place}: {tab:?}");
     }
 }
-
