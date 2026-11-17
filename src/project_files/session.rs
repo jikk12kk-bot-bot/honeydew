@@ -80,7 +80,11 @@ impl ProjectFiles {
     fn session_path(&self) -> Option<PathBuf> {
         let allowed =
             |u: &&Path| u.is_absolute() && (cfg!(not(test)) || u.starts_with(std::env::temp_dir()));
-        let user = self.user.as_deref().filter(allowed).filter(|_| !self.copies)?;
+        let user = self
+            .user
+            .as_deref()
+            .filter(allowed)
+            .filter(|_| !self.copies)?;
         Some(user.join(SESSION_FILE))
     }
 
@@ -264,7 +268,10 @@ mod tests {
         // The next start brings it back, unsaved and untitled.
         let mut next = ProjectFiles::on_disk(&tmp.0);
         let restored = next.restore_session().expect("restored");
-        assert_eq!((restored.title.as_str(), restored.tempo_bpm), ("Kept", 99.0));
+        assert_eq!(
+            (restored.title.as_str(), restored.tempo_bpm),
+            ("Kept", 99.0)
+        );
         assert!(next.modified());
         assert_eq!(next.song_file(), None);
         assert_eq!(next.take_flash().as_deref(), Some(RESTORED));

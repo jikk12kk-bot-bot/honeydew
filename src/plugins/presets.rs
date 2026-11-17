@@ -100,7 +100,9 @@ pub fn parse(rel: &str, bytes: &[u8]) -> Option<Preset> {
     let (mut plugin, mut params) = (None, false);
     for field in header.split('\t') {
         match field.split_once('=') {
-            Some(("id", id)) => plugin = Some(id.split_once(':').map_or(id, |(_, id)| id).to_owned()),
+            Some(("id", id)) => {
+                plugin = Some(id.split_once(':').map_or(id, |(_, id)| id).to_owned())
+            }
             Some(("body", "params")) => params = true,
             _ => {}
         }
@@ -147,7 +149,8 @@ pub fn all() -> &'static [Preset] {
     static ALL: OnceLock<Vec<Preset>> = OnceLock::new();
     ALL.get_or_init(|| {
         // Citrus's are made in code ([`super::citrus_presets`]).
-        let citrus = (super::citrus_presets::files().iter()).map(|(rel, bytes)| (rel.as_str(), bytes.as_slice()));
+        let citrus = (super::citrus_presets::files().iter())
+            .map(|(rel, bytes)| (rel.as_str(), bytes.as_slice()));
         let mut all: Vec<Preset> = (FILES.iter().copied())
             .chain(citrus)
             .filter_map(|(rel, bytes)| parse(rel, bytes))
@@ -284,7 +287,10 @@ mod tests {
                     # a comment\n\nCutoff frequency = 160\nResonance = 0.5\n";
         let p = parse("Lemon Filter/Party/Next door.ospreset", text.as_bytes()).expect("a preset");
         assert_eq!(p.plugin, "org.openstudio.lemon-filter");
-        assert_eq!((p.category.as_str(), p.name.as_str()), ("Party", "Next door"));
+        assert_eq!(
+            (p.category.as_str(), p.name.as_str()),
+            ("Party", "Next door")
+        );
         assert_eq!(
             p.body,
             Body::Params(vec![
@@ -292,7 +298,8 @@ mod tests {
                 ("Resonance".into(), 0.5)
             ])
         );
-        let state = b"OSPRESET 1\nplugin=Press\tid=clap:org.openstudio.press\tformat=clap\n\x07\0\n{}";
+        let state =
+            b"OSPRESET 1\nplugin=Press\tid=clap:org.openstudio.press\tformat=clap\n\x07\0\n{}";
         let p = parse("Press/Default.ospreset", state).expect("a preset");
         assert_eq!(p.category, "");
         assert_eq!(p.body, Body::State(b"\x07\0\n{}".to_vec()));
@@ -301,7 +308,10 @@ mod tests {
 
     #[test]
     fn every_built_in_file_is_a_preset_of_a_built_in_plugin() {
-        assert_eq!(all().len(), FILES.len() + super::super::citrus_presets::PATCHES.len());
+        assert_eq!(
+            all().len(),
+            FILES.len() + super::super::citrus_presets::PATCHES.len()
+        );
         for p in all() {
             assert!(
                 p.plugin.starts_with("org.openstudio."),

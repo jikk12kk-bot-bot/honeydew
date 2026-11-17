@@ -223,7 +223,8 @@ pub fn show(
     if let Some((id, by)) = actions.step_preset {
         state.step = Some((channel_id, id, by));
     }
-    if !actions.params.is_empty() || actions.minimized || actions.settings || actions.preset_loaded {
+    if !actions.params.is_empty() || actions.minimized || actions.settings || actions.preset_loaded
+    {
         app.channel_param_edited();
     }
     for change in actions.params {

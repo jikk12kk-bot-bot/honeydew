@@ -125,8 +125,11 @@ pub fn show<T: Copy>(
     let (key, pass) = (Id::new("popup dim pass"), Some(ctx.cumulative_pass_nr()));
     if ctx.data_mut(|d| std::mem::replace(d.get_temp_mut_or_default(key), pass) != pass) {
         let ink = cx.theme.colors.background.to_color32();
-        ctx.layer_painter(layer(id))
-            .rect_filled(ctx.content_rect(), 0.0, anim::dim(ink, anim::DIM_ALPHA));
+        ctx.layer_painter(layer(id)).rect_filled(
+            ctx.content_rect(),
+            0.0,
+            anim::dim(ink, anim::DIM_ALPHA),
+        );
     }
     show_as(
         ctx,

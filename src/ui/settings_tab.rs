@@ -327,7 +327,10 @@ const ROWS: [Row; 57] = {
             "Show range labels on keyboard",
             Toggle(|s| &mut s.range_labels),
         ),
-        row("Keyboard in front of pickers", Toggle(|s| &mut s.picker_keys)),
+        row(
+            "Keyboard in front of pickers",
+            Toggle(|s| &mut s.picker_keys),
+        ),
         row(
             "Continuous scrolling during playback",
             Toggle(|s| &mut s.continuous_scroll),

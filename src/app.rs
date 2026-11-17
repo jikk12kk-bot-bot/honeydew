@@ -2325,9 +2325,9 @@ impl HoneydewApp {
                     && !self.main_screen.panel_hidden
                     && views::panel_in_front(&self.nav.overlays);
                 let covered = self.nav.overlays.iter().any(over);
-                let grabbed = self
-                    .main_screen
-                    .grab(ui, &metrics, covered && !front, screen.height());
+                let grabbed =
+                    self.main_screen
+                        .grab(ui, &metrics, covered && !front, screen.height());
                 let (mut regions, strip) = panel::panel_layout(
                     ui.ctx(),
                     screen,

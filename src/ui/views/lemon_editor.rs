@@ -16,16 +16,18 @@
 //! column opens the preset picker over it, as the card's preset button does ([`crate::plugins::presets`]); the editor
 //! shows again as the picker closes.
 
-use eframe::egui::{self, Area, Color32, Id, LayerId, Order, Painter, Rect, Sense, Stroke, Vec2, pos2, vec2};
+use eframe::egui::{
+    self, Area, Color32, Id, LayerId, Order, Painter, Rect, Sense, Stroke, Vec2, pos2, vec2,
+};
 
 use super::{AppCtx, Nav, Overlay};
 use crate::icons::{IconId, draw_icon};
 use crate::metrics::Metrics;
-use crate::ui::ctrl_menu::Touch;
 use crate::ui::anim;
 use crate::ui::buttons::filled_circle_button;
-use crate::ui::rack::lemon_card::{self, LemonCard};
+use crate::ui::ctrl_menu::Touch;
 use crate::ui::rack::PresetTarget;
+use crate::ui::rack::lemon_card::{self, LemonCard};
 
 /// The close X's disc (U): the corner logo's (`main_screen`), 2.1 U in from the screen's right and 0.2 U down, which it
 /// covers.
@@ -166,7 +168,13 @@ pub fn show(
     let column = disc.union(mouse_disc).union(presets_disc);
     on_top("column", column, &mut |ui| {
         let ink = c.text.to_color32();
-        let b = filled_circle_button(ui, id.with("presets"), presets_disc.center(), presets_disc.width(), bg);
+        let b = filled_circle_button(
+            ui,
+            id.with("presets"),
+            presets_disc.center(),
+            presets_disc.width(),
+            bg,
+        );
         draw_icon(ui.painter(), presets_disc, IconId::Music, ink, 0.6, m);
         presets_tapped = b.clicked();
         // The busy screen's abort: a `background` disc, the X in `text`.
@@ -200,7 +208,13 @@ pub fn show(
         } else {
             (bg, c.text.to_color32())
         };
-        let b = filled_circle_button(ui, id.with("zoom"), zoom_disc.center(), zoom_disc.width(), fill);
+        let b = filled_circle_button(
+            ui,
+            id.with("zoom"),
+            zoom_disc.center(),
+            zoom_disc.width(),
+            fill,
+        );
         magnifier_icon(ui.painter(), zoom_disc, ink, m);
         zoom_toggled = b.clicked();
     });
@@ -224,7 +238,13 @@ pub fn show(
             }
             let text = format!("{level:.1}×");
             let font = m.font_id(crate::metrics::FontSize::Pt10);
-            ui.painter().text(level_rect.center(), egui::Align2::CENTER_CENTER, text, font, ink);
+            ui.painter().text(
+                level_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                text,
+                font,
+                ink,
+            );
         });
     }
     // A finger on the buttons' grip moved them: kept on the screen, as a fraction of it (a turn of the screen keeps
@@ -291,10 +311,7 @@ fn buttons_rect(screen: Rect, at: Option<Vec2>, m: &Metrics) -> Rect {
         None => screen.max - half - Vec2::splat(m.u(BUTTONS_IN)),
     };
     let (lo, hi) = (screen.min + half, screen.max - half);
-    let centre = egui::pos2(
-        centre.x.min(hi.x).max(lo.x),
-        centre.y.min(hi.y).max(lo.y),
-    );
+    let centre = egui::pos2(centre.x.min(hi.x).max(lo.x), centre.y.min(hi.y).max(lo.y));
     Rect::from_center_size(centre, size)
 }
 
@@ -310,7 +327,13 @@ fn button_parts(pill: Rect, m: &Metrics) -> [Rect; 3] {
 
 /// The floating buttons in `pill`: the grip (a `background` strip with three lines), Left and Right (`background`, lit
 /// `accent` while held), each with its letter.
-fn paint_buttons(painter: &Painter, pill: Rect, card: &LemonCard, cx: &crate::ui::UiCtx, m: &Metrics) {
+fn paint_buttons(
+    painter: &Painter,
+    pill: Rect,
+    card: &LemonCard,
+    cx: &crate::ui::UiCtx,
+    m: &Metrics,
+) {
     let c = &cx.theme.colors;
     let (bg, text) = (c.background.to_color32(), c.text.to_color32());
     let [left, right, grip] = button_parts(pill, m);
@@ -323,7 +346,10 @@ fn paint_buttons(painter: &Painter, pill: Rect, card: &LemonCard, cx: &crate::ui
         let y = grip.center().y + i as f32 * m.u(0.11);
         let half = m.u(0.45);
         painter.line_segment(
-            [egui::pos2(grip.center().x - half, y), egui::pos2(grip.center().x + half, y)],
+            [
+                egui::pos2(grip.center().x - half, y),
+                egui::pos2(grip.center().x + half, y),
+            ],
             line,
         );
     }
@@ -336,7 +362,13 @@ fn paint_buttons(painter: &Painter, pill: Rect, card: &LemonCard, cx: &crate::ui
         };
         painter.rect_filled(r, corner, fill);
         painter.rect_stroke(r, corner, outline, egui::StrokeKind::Inside);
-        painter.text(r.center(), egui::Align2::CENTER_CENTER, label, font.clone(), ink);
+        painter.text(
+            r.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            font.clone(),
+            ink,
+        );
     }
 }
 
@@ -350,9 +382,18 @@ fn mouse_icon(painter: &Painter, disc: Rect, ink: Color32, m: &Metrics) {
     let split = body.top() + body.height() * 0.42;
     let mid = body.center().x;
     painter.line_segment([pos2(mid, body.top()), pos2(mid, split)], stroke);
-    painter.line_segment([pos2(body.left(), split), pos2(body.right(), split)], stroke);
-    let wheel = Rect::from_center_size(pos2(mid, body.top() + body.height() * 0.22), vec2(0.0, size * 0.08));
-    painter.line_segment([wheel.center_top(), wheel.center_bottom()], Stroke::new(stroke.width * 1.6, ink));
+    painter.line_segment(
+        [pos2(body.left(), split), pos2(body.right(), split)],
+        stroke,
+    );
+    let wheel = Rect::from_center_size(
+        pos2(mid, body.top() + body.height() * 0.22),
+        vec2(0.0, size * 0.08),
+    );
+    painter.line_segment(
+        [wheel.center_top(), wheel.center_bottom()],
+        Stroke::new(stroke.width * 1.6, ink),
+    );
 }
 
 /// A magnifier in `disc` in `ink`: its lens and its handle.

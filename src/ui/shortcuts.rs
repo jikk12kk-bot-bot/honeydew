@@ -106,7 +106,8 @@ pub fn key(user: &Path, path: &Path) -> Option<String> {
 
 /// The folder of the shortcut `key` in the user folder `user`.
 pub fn path(user: &Path, key: &str) -> PathBuf {
-    key.split('/').fold(user.to_owned(), |path, part| path.join(part))
+    key.split('/')
+        .fold(user.to_owned(), |path, part| path.join(part))
 }
 
 /// The shortcut row's name: its folder's.
@@ -135,7 +136,8 @@ pub fn share(ctx: &Context, shortcuts: Shortcuts) {
 
 /// The shortcuts of every scope, for a browser to list its own ([`Shortcuts::of`]).
 pub fn get(ctx: &Context) -> Shortcuts {
-    ctx.data(|d| d.get_temp::<Shortcuts>(shared())).unwrap_or_default()
+    ctx.data(|d| d.get_temp::<Shortcuts>(shared()))
+        .unwrap_or_default()
 }
 
 /// A browser changed them: the browsers of its scope list them at once, and the app keeps them ([`take_edit`]).
@@ -225,7 +227,10 @@ mod tests {
         assert_eq!(key(user, user), None);
         assert_eq!(key(user, Path::new("/elsewhere")), None);
         assert_eq!(name("My Presets/SuperSaw"), "SuperSaw");
-        assert_eq!(sub("My Presets/SuperSaw").as_deref(), Some("My Presets/SuperSaw"));
+        assert_eq!(
+            sub("My Presets/SuperSaw").as_deref(),
+            Some("My Presets/SuperSaw")
+        );
         assert_eq!(sub("My Presets"), None);
     }
 }

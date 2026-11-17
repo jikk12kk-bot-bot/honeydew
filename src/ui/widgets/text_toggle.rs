@@ -79,7 +79,12 @@ pub fn value_button(ui: &mut Ui, cx: &UiCtx, c: &Control, text: &str) -> Respons
     painter.rect_filled(bar, h / 2.0, fill);
     // Cut short to fit, a character at a time.
     let room = (bar.width() - m.u(0.2)).max(0.0);
-    let width = |s: &str| painter.layout_no_wrap(s.to_owned(), font.clone(), ink).size().x;
+    let width = |s: &str| {
+        painter
+            .layout_no_wrap(s.to_owned(), font.clone(), ink)
+            .size()
+            .x
+    };
     let mut shown = text.to_owned();
     if width(&shown) > room {
         let mut chars: Vec<char> = text.chars().collect();

@@ -59,7 +59,9 @@ pub fn on_finger_widget(ctx: &egui::Context, pos: Pos2) -> bool {
 pub fn route_input(ctx: &egui::Context, raw: &mut egui::RawInput) {
     static ROUTE: LazyLock<Mutex<TouchRoute>> = LazyLock::new(Mutex::default);
     let mut route = ROUTE.lock().unwrap_or_else(PoisonError::into_inner);
-    route.route(&mut raw.events, raw.modifiers, |pos| on_finger_widget(ctx, pos));
+    route.route(&mut raw.events, raw.modifiers, |pos| {
+        on_finger_widget(ctx, pos)
+    });
 }
 
 /// The fingers down, and the one the pointer follows.
@@ -221,12 +223,22 @@ mod tests {
         let mut route = TouchRoute::default();
         let (key, knob) = (pos2(100.0, 500.0), pos2(300.0, 100.0));
         // The integration presses the pointer with the first finger, on the keys: it goes.
-        let first = vec![touch(0, TouchPhase::Start, key), Event::PointerMoved(key), press(key, true)];
+        let first = vec![
+            touch(0, TouchPhase::Start, key),
+            Event::PointerMoved(key),
+            press(key, true),
+        ];
         let mut events = first.clone();
         let mut probe = TouchRoute::default();
         probe.route(&mut events, Modifiers::NONE, keys);
         // The keys' finger is a touch of its own device: no pinch with a finger elsewhere.
-        assert!(matches!(events[..], [Event::Touch { device_id: CLAIMED, .. }]));
+        assert!(matches!(
+            events[..],
+            [Event::Touch {
+                device_id: CLAIMED,
+                ..
+            }]
+        ));
         assert_eq!(pointer(&mut route, first), []);
         // The second finger, on the rack, takes the pointer.
         let second = vec![touch(1, TouchPhase::Start, knob)];
@@ -236,11 +248,21 @@ mod tests {
         );
         let to = pos2(300.0, 80.0);
         assert_eq!(
-            pointer(&mut route, vec![touch(1, TouchPhase::Move, to), touch(0, TouchPhase::Move, key)]),
+            pointer(
+                &mut route,
+                vec![
+                    touch(1, TouchPhase::Move, to),
+                    touch(0, TouchPhase::Move, key)
+                ]
+            ),
             [Event::PointerMoved(to)]
         );
         // The keys' finger lifts (the integration releases its pointer): the pointer stays down on the knob.
-        let lift = vec![touch(0, TouchPhase::End, key), press(key, false), Event::PointerGone];
+        let lift = vec![
+            touch(0, TouchPhase::End, key),
+            press(key, false),
+            Event::PointerGone,
+        ];
         assert_eq!(pointer(&mut route, lift), []);
         assert_eq!(
             pointer(&mut route, vec![touch(1, TouchPhase::End, to)]),
@@ -255,14 +277,27 @@ mod tests {
     fn with_no_finger_on_the_keys_the_pointer_follows_the_first_finger_as_before() {
         let mut route = TouchRoute::default();
         let (a, b) = (pos2(100.0, 100.0), pos2(300.0, 100.0));
-        let first = vec![touch(0, TouchPhase::Start, a), Event::PointerMoved(a), press(a, true)];
+        let first = vec![
+            touch(0, TouchPhase::Start, a),
+            Event::PointerMoved(a),
+            press(a, true),
+        ];
         assert_eq!(
             pointer(&mut route, first),
             [Event::PointerMoved(a), press(a, true)]
         );
         // A second finger, on the keys or not, is a touch only.
-        assert_eq!(pointer(&mut route, vec![touch(1, TouchPhase::Start, b)]), []);
-        assert_eq!(pointer(&mut route, vec![touch(2, TouchPhase::Start, pos2(0.0, 500.0))]), []);
+        assert_eq!(
+            pointer(&mut route, vec![touch(1, TouchPhase::Start, b)]),
+            []
+        );
+        assert_eq!(
+            pointer(
+                &mut route,
+                vec![touch(2, TouchPhase::Start, pos2(0.0, 500.0))]
+            ),
+            []
+        );
         assert_eq!(
             pointer(&mut route, vec![touch(0, TouchPhase::End, a)]),
             [press(a, false), Event::PointerGone]
@@ -284,7 +319,12 @@ mod tests {
         // Its lift never came, and id 0 goes down again: the old press lets go, the new one presses.
         assert_eq!(
             pointer(&mut route, vec![touch(0, TouchPhase::Start, a)]),
-            [press(a, false), Event::PointerGone, Event::PointerMoved(a), press(a, true)]
+            [
+                press(a, false),
+                Event::PointerGone,
+                Event::PointerMoved(a),
+                press(a, true)
+            ]
         );
         let lost = pointer(&mut route, vec![Event::WindowFocused(false)]);
         assert_eq!(lost, [Event::WindowFocused(false), Event::PointerGone]);

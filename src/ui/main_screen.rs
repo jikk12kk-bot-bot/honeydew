@@ -805,13 +805,7 @@ impl MainScreen {
             actions.nav = Some(nav);
         }
         #[cfg(any(target_arch = "wasm32", test))]
-        crate::app::live::playlist(
-            ui,
-            &cx,
-            app.song,
-            (grid, &lanes, axis),
-            app.covered,
-        );
+        crate::app::live::playlist(ui, &cx, app.song, (grid, &lanes, axis), app.covered);
         // Children get the touch first: a held header, a marquee (or the hold that starts one) takes it from the
         // scroller; a ruler press waiting for its long press leaves it the scroller's until a range starts.
         if self.header_busy || self.clips.busy(ui.input(|i| i.time)) {
@@ -5569,12 +5563,7 @@ mod tests {
     #[test]
     fn a_songs_stored_row_zoom_applies_through_the_clamp() {
         // HEAD@296 zoom y is rows a pixel: 1/80 → 80 px = 2.5 U at U = 32.
-        for (zoom_y, row_u) in [
-            (1.0 / 80.0, 2.5),
-            (0.02, 2.0),
-            (0.001, 12.0),
-            (0.0, 2.0),
-        ] {
+        for (zoom_y, row_u) in [(1.0 / 80.0, 2.5), (0.02, 2.0), (0.001, 12.0), (0.0, 2.0)] {
             let mut song = song_with_a_clip();
             song.file.playlist_view[3] = zoom_y;
             let rig = Rig::new(song);

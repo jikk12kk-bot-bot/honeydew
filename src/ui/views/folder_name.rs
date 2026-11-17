@@ -3,7 +3,9 @@
 //! floating dialog centred in the content area over the screen dimmed to α 0.6, as `Channel Settings`'
 //! ([`super::channel_settings`]).
 
-use eframe::egui::{self, Align, Align2, Area, Id, Key, Margin, Order, Rect, Sense, TextEdit, vec2};
+use eframe::egui::{
+    self, Align, Align2, Area, Id, Key, Margin, Order, Rect, Sense, TextEdit, vec2,
+};
 
 use super::{AppCtx, Nav};
 use crate::metrics::FontSize;
@@ -62,10 +64,22 @@ pub fn show(ui: &mut egui::Ui, app: &mut AppCtx, folder: usize, name: &mut Strin
             let painter = ui.painter().clone();
             let title = Rect::from_x_y_ranges(rect.x_range(), row(TITLE).y_range());
             let font = m.font_id(FontSize::Pt12);
-            painter.text(title.center(), Align2::CENTER_CENTER, "Folder Settings", font, text);
+            painter.text(
+                title.center(),
+                Align2::CENTER_CENTER,
+                "Folder Settings",
+                font,
+                text,
+            );
             let caption = row(CAPTION);
             let font = m.font_id(FontSize::Pt8);
-            painter.text(caption.left_center(), Align2::LEFT_CENTER, "Folder Name", font, text);
+            painter.text(
+                caption.left_center(),
+                Align2::LEFT_CENTER,
+                "Folder Name",
+                font,
+                text,
+            );
 
             let field = row(FIELD);
             painter.rect_filled(field, 0.0, bg);

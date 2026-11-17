@@ -387,7 +387,10 @@ impl PresetPicker {
 
     /// The key of the open folder in [`Self::scrolls`]: its path, or the empty path at the root.
     fn open_key(&self) -> PathBuf {
-        self.folders.last().map(|f| f.path.clone()).unwrap_or_default()
+        self.folders
+            .last()
+            .map(|f| f.path.clone())
+            .unwrap_or_default()
     }
 
     /// Takes the [`Self::restore`]d place: the folders down to the first one gone (the root's rows read first, as a
@@ -493,7 +496,10 @@ impl PresetPicker {
     fn toggle_shortcut(&mut self) {
         let user = self.my_files.as_deref();
         let open = self.folders.last().map(|f| f.path.as_path());
-        let Some(key) = user.zip(open).and_then(|(user, open)| shortcuts::key(user, open)) else {
+        let Some(key) = user
+            .zip(open)
+            .and_then(|(user, open)| shortcuts::key(user, open))
+        else {
             return;
         };
         match self.store.of(&self.scope, &self.defaults).contains(&key) {
@@ -1526,7 +1532,11 @@ enum Items {
 fn popup_items(popup: &Popup, state: MenuState, shortcut: Option<bool>, files: bool) -> Items {
     let (line, choices): (&str, &[(bool, &'static str)]) = match popup {
         Popup::Options(at) => {
-            let mut items = if files { options_menu(state) } else { Vec::new() };
+            let mut items = if files {
+                options_menu(state)
+            } else {
+                Vec::new()
+            };
             if let Some(shortcut) = shortcut {
                 shortcut_item(&mut items, shortcut);
             }

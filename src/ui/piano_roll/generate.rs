@@ -12,8 +12,8 @@
 use std::hash::{BuildHasher, RandomState};
 
 use eframe::egui::{
-    Align, Align2, Area, Color32, Context, Id, LayerId, Order, Rect, ScrollArea, Sense, TextEdit, Ui,
-    UiBuilder, pos2, scroll_area::ScrollBarVisibility, vec2,
+    Align, Align2, Area, Color32, Context, Id, LayerId, Order, Rect, ScrollArea, Sense, TextEdit,
+    Ui, UiBuilder, pos2, scroll_area::ScrollBarVisibility, vec2,
 };
 
 use super::compose::{
@@ -113,7 +113,19 @@ impl Panel {
 
     /// The panel [`Self::to_prefs`] kept; `None` for anything else. A choice past its list is its last.
     pub(crate) fn from_prefs(prefs: &[u32]) -> Option<Self> {
-        let &[bars, seed, key, scale, octave, duration, rests, arp, chords, tempo] = prefs else {
+        let &[
+            bars,
+            seed,
+            key,
+            scale,
+            octave,
+            duration,
+            rests,
+            arp,
+            chords,
+            tempo,
+        ] = prefs
+        else {
             return None;
         };
         let at = |v: u32, len: usize| (v as usize).min(len.saturating_sub(1));
@@ -359,21 +371,34 @@ pub(super) fn seed_rect(r: Rect, m: &Metrics) -> Rect {
     let left = r.left() + m.u(LABEL_W);
     let right = (r.right() - m.u(BUTTON[0] + MARGIN)).max(left + m.u(1.0));
     let h = m.u(BUTTON[1]);
-    Rect::from_x_y_ranges(left..=right, r.center().y - h / 2.0..=r.center().y + h / 2.0)
+    Rect::from_x_y_ranges(
+        left..=right,
+        r.center().y - h / 2.0..=r.center().y + h / 2.0,
+    )
 }
 
 /// A seed's number in a text field at `rect`, which a tap types into (Android's text editor on a phone): a number
 /// typed (digits only, kept below `seeds`) is the seed. Whether it changed.
-pub(super) fn seed_field(ui: &mut Ui, cx: &UiCtx, id: Id, rect: Rect, seed: &mut u64, seeds: u64) -> bool {
+pub(super) fn seed_field(
+    ui: &mut Ui,
+    cx: &UiCtx,
+    id: Id,
+    rect: Rect,
+    seed: &mut u64,
+    seeds: u64,
+) -> bool {
     let (m, c) = (cx.m, &cx.theme.colors);
     let digits = (seeds.saturating_sub(1)).to_string().len();
     // What is typed while it has the focus (it may be empty for a moment); the seed's number otherwise.
     let focused = ui.memory(|mem| mem.has_focus(id));
     let mut typed = match focused {
-        true => ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| seed.to_string()),
+        true => ui
+            .data(|d| d.get_temp::<String>(id))
+            .unwrap_or_else(|| seed.to_string()),
         false => seed.to_string(),
     };
-    ui.painter().rect_filled(rect, m.u(0.15), c.control_fill.to_color32());
+    ui.painter()
+        .rect_filled(rect, m.u(0.15), c.control_fill.to_color32());
     let edit = TextEdit::singleline(&mut typed)
         .id(id)
         .char_limit(digits)

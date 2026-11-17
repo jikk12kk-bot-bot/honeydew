@@ -20,9 +20,9 @@
 
 use std::sync::OnceLock;
 
-use citrus::curve::{Curve, Point, ENVELOPE};
+use citrus::curve::{Curve, ENVELOPE, Point};
 use citrus::state::{
-    Delay, State, BAND_LIMIT, COL_OUT, COL_PAN, COL_SEND, F_CUTOFF, OPERATORS, OP_PITCH, OP_VOLUME,
+    BAND_LIMIT, COL_OUT, COL_PAN, COL_SEND, Delay, F_CUTOFF, OP_PITCH, OP_VOLUME, OPERATORS, State,
 };
 
 /// Citrus's CLAP id, without the format.
@@ -65,7 +65,8 @@ impl Patch {
     /// Its preset file: the header, then Citrus's plugin state.
     pub fn file(&self) -> Vec<u8> {
         let fl = self.state().to_bytes(None);
-        let mut bytes = format!("OSPRESET 1\nplugin={FOLDER}\tid=clap:{ID}\tformat=clap\n").into_bytes();
+        let mut bytes =
+            format!("OSPRESET 1\nplugin={FOLDER}\tid=clap:{ID}\tformat=clap\n").into_bytes();
         bytes.extend_from_slice(&citrus::plugin_state_from_fl(&fl));
         bytes
     }
@@ -203,7 +204,12 @@ fn saw(st: &mut State, o: usize) {
 }
 
 fn square(st: &mut State, o: usize) {
-    harmonics(st, o, 128, |n| if n % 2 == 1 { 1.0 / n as f32 } else { 0.0 });
+    harmonics(
+        st,
+        o,
+        128,
+        |n| if n % 2 == 1 { 1.0 / n as f32 } else { 0.0 },
+    );
 }
 
 /// Operator `o`'s harmonics as listed, from the fundamental.
@@ -272,7 +278,11 @@ fn curve(points: &[(f32, f32, f32)], decay: i32, sustain: i32) -> Curve {
 
 /// Attack, decay to the sustain level, release (seconds; the sustain 0..1).
 fn adsr(a: f32, d: f32, s: f32, r: f32) -> Curve {
-    curve(&[(0.0, 0.0, 0.0), (a, 1.0, 0.0), (d, s, 0.3), (r, 0.0, 0.3)], 1, 2)
+    curve(
+        &[(0.0, 0.0, 0.0), (a, 1.0, 0.0), (d, s, 0.3), (r, 0.0, 0.3)],
+        1,
+        2,
+    )
 }
 
 /// Operator `o`'s volume envelope.
@@ -322,7 +332,11 @@ fn filter_env(st: &mut State, f: usize, amount: i32, a: f32, d: f32, s: f32, r: 
     let m = &mut st.modules[OPERATORS + f];
     m.header[1] = amount;
     let top = 0.5 + 0.5 * s;
-    m.arts[F_CUTOFF].env = curve(&[(0.0, 0.5, 0.0), (a, 1.0, 0.0), (d, top, 0.3), (r, 0.5, 0.3)], 1, 2);
+    m.arts[F_CUTOFF].env = curve(
+        &[(0.0, 0.5, 0.0), (a, 1.0, 0.0), (d, top, 0.3), (r, 0.5, 0.3)],
+        1,
+        2,
+    );
 }
 
 /// `order` unison voices, detuned by `detune` (of 256) and spread by `spread` (of 128), their phases apart.
@@ -582,7 +596,13 @@ fn glass_pad(st: &mut State) {
 
 fn choir(st: &mut State) {
     op(st, 0, 256, 1.0);
-    levels(st, 0, &[1.0, 0.6, 0.9, 0.7, 0.35, 0.25, 0.4, 0.2, 0.1, 0.08, 0.05, 0.04]);
+    levels(
+        st,
+        0,
+        &[
+            1.0, 0.6, 0.9, 0.7, 0.35, 0.25, 0.4, 0.2, 0.1, 0.08, 0.05, 0.04,
+        ],
+    );
     amp(st, 0, 0.4, 1.0, 0.9, 1.2);
     out(st, 0, 256);
     send(st, 0, 200);
@@ -608,7 +628,12 @@ fn dark_drone(st: &mut State) {
 }
 
 fn shimmer(st: &mut State) {
-    for (o, level, ratio, side) in [(0, 256, 1.0, 0), (1, 120, 2.0, -128), (2, 70, 4.0, 128), (3, 40, 8.0, 0)] {
+    for (o, level, ratio, side) in [
+        (0, 256, 1.0, 0),
+        (1, 120, 2.0, -128),
+        (2, 70, 4.0, 128),
+        (3, 40, 8.0, 0),
+    ] {
         op(st, o, level, ratio);
         amp(st, o, 1.0, 2.0, 0.8, 2.5);
         out(st, o, 256);
@@ -710,8 +735,19 @@ fn tubular_bell(st: &mut State) {
 fn organ(st: &mut State) {
     // Drawbars 16', 8', 5 1/3', 4', 2 2/3', 2', 1 3/5', 1 1/3', 1' as harmonics of the 16' (an octave down).
     op(st, 0, 256, 0.5);
-    let bars = [(1, 0.8), (2, 1.0), (3, 0.8), (4, 0.5), (6, 0.3), (8, 0.4), (12, 0.2), (16, 0.2)];
-    harmonics(st, 0, 16, |n| bars.iter().find(|&&(h, _)| h == n).map_or(0.0, |&(_, l)| l));
+    let bars = [
+        (1, 0.8),
+        (2, 1.0),
+        (3, 0.8),
+        (4, 0.5),
+        (6, 0.3),
+        (8, 0.4),
+        (12, 0.2),
+        (16, 0.2),
+    ];
+    harmonics(st, 0, 16, |n| {
+        bars.iter().find(|&&(h, _)| h == n).map_or(0.0, |&(_, l)| l)
+    });
     amp(st, 0, 0.005, 0.1, 1.0, 0.06);
     out(st, 0, 256);
     send(st, 0, 200);
@@ -1021,11 +1057,18 @@ mod tests {
     fn every_preset_reads_back_as_its_state() {
         let mut seen = std::collections::HashSet::new();
         for patch in PATCHES {
-            assert!(seen.insert((patch.category, patch.name)), "{} twice", patch.name);
+            assert!(
+                seen.insert((patch.category, patch.name)),
+                "{} twice",
+                patch.name
+            );
             let rel = patch.rel();
             let preset = presets::parse(&rel, &patch.file()).expect("a preset");
             assert_eq!(preset.plugin, ID);
-            assert_eq!((preset.category.as_str(), preset.name.as_str()), (patch.category, patch.name));
+            assert_eq!(
+                (preset.category.as_str(), preset.name.as_str()),
+                (patch.category, patch.name)
+            );
             let Body::State(blob) = preset.body else {
                 panic!("{rel} is no state preset");
             };
@@ -1045,14 +1088,21 @@ mod tests {
         let default = PATCHES.iter().find(|p| p.is_default()).expect("a Default");
         let st = default.state();
         let fresh = citrus::preset::default_patch();
-        assert_eq!((st.matrix, st.s, st.main_volume), (fresh.matrix, fresh.s, fresh.main_volume));
+        assert_eq!(
+            (st.matrix, st.s, st.main_volume),
+            (fresh.matrix, fresh.s, fresh.main_volume)
+        );
         assert_eq!(st.modules[0].header, fresh.modules[0].header);
     }
 
     /// A preset's envelopes have time: the master envelope knobs are not left at 0.
     #[test]
     fn the_master_envelope_knobs_are_set() {
-        let st = PATCHES.iter().find(|p| p.name == "Warm Pad").expect("Warm Pad").state();
+        let st = PATCHES
+            .iter()
+            .find(|p| p.name == "Warm Pad")
+            .expect("Warm Pad")
+            .state();
         assert_eq!(&st.s[..8], &[128, 128, 0, 128, 128, 128, 0, 128]);
         assert!(st.modules[0].arts[OP_VOLUME].env.enabled);
     }

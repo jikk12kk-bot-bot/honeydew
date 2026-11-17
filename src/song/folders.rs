@@ -319,7 +319,10 @@ mod tests {
 
     /// The channels' ids in playlist order.
     fn ids(song: &Song) -> Vec<i32> {
-        song.playlist().into_iter().map(|c| song.channels[c].id).collect()
+        song.playlist()
+            .into_iter()
+            .map(|c| song.channels[c].id)
+            .collect()
     }
 
     #[test]
@@ -365,14 +368,18 @@ mod tests {
         let f = song.new_folder(Some(at(&song, 2))).unwrap();
         song.move_to_folder(at(&song, 3), Some(f));
         // Above its first member, the playlist's `Insert Channel` there.
-        let new = song.insert_channel(at(&song, 2), ChannelKind::Drums).unwrap();
+        let new = song
+            .insert_channel(at(&song, 2), ChannelKind::Drums)
+            .unwrap();
         assert_eq!(song.folder_of(new), Some(f));
         let copy = song.clone_channel(at(&song, 3));
         assert_eq!(song.folder_of(copy), Some(f));
         // Added at the end, or above a channel in no folder: in none.
         song.add_channel(ChannelKind::Drums);
         assert_eq!(song.folder_of(song.channels.len() - 1), None);
-        let new = song.insert_channel(at(&song, 1), ChannelKind::Drums).unwrap();
+        let new = song
+            .insert_channel(at(&song, 1), ChannelKind::Drums)
+            .unwrap();
         assert_eq!(song.folder_of(new), None);
         assert_eq!(song.folder_members(f).len(), 4);
         // Mute and solo state over the members.

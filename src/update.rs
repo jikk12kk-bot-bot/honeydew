@@ -40,7 +40,8 @@ use crate::content::install::{self, Progress, SHIPPED_RELEASE};
 /// another signature, and lack the fork's changes).
 pub const REPO: &str = "jikk12kk-bot-bot/honeydew";
 /// Its releases, newest first, pre-releases too (the Android APK workflow's builds are pre-releases), in GitHub's API.
-const RELEASES: &str = "https://api.github.com/repos/jikk12kk-bot-bot/honeydew/releases?per_page=30";
+const RELEASES: &str =
+    "https://api.github.com/repos/jikk12kk-bot-bot/honeydew/releases?per_page=30";
 /// This build's number: the Android APK workflow's run number, its release `android-debug-<n>` (the workflow sets
 /// `HONEYDEW_BUILD`). `None` for any other build, which updates from the versioned releases.
 pub const BUILD: Option<&str> = option_env!("HONEYDEW_BUILD");
@@ -218,7 +219,8 @@ fn pick<'a>(assets: &'a [Asset], tag: &str, platform: &str, appimage: bool) -> O
     // An Android APK workflow build: its debug APK, the base one first (`honeydew-android-<version>-arm-base-debug.apk`).
     if platform == "android" && debug_number(tag).is_some() {
         let apk = |end: &str| {
-            (assets.iter()).find(|a| a.name.starts_with("honeydew-android-") && a.name.ends_with(end))
+            (assets.iter())
+                .find(|a| a.name.starts_with("honeydew-android-") && a.name.ends_with(end))
         };
         return apk("-arm-base-debug.apk").or_else(|| apk("-arm-debug.apk"));
     }
@@ -718,7 +720,12 @@ pub fn get(url: &str, to: &Path, grown: &dyn Fn(u64)) -> io::Result<()> {
 
 /// [`get`], with `auth` (a GitHub token, and the `Accept` to ask with) sent to `url`'s host only, never to where it
 /// redirects (a release asset's storage).
-fn get_with(url: &str, to: &Path, grown: &dyn Fn(u64), auth: Option<(&str, &str)>) -> io::Result<()> {
+fn get_with(
+    url: &str,
+    to: &Path,
+    grown: &dyn Fn(u64),
+    auth: Option<(&str, &str)>,
+) -> io::Result<()> {
     let mut waits = RETRIES.into_iter();
     loop {
         let err = match transfer(url, to, grown, auth) {
@@ -740,7 +747,12 @@ fn size_of(path: &Path) -> u64 {
 
 /// One try of [`get`]: `curl`, its exit code read as the error.
 #[cfg(not(target_os = "android"))]
-fn transfer(url: &str, to: &Path, grown: &dyn Fn(u64), auth: Option<(&str, &str)>) -> io::Result<()> {
+fn transfer(
+    url: &str,
+    to: &Path,
+    grown: &dyn Fn(u64),
+    auth: Option<(&str, &str)>,
+) -> io::Result<()> {
     use std::io::Read;
     use std::process::{Command, Stdio};
     let mut curl = Command::new("curl");
@@ -757,7 +769,12 @@ fn transfer(url: &str, to: &Path, grown: &dyn Fn(u64), auth: Option<(&str, &str)
         ])
         // curl sends an `Authorization` header to the first host only, not on to a redirect's.
         .args(auth.into_iter().flat_map(|(token, accept)| {
-            ["-H".to_owned(), format!("Authorization: Bearer {token}"), "-H".to_owned(), format!("Accept: {accept}")]
+            [
+                "-H".to_owned(),
+                format!("Authorization: Bearer {token}"),
+                "-H".to_owned(),
+                format!("Accept: {accept}"),
+            ]
         }))
         .args(["--continue-at", "-", "--output"])
         .arg(to)
@@ -796,9 +813,16 @@ fn transfer(url: &str, to: &Path, grown: &dyn Fn(u64), auth: Option<(&str, &str)
 
 /// One try of [`get`]: `HoneydewActivity.download`, on a thread of its own while this one tells the size.
 #[cfg(target_os = "android")]
-fn transfer(url: &str, to: &Path, grown: &dyn Fn(u64), auth: Option<(&str, &str)>) -> io::Result<()> {
+fn transfer(
+    url: &str,
+    to: &Path,
+    grown: &dyn Fn(u64),
+    auth: Option<(&str, &str)>,
+) -> io::Result<()> {
     let (url, path) = (url.to_owned(), to.to_string_lossy().into_owned());
-    let (token, accept) = auth.map_or((String::new(), String::new()), |(t, a)| (t.to_owned(), a.to_owned()));
+    let (token, accept) = auth.map_or((String::new(), String::new()), |(t, a)| {
+        (t.to_owned(), a.to_owned())
+    });
     let worker = thread::spawn(move || crate::android::download_with(&url, &path, &token, &accept));
     while !worker.is_finished() {
         grown(size_of(to));

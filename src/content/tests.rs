@@ -302,7 +302,9 @@ fn a_factory_file_is_stored_as_an_app_shorthand_below_built_in() {
 /// What every lane's entries must hold: plain, unique `/`-separated paths below a top folder of ours.
 #[test]
 fn every_factory_entry_has_a_plain_unique_path_in_a_top_folder() {
-    let tops = [PRESETS, DRUMSETS, LOOPS, SHAPES, SAMPLES, CHORD_SETS, TEMPLATES];
+    let tops = [
+        PRESETS, DRUMSETS, LOOPS, SHAPES, SAMPLES, CHORD_SETS, TEMPLATES,
+    ];
     let entries = &factory().entries;
     for (i, entry) in entries.iter().enumerate() {
         let rel = &entry.rel;
@@ -323,7 +325,10 @@ fn the_lemon_plugins_presets_are_in_their_plugins_folders() {
     let rows = rows(factory(), Some(&trio));
     assert!(rows.contains(&row("Bass", true)), "{rows:?}");
     assert!(rows.contains(&row("Honeydew bass", true)), "{rows:?}");
-    assert!(!rows.iter().any(|(name, _)| name.starts_with("Default")), "{rows:?}");
+    assert!(
+        !rows.iter().any(|(name, _)| name.starts_with("Default")),
+        "{rows:?}"
+    );
     let reverb = at(&format!("{PRESETS}/Lemon Reverb"));
     let listed = factory().list(Some(&reverb)).unwrap();
     let cathedral = (listed.iter())

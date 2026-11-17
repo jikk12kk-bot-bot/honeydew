@@ -22,9 +22,7 @@ use crate::icons::{IconId, draw_icon};
 use crate::metrics::{FontSize, Metrics};
 use crate::settings::Settings;
 use crate::theme::DISABLED_ALPHA;
-use crate::ui::buttons::{
-    boxed_circle_button, filled_circle_button, outline_circle_button,
-};
+use crate::ui::buttons::{boxed_circle_button, filled_circle_button, outline_circle_button};
 use crate::ui::popup::{PopupItem, PopupResult};
 use crate::ui::scroller::{Axis, Scroller, Y, Zones};
 use crate::ui::settings_tab::SettingsTab;

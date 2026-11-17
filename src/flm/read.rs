@@ -416,7 +416,9 @@ impl Reader {
                     self.charge(chunk.payload.len(), &chunk.path)?;
                     let folders = &mut song.file.folders;
                     match crate::song::folders::read(chunk.payload, &chunk.path, folders.len()) {
-                        Ok(f) if folders.len() < crate::song::folders::MAX_FOLDERS => folders.push(f),
+                        Ok(f) if folders.len() < crate::song::folders::MAX_FOLDERS => {
+                            folders.push(f)
+                        }
                         _ => self.unknown(&chunk, &mut song.file.unknown_chunks)?,
                     }
                 }

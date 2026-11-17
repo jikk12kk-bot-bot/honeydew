@@ -511,7 +511,11 @@ impl ModulesBrowser {
     /// How far the list is scrolled, in points, to open at again ([`Self::set_scroll`]); `None` while a search filters
     /// it, whose scroll is not the list's.
     pub fn scroll(&self) -> Option<f32> {
-        self.panel.search.query().is_empty().then_some(self.panel.scroll_y)
+        self.panel
+            .search
+            .query()
+            .is_empty()
+            .then_some(self.panel.scroll_y)
     }
 
     /// Opens the list scrolled down `y` points (kept within the list as it draws): where the last browse left it.

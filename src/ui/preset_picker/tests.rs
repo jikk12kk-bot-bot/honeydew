@@ -1127,7 +1127,10 @@ fn the_root_lists_my_files_then_the_shortcuts_that_are_there_then_default() {
     // Under a shortcut's name its path from the user folder; none for a folder right in it.
     let subs: Vec<Option<String>> = picker.shortcuts.iter().map(|s| s.sub.clone()).collect();
     assert_eq!(subs, [Some("My Presets/SoundFont Player".to_owned()), None]);
-    assert_eq!(names(&picker, "sound"), ["SoundFont Player", "My SoundFonts"]);
+    assert_eq!(
+        names(&picker, "sound"),
+        ["SoundFont Player", "My SoundFonts"]
+    );
     // A removed default goes; an added folder lists after the defaults.
     let (scope, defaults) = (picker.scope.clone(), picker.defaults.clone());
     picker.store.remove(&scope, &defaults, "My SoundFonts");
