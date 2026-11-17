@@ -5,8 +5,8 @@ name: Android APK
 # quota. The newest 5 such pre-releases are kept; older ones (and their tags) are deleted. The APK installs beside the
 # release app as Honeydew Debug. `base` (the default) leaves the sound library out
 # (-arm-base-debug.apk, about 50 MB): the app downloads the sounds once, from the sound library's release (#66).
-# `full` ships them (-arm-debug.apk). Every build signs with the checked-in `android/debug.keystore`, so that one installs
-# over another (the app's own updates, with a GitHub token for this private repository).
+# `full` ships them (-arm-debug.apk). No debug key is kept in the repository: every build signs with a fresh one, so a
+# debug APK does not install over another (uninstall Honeydew Debug first). Releases sign with the release key secrets.
 on:
   workflow_dispatch:
     inputs:

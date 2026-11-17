@@ -239,7 +239,7 @@ cargo install cargo-ndk --version 4.1.2 --locked
 tools/android-dist.sh
 ```
 
-This writes `target/honeydew-android-<version>-arm-debug.apk`, one APK for 64-bit and 32-bit ARM. Add `--base` for the APK without sounds (`-arm-base-debug.apk`), which downloads them. The debug app is called Honeydew Debug and installs alongside the release app. Its signing key is kept in `android/debug.keystore`; keep that file so debug builds can update each other.
+This writes `target/honeydew-android-<version>-arm-debug.apk`, one APK for 64-bit and 32-bit ARM. Add `--base` for the APK without sounds (`-arm-base-debug.apk`), which downloads them. The debug app is called Honeydew Debug and installs alongside the release app. It signs with a local `android/debug.keystore`, made on the first build and not kept in the repository (`.gitignore`); keep that file so your own debug builds can update each other.
 
 **Release signing:** use the same key for every release, or Android won't install updates over the old version. Back up the keystore and passwords outside the repository.
 
