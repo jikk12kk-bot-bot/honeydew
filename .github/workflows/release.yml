@@ -298,6 +298,14 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.0.13004108"
+          # An ANDROID_KEY_ALIAS that names no key in a keystore holding just one: that key (the alias is no secret).
+          if ! keytool -list -keystore "$ANDROID_KEYSTORE_FILE" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
+            aliases=$(keytool -list -keystore "$ANDROID_KEYSTORE_FILE" -storepass "$ANDROID_KEYSTORE_PASSWORD" | sed -n 's/^\([^,]*\), .*PrivateKeyEntry.*/\1/p')
+            if [ "$(printf '%s\n' "$aliases" | grep -c .)" = 1 ]; then
+              echo "::warning::ANDROID_KEY_ALIAS names no key in the keystore; signing with its only key, '$aliases'. Set the secret to it."
+              export ANDROID_KEY_ALIAS="$aliases"
+            fi
+          fi
           tools/android-dist.sh --release
           tools/android-dist.sh --release --base
       - name: Remove signing key

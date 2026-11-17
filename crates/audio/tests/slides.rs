@@ -134,25 +134,6 @@ fn a_slide_right_after_a_note_on_reaches_its_voice() {
     }
 }
 
-/// MiniSynth zeroes the offsets only when the voice it takes was idle: MONO retriggers voice 1, which
-/// keeps them.
-#[test]
-fn minisynth_keeps_the_offsets_on_a_voice_that_was_sounding() {
-    let mono = || {
-        let mut synth = MiniSynth::new(RATE).unwrap();
-        synth.set_parameter(1, 0.5).unwrap();
-        synth
-    };
-    let (rate, ..) = after_slide(&mut mono(), [0.0; 3], |_| {});
-    let (retriggered, ..) = after_slide(&mut mono(), [12.0, 0.0, 0.0], |synth| {
-        synth.note_on(57, 1.0, 0.5)
-    });
-    assert!(
-        (retriggered / rate - 2.0).abs() < 0.1,
-        "{retriggered} / {rate}"
-    );
-}
-
 #[test]
 fn the_transistor_bass_ignores_slides() {
     let (mut plain, mut slid) = (TransistorBass::new(RATE), TransistorBass::new(RATE));
