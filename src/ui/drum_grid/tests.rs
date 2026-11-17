@@ -656,7 +656,7 @@ use crate::metrics::{DEFAULT_UI_SCALE, Metrics};
 use crate::song::{Channel, ChannelKind, DrumGrid, Song};
 use crate::theme::{channel_color, theme_by_id};
 use crate::ui::UiCtx;
-use crate::ui::step_seq::{DrumPads, StepAction, hit_clipboard, hit_color, hit_tints};
+use crate::ui::step_seq::{DrumPads, StepAction, hit_color, hit_tints};
 
 /// A fake kit of four pads.
 struct Kit;
@@ -693,7 +693,6 @@ const CH: usize = 1;
 const GRID_X: f32 = 98.0;
 /// The rows' top at U = 32 (ppp 1): the ruler's height; row 0 starts on the nearest pixel, [`Y0`].
 const TOP: f32 = 52.0;
-const Y0: f32 = 52.0;
 
 /// Row `pad`'s centre line at `tick`, at the default view: 4 U (128 points) a beat is a point a tick from the grid's
 /// left; rows 2 U (64 points) from below the ruler.
@@ -837,13 +836,6 @@ impl Rig {
         self.frame(vec![]);
     }
 
-    /// The primary button pressed at `pos` and held there for a second: a long press.
-    fn hold(&mut self, pos: Pos2) {
-        self.frame(vec![egui::Event::PointerMoved(pos)]);
-        self.button(pos, PointerButton::Primary, true);
-        self.frame_after(1.0, vec![]);
-    }
-
     fn release(&mut self, pos: Pos2) {
         self.button(pos, PointerButton::Primary, false);
         self.frame(vec![]);
@@ -856,10 +848,6 @@ impl Rig {
 
     fn hits(&self) -> Vec<(u8, f64, f64)> {
         hits(self.events())
-    }
-
-    fn selected(&self) -> Vec<bool> {
-        self.view.sel.clone()
     }
 
     fn text_at(&self, label: &str) -> Option<Pos2> {
@@ -878,18 +866,6 @@ impl Rig {
                 _ => None,
             })
             .collect()
-    }
-
-    /// The end capsule's body (a rounded `text` rect) just past the selection's end `end`, centred on its rows (its
-    /// edges on whole pixels).
-    fn handle_at(&self, end: Pos2) -> bool {
-        let text = theme_by_id(0).colors.text.to_color32();
-        self.shapes.iter().any(|s| {
-            matches!(&s.shape, egui::Shape::Rect(r)
-                if r.fill == text && r.corner_radius != egui::CornerRadius::ZERO
-                    && (end.x..end.x + 8.0).contains(&r.rect.left())
-                    && (r.rect.center().y - end.y).abs() <= 1.0)
-        })
     }
 
     /// The hit colour on page `prop` of a hit at `value`.
@@ -1412,10 +1388,6 @@ fn another_clip_takes_no_fling_from_the_last_one() {
 // The keymap's editing and zoom actions (`ui/edit_keys.rs`).
 
 impl Rig {
-    /// A press of `key` with `mods` and its release, in one frame.
-    fn key(&mut self, key: egui::Key, mods: Modifiers) {
-        self.frame(crate::ui::edit_keys::tests::tap(key, mods).into());
-    }
 }
 
 /// The play box fades as the drum editor's (`timeline::knob_shown`, through `timeline::PlayheadKnob`): out while

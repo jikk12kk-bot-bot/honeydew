@@ -2963,8 +2963,6 @@ mod tests {
         reorder: Option<Vec<usize>>,
         /// The playhead knob's drop: the song tick it seeks to.
         seek: Option<u64>,
-        /// Where the track grid starts.
-        grid_left: f32,
         shapes: Vec<egui::epaint::ClippedShape>,
     }
 
@@ -3082,7 +3080,6 @@ mod tests {
                         insert: actions.insert,
                         reorder: actions.reorder,
                         seek: actions.seek,
-                        grid_left: screen.header_w(&m) + m.t(),
                         shapes: Vec::new(),
                     });
                 });
@@ -3628,29 +3625,6 @@ mod tests {
             self.click_id(Id::new("clip_insert").with(0))
         }
 
-        /// A tap at `pos` 0.1 s long, then another 0.1 s later: released 0.2 s apart, a double tap.
-        fn double_tap(&mut self, pos: Pos2) -> (Option<SongEdit>, Option<Nav>) {
-            self.frames(vec![
-                vec![egui::Event::PointerMoved(pos)],
-                vec![button(pos, true)],
-                vec![button(pos, false)],
-                vec![button(pos, true)],
-                vec![button(pos, false)],
-            ])
-        }
-
-        /// A press at `pos` held 0.4 s, then released there: a long press.
-        fn long_press(&mut self, pos: Pos2) -> (Option<SongEdit>, Option<Nav>) {
-            self.frames(vec![
-                vec![egui::Event::PointerMoved(pos)],
-                vec![button(pos, true)],
-                vec![],
-                vec![],
-                vec![],
-                vec![button(pos, false)],
-            ])
-        }
-
         /// The insert menu is drawn, a frame on.
         fn plus_shown(&mut self) -> bool {
             let f = self.frame(vec![]);
@@ -3658,12 +3632,6 @@ mod tests {
                 .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "New Clip"))
         }
 
-        /// Taps the MiniSynth's clip and lets the double-tap window pass: current and selected, it drags at once.
-        fn current(&mut self) {
-            self.click(CLIP);
-            self.frame(vec![]);
-            self.frame(vec![]);
-        }
     }
 
     /// The MiniSynth's clip of [`song_with_a_clip`].
@@ -3779,71 +3747,6 @@ mod tests {
 
     // ---- the rows and clips as the playlist draws them ----
 
-    /// Row `i`'s fill right of the headers (x [`GRID_X`]): y [`TOP`] + 64 i, 63 tall (a pixel of gap under it).
-    fn row_fills(f: &Frame, rows: usize) -> Vec<Color32> {
-        (0..rows)
-            .filter_map(|i| {
-                let top = TOP + 64.0 * i as f32;
-                f.shapes.iter().find_map(|s| match &s.shape {
-                    egui::Shape::Rect(r)
-                        if r.rect.left() == GRID_X
-                            && (r.rect.top() - top).abs() < 1e-3
-                            && (r.rect.height() - 63.0).abs() < 1e-3 =>
-                    {
-                        Some(r.fill)
-                    }
-                    _ => None,
-                })
-            })
-            .collect()
-    }
-
-    /// The light outlines (a stroke t + 1 px = 3 px wide on its middle) the frame drew.
-    fn outlines(f: &Frame) -> Vec<Rect> {
-        (f.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r)
-                    if r.stroke.width == 3.0 && r.stroke_kind == egui::StrokeKind::Middle =>
-                {
-                    Some(r.rect)
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// The miniature bars (t = 2 px tall) on track row `row`, left to right: (x, colour).
-    fn bars(f: &Frame, row: f32) -> Vec<(f32, Color32)> {
-        let ys = Rangef::new(TOP + 64.0 * row, TOP + 64.0 * (row + 1.0));
-        let mut bars: Vec<(f32, Color32)> = (f.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r) if r.rect.height() == 2.0 && ys.contains(r.rect.top()) => {
-                    Some((r.rect.left(), r.fill))
-                }
-                _ => None,
-            })
-            .collect();
-        bars.sort_by(|a, b| a.0.total_cmp(&b.0));
-        bars
-    }
-
-    /// The MiniSynth's clip shown twice (repeats at x 203 and 357; notes on beats 0 and 2 of each), and a Drums clip
-    /// with a hit at beat 0.
-    fn song_with_repeats() -> Song {
-        let mut song = song_with_a_clip();
-        song.channels[2].lanes[0].clips[0].visible_len_beats = 8.0;
-        song.channels[1].lanes[0].add_clip(0, 4.0).events = vec![Event::Drum {
-            pos: 0,
-            len_beats: 0.25,
-            pad: 0,
-            velocity: 100,
-            pan: Event::DEFAULT_PAN,
-            value: 0x7FFF,
-            repeat: 0,
-        }];
-        song
-    }
-
     /// The selection's fill boxes (`text` at α 0.10 … 0.20) the frame drew, with their alpha.
     fn selection_fills(f: &Frame) -> Vec<(Rect, u8)> {
         let [tr, tg, tb, _] = theme_colors().text.to_color32().to_srgba_unmultiplied();
@@ -3855,23 +3758,6 @@ mod tests {
                 let text = near(cr, tr) && near(cg, tg) && near(cb, tb);
                 // Over the track rows (the transport's dividers are `text` too).
                 (text && (25..=52).contains(&a) && f.area.contains_rect(r)).then_some((r, a))
-            })
-            .collect()
-    }
-
-    /// Every stroked rect the frame drew over the track rows.
-    fn strokes(f: &Frame) -> Vec<Rect> {
-        (f.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r)
-                    if r.stroke.width > 0.0
-                        && r.rect.left() >= GRID_X
-                        && r.rect.top() >= TOP
-                        && r.rect.bottom() <= 380.0 =>
-                {
-                    Some(r.rect)
-                }
-                _ => None,
             })
             .collect()
     }
@@ -3914,37 +3800,6 @@ mod tests {
                 _ => None,
             })
             .collect()
-    }
-
-    /// The `text` discs over the playlist grid (centre, radius, on a `background` α 0.3 rim): the handles have the rim,
-    /// the floating row's light bubbles none.
-    fn grid_discs(f: &Frame) -> Vec<(Pos2, f32, bool)> {
-        let c = theme_colors();
-        let (text, rim) = (
-            c.text.to_color32(),
-            Rgba {
-                a: 0.3,
-                ..c.background
-            }
-            .to_color32(),
-        );
-        let all = circles(f);
-        let rimmed = |p: Pos2| all.iter().any(|c| c.0 == p && c.2 == rim);
-        (all.iter())
-            .filter(|c| {
-                c.2 == text && (TOP..380.0).contains(&c.0.y) && c.0.x < 1100.0 && c.1 < 31.0
-            })
-            .map(|c| (c.0, c.1, rimmed(c.0)))
-            .collect()
-    }
-
-    /// [`song_with_a_clip`] with an Audio Clip channel (3) whose one-bar clip from beat 0 does not loop: row 3, x 50 …
-    /// 203.6, y 240 … 304.
-    fn with_audio() -> Song {
-        let mut song = song_with_a_clip();
-        song.add_channel(ChannelKind::AudioClip);
-        song.channels[3].lanes[0].add_clip(0, 4.0);
-        song
     }
 
     #[test]
@@ -4107,18 +3962,6 @@ mod tests {
         };
         assert_eq!(rig.song.channels[0].lanes[0].target, Some(level));
         assert_eq!(rig.selected, 0);
-    }
-
-    /// The filled rects of `f` centred on `at`, as their sizes.
-    fn squares(f: &Frame, at: Pos2) -> Vec<f32> {
-        (f.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r) if (r.rect.center() - at).length() < 0.5 => {
-                    Some(r.rect.width())
-                }
-                _ => None,
-            })
-            .collect()
     }
 
     /// The song with a drum clip under the MiniSynth's (both beats 4 to 8, rows 1 and 2).
@@ -4870,15 +4713,6 @@ mod tests {
         out
     }
 
-    fn circles(f: &Frame) -> Vec<(Pos2, f32, Color32)> {
-        (f.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Circle(c) => Some((c.center, c.radius, c.fill)),
-                _ => None,
-            })
-            .collect()
-    }
-
     fn theme_colors() -> crate::theme::ThemeColors {
         theme_by_id(0).colors
     }
@@ -5120,25 +4954,7 @@ mod tests {
     const EMPTY_2: Pos2 = pos2(GRID_X + 12.0 * BEAT_PT, 207.5);
 
     impl Rig {
-        /// The insert menu's `Paste` rect as a frame with no input draws it.
-        fn paste(&mut self) -> Option<Rect> {
-            self.frame(vec![]);
-            self.rect_of(Id::new("clip_insert").with(1))
-        }
 
-        fn right_click(&mut self, pos: Pos2) {
-            let secondary = |pressed| egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Secondary,
-                pressed,
-                modifiers: egui::Modifiers::NONE,
-            };
-            self.frames(vec![
-                vec![egui::Event::PointerMoved(pos)],
-                vec![secondary(true)],
-                vec![secondary(false)],
-            ]);
-        }
     }
 
     #[test]

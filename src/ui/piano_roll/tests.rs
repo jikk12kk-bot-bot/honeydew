@@ -997,7 +997,6 @@ mod component {
     use crate::song::{ChannelKind, Event, PPQ, Song};
     use crate::theme::theme_by_id;
     use crate::ui::UiCtx;
-    use crate::ui::clips::{Selection, place_row};
     use crate::ui::piano_roll::notes::{Geom, SnapMode};
     use crate::ui::piano_roll::{BEAT_U, PianoRoll, PianoRollAction, Remembered, RollOptions};
     use crate::ui::timeline;
@@ -1983,25 +1982,6 @@ mod component {
         rig.frame(vec![In::PointerMoved(p)]);
         rig.button(p, PointerButton::Secondary, true);
         rig.button(p, PointerButton::Secondary, false);
-    }
-
-    /// The first note's rect in the roll's current view, and where the shared rule puts the floating row over it
-    /// with the finger at `finger` (at U = 32 a 4-button row is 204.8 × 48, m 6.4).
-    fn shared_row(rig: &Rig, finger: Pos2) -> (Rect, Option<Rect>) {
-        let g = rig.roll.geom(GRID.min, 32.0);
-        let e = &rig.events()[0];
-        let rect = g.note_rect(e).unwrap();
-        let m = Metrics::from_pixels_per_point(1.0, DEFAULT_UI_SCALE);
-        let handles = [crate::ui::clips::end_handle(rect, &m)];
-        let sel = Selection {
-            rect,
-            one_row: true,
-            handles: &handles,
-        };
-        (
-            rect,
-            place_row(&sel, finger, GRID, vec2(204.8, 48.0), 6.4, 1.0),
-        )
     }
 
     #[test]

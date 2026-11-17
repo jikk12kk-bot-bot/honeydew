@@ -2741,7 +2741,6 @@ mod samples {
     use crate::flm::chunk::{ContentPath, ContentRoot};
     use crate::project_files::PresetKind;
     use crate::song::{DrumGrid, LaneKind};
-    use crate::ui::rack::PresetTarget;
     use crate::ui::views::sample_picker::TITLE;
 
     /// The two drum editors: the step sequencer's widgets, and the free note-grid's.
@@ -2792,43 +2791,6 @@ mod samples {
         ));
         rig.frame(vec![]);
         rig.click_id(steps("row menu").with(item));
-    }
-
-    /// Scrolls the rows to their end, where the `+` is, and clicks it.
-    fn add_drum(rig: &mut Rig, view: &str) {
-        // The wheel over the grid scrolls the rows (over the headers it would zoom them).
-        let grid = rig.rect_of(egui::Id::new(view).with("grid"));
-        rig.wheel(grid.center(), -1000.0);
-        rig.click_id(egui::Id::new(view).with("add"));
-    }
-
-    /// In the open sample picker: `My Files`, then its folder `folder` (0 `My Recordings`, 1 `My Samples`), then that
-    /// folder's first file; then it closes the picker, which stays open after a pick.
-    fn pick(rig: &mut Rig, folder: usize) {
-        // From the root, wherever the picker was left (issue #131).
-        super::rack_wiring::picker_root(rig);
-        picker_row(rig, 0);
-        picker_row(rig, folder);
-        picker_row(rig, 0);
-        rig.frame(vec![]);
-        super::rack_wiring::close_picker(rig);
-    }
-
-    /// Presses and releases `key`.
-    fn press(rig: &mut Rig, key: egui::Key) {
-        let event = |pressed| egui::Event::Key {
-            key,
-            physical_key: None,
-            pressed,
-            repeat: false,
-            modifiers: Default::default(),
-        };
-        rig.frame(vec![event(true), event(false)]);
-    }
-
-    fn undo(rig: &mut Rig) {
-        rig.frame(key_tap(egui::Key::Z, egui::Modifiers::COMMAND));
-        rig.frame(vec![]);
     }
 
     fn user(relative: &str) -> Option<ContentPath> {

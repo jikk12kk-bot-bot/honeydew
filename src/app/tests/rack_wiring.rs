@@ -5,7 +5,6 @@ use eframe::egui::{Event, Id, Rect};
 use super::*;
 use crate::panels::cstm::settings_from_cstm;
 use crate::panels::{self, PanelState};
-use crate::project_files::SAMPLES_FOLDER;
 use crate::song::ModuleInstance;
 use crate::ui::modules_browser::add_module;
 use crate::ui::rack::{Flow, PresetTarget, card_height, content_rect, flow, rack_rect};

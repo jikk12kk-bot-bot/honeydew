@@ -654,42 +654,6 @@ impl Rig {
         self.frame(vec![]);
     }
 
-    /// A pinch by `factor` with the pointer at `at`.
-    fn pinch(&mut self, at: Pos2, factor: f32) {
-        // Two fingers: the first stays on `at`, the anchor; the second, below it, spreads (or closes) the separation by
-        // `factor`. (The trackpad's pinch is the time's, which the steps do not have.)
-        let (from, to) = if factor >= 1.0 {
-            (100.0, 100.0 * factor)
-        } else {
-            (100.0 / factor, 100.0)
-        };
-        let touch = |id, phase, pos| egui::Event::Touch {
-            device_id: egui::TouchDeviceId(1),
-            id: egui::TouchId(id),
-            phase,
-            pos,
-            force: None,
-        };
-        let button = |pressed| egui::Event::PointerButton {
-            pos: at,
-            button: PointerButton::Primary,
-            pressed,
-            modifiers: Modifiers::NONE,
-        };
-        use egui::TouchPhase::{End, Move, Start};
-        self.frame(vec![egui::Event::PointerMoved(at)]);
-        self.frame(vec![touch(1, Start, at), button(true)]);
-        self.frame(vec![touch(2, Start, at + vec2(0.0, from))]);
-        self.frame(vec![touch(2, Move, at + vec2(0.0, to))]);
-        self.frame(vec![
-            touch(2, End, at + vec2(0.0, to)),
-            touch(1, End, at),
-            button(false),
-            egui::Event::PointerGone,
-        ]);
-        self.frame(vec![]);
-    }
-
     /// Scrolls the shown clip's time to content beat `x` and draws a frame (the frame clamps it to its range).
     fn scroll_to(&mut self, x: f64) {
         let key = self.view.key(CH, &self.channel().lanes[self.view.lane]);
@@ -698,19 +662,6 @@ impl Rig {
             ..self.clip_view()
         };
         self.view.views.insert(key, view);
-        self.frame(vec![]);
-    }
-
-    /// A vertical drag by `dy` from `from`, in four moves, held still before the release (no fling).
-    fn drag(&mut self, from: Pos2, dy: f32) {
-        self.frame(vec![egui::Event::PointerMoved(from)]);
-        self.press(from, PointerButton::Primary, true);
-        for i in 1..=4 {
-            let at = from + vec2(0.0, dy * i as f32 / 4.0);
-            self.frame(vec![egui::Event::PointerMoved(at)]);
-        }
-        self.frame(vec![]);
-        self.press(from + vec2(0.0, dy), PointerButton::Primary, false);
         self.frame(vec![]);
     }
 

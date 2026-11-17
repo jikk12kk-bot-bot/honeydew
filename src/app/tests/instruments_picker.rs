@@ -5,19 +5,15 @@ use std::path::Path;
 
 use eframe::egui::{Id, Rect};
 
-use super::rack_wiring::{BROWSER, PICKER, click_row, instance_id, nested_row, types, worker_done};
+use super::rack_wiring::{BROWSER, PICKER, click_row, instance_id, nested_row, types};
 use super::*;
 use crate::song::ModuleInstance;
-use crate::ui::picker_preview::LOADING;
 use crate::ui::rack::PresetTarget;
 
-/// The root's rows with our factory: `My Files`, its shortcuts whose folders are there (`My Presets`, `My Instruments`;
-/// none in a fresh rig), then our seven categories.
-const CATEGORIES: [&str; 7] = ["Bass", "Bells", "Keyboard", "Lead", "Pad", "Pluck", "Synth"];
+ 7] = ["Bass", "Bells", "Keyboard", "Lead", "Pad", "Pluck", "Synth"];
 const MY_FILES: usize = 0;
 const BELLS: usize = 2;
 pub(super) const PLUCK: usize = 6;
-const SYNTH: usize = 7;
 /// The Instrument channel.
 pub(super) const CH: usize = 2;
 

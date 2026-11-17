@@ -83,7 +83,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          # A tag with a suffix (v0.5.4-pre.1) is a pre-release: never the latest release the apps update from.
+          # A tag with a suffix (v0.5.5-pre.1) is a pre-release: never the latest release the apps update from.
           prerelease: ${{ contains(env.TAG, '-') }}
           files: honeydew-${{ env.TAG }}-*.*z*
           fail_on_unmatched_files: true
@@ -133,7 +133,7 @@ jobs:
         if: contains(matrix.target, 'linux')
         with:
           tag_name: ${{ env.TAG }}
-          # A tag with a suffix (v0.5.4-pre.1) is a pre-release: never the latest release the apps update from.
+          # A tag with a suffix (v0.5.5-pre.1) is a pre-release: never the latest release the apps update from.
           prerelease: ${{ contains(env.TAG, '-') }}
           files: honeydew-${{ env.TAG }}-*.AppImage
           fail_on_unmatched_files: true
@@ -161,7 +161,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          # A tag with a suffix (v0.5.4-pre.1) is a pre-release: never the latest release the apps update from.
+          # A tag with a suffix (v0.5.5-pre.1) is a pre-release: never the latest release the apps update from.
           prerelease: ${{ contains(env.TAG, '-') }}
           files: honeydew-${{ env.TAG }}-*.*z*
           fail_on_unmatched_files: true
@@ -184,7 +184,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          # A tag with a suffix (v0.5.4-pre.1) is a pre-release: never the latest release the apps update from.
+          # A tag with a suffix (v0.5.5-pre.1) is a pre-release: never the latest release the apps update from.
           prerelease: ${{ contains(env.TAG, '-') }}
           files: honeydew-${{ env.TAG }}-sounds.zip
           fail_on_unmatched_files: true
@@ -241,7 +241,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          # A tag with a suffix (v0.5.4-pre.1) is a pre-release: never the latest release the apps update from.
+          # A tag with a suffix (v0.5.5-pre.1) is a pre-release: never the latest release the apps update from.
           prerelease: ${{ contains(env.TAG, '-') }}
           files: target/honeydew-web-*.zip
 
@@ -306,7 +306,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          # A tag with a suffix (v0.5.4-pre.1) is a pre-release: never the latest release the apps update from.
+          # A tag with a suffix (v0.5.5-pre.1) is a pre-release: never the latest release the apps update from.
           prerelease: ${{ contains(env.TAG, '-') }}
           files: |
             target/honeydew-android-*-arm.apk
@@ -334,7 +334,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
-          # A tag with a suffix (v0.5.4-pre.1) is a pre-release: never the latest release the apps update from.
+          # A tag with a suffix (v0.5.5-pre.1) is a pre-release: never the latest release the apps update from.
           prerelease: ${{ contains(env.TAG, '-') }}
           files: target/honeydew-ios-*.ipa
           fail_on_unmatched_files: true

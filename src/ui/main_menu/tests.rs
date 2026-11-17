@@ -11,7 +11,7 @@ use super::*;
 use crate::metrics::DEFAULT_UI_SCALE;
 use crate::theme::theme_by_id;
 use crate::ui::offscreen::key_tap;
-use crate::ui::performance::{Performance, footer_line};
+use crate::ui::performance::footer_line;
 use crate::ui::song_options::{Mode, SongOptions, TITLE};
 
 const SIZE: [f32; 2] = [1170.0, 540.0];

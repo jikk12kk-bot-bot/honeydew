@@ -804,15 +804,6 @@ fn the_playlist_dims_every_clip_but_the_previewed_one() {
     assert_eq!(note_fills(&rig, first), lit);
 }
 
-/// The centre of the one-bar playlist clip starting at song tick `start` on track `channel`'s row (a beat is 38.4
-/// points from x 48).
-fn clip_at(channel: usize, start: u32) -> Pos2 {
-    pos2(
-        48.0 + (start as f32 / 128.0 + 2.0) * 38.4,
-        header(channel).y,
-    )
-}
-
 /// While Preview plays a clip with a content offset, the editors map the transport as in the song (issue
 /// #46: content = (tick − start + offset) mod loop, a ruler tap seeks where the clip plays c), as the engine plays it.
 #[test]

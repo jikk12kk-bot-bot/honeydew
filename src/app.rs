@@ -3038,7 +3038,6 @@ mod tests {
     mod performance_monitor;
     mod picker_rules;
     mod preview;
-    mod project_info;
     mod rack_input;
     mod rack_wiring;
     mod recording;
