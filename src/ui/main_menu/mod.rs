@@ -1,20 +1,21 @@
 //! The main menu, opened from the app logo. It is a `menuFill` panel on the right of the screen, 20 U wide or the whole
 //! screen if that is narrower:
-//! - a header with `Help` at the left, the close X at the right, and centred between them the logo glyph, [`APP_NAME`]
-//!   and our version;
+//! - a header with the close ◀ and `Help` at the left, `Quit` at the right, and centred between them the logo glyph,
+//!   [`APP_NAME`] and our version;
 //! - the tab row `SONGS PROJECT SETTINGS UPDATES` across the panel in equal cells, the active tab underlined in `text`
 //!   (no UPDATES on the web, which is always current; #66);
 //! - the active tab below.
 //!
 //! [`MainMenu::show`] paints it and returns what the user asked for as a [`MainMenuAction`]; the app routes those
-//! (opening, saving …). The close X, a click outside the panel, or Escape closes the menu; the header itself does not.
+//! (opening, saving …). The close ◀, a click outside the panel (none when the panel is the whole screen, as on a phone
+//! held upright), or Escape (Back) closes the menu; the rest of the header does not.
 //! SETTINGS shows the [`SettingsTab`] in [`shell_layout`]'s content rect; its `Theme creator` `Edit` shows the THEME
 //! CREATOR page there ([`theme_creator`]), with SETTINGS still underlined and the app behind undimmed. `Help` opens
 //! the Help menu.
 
 use eframe::egui::{
-    Align, Align2, Color32, Id, Painter, Pos2, Rect, Response, RichText, Sense, Stroke, TextEdit,
-    Ui, emath::TSTransform, pos2, vec2,
+    Align, Align2, Color32, Id, Painter, Pos2, Rect, Response, RichText, Sense, Shape, Stroke,
+    TextEdit, Ui, emath::TSTransform, pos2, vec2,
 };
 
 use crate::APP_NAME;
@@ -62,8 +63,10 @@ const TAB_H: f32 = 1.25;
 /// Inset of the header, tab strip and content from the panel's edges, and the gap under the tab strip.
 const PAD: f32 = 0.5;
 const GAP: f32 = 0.25;
-/// `Help`'s and the close X's cells at the header's ends.
+/// `Help`'s and `Quit`'s cells at the header's ends.
 const HEADER_CELL: f32 = 2.0;
+/// The close ◀'s cell, at the header's left before `Help`'s.
+const CLOSE_CELL: f32 = 1.25;
 /// A tab under the mouse: `text` at this alpha over its cell.
 const TAB_HOVER_ALPHA: f32 = 0.05;
 /// A tab label too wide for its cell keeps this many characters after its middle ellipsis.
@@ -400,11 +403,28 @@ impl MainMenu {
         ui.painter()
             .rect_filled(header, 0.0, c.module_fill.to_color32());
 
-        // Header: `Help` in a 2 U cell at the left, `Quit` in one at the right, and between them, centred as a
-        // group, the logo, our name and the version. The header itself is no button.
-        let cell =
-            |left: f32| Rect::from_x_y_ranges(left..=left + m.u(HEADER_CELL), header.y_range());
-        let (help, quit) = (cell(header.left()), cell(header.right() - m.u(HEADER_CELL)));
+        // Header: the close ◀ in a 1.25 U cell at the left, then `Help` in a 2 U cell, `Quit` in one at the right, and
+        // between them, centred as a group, the logo, our name and the version. The header itself is no button.
+        let cell = |left: f32, w: f32| Rect::from_x_y_ranges(left..=left + m.u(w), header.y_range());
+        let close = cell(header.left(), CLOSE_CELL);
+        let help = cell(close.right(), HEADER_CELL);
+        let quit = cell(header.right() - m.u(HEADER_CELL), HEADER_CELL);
+        // The close ◀: the way back to the song where nothing is left of the panel to click (a phone held upright).
+        let close_response =
+            crate::ui::focus::interact(ui, close, id.with("Close"), Sense::click());
+        if crate::ui::widgets::hovered(ui, &close_response) {
+            let r = 0.375 * close.width().min(close.height());
+            (ui.painter()).circle_filled(
+                close.center(),
+                r,
+                crate::ui::buttons::hover_lit(c.module_fill.to_color32()),
+            );
+        }
+        let triangle = close_triangle(close, m.u(1.0));
+        (ui.painter()).add(Shape::convex_polygon(triangle.to_vec(), text, Stroke::NONE));
+        if close_response.clicked() {
+            action = Some(MainMenuAction::Close);
+        }
         // `Help`: plain text, opening the Help menu.
         text_label(
             ui,
@@ -576,6 +596,17 @@ impl MainMenu {
         painter.galley(pos2(x, top), name, text);
         painter.galley(pos2(x + name_w + m.u(GAP), version_top), version, text);
     }
+}
+
+/// The close ◀ in `cell`: 0.5 U tall and 0.45 U wide, pointing left, centred in the cell; clockwise on screen. `cell`
+/// and `u` in the same unit.
+fn close_triangle(cell: Rect, u: f32) -> [Pos2; 3] {
+    let (c, half_h, half_w) = (cell.center(), 0.25 * u, 0.225 * u);
+    [
+        pos2(c.x - half_w, c.y),
+        pos2(c.x + half_w, c.y - half_h),
+        pos2(c.x + half_w, c.y + half_h),
+    ]
 }
 
 /// How a circle button is drawn.

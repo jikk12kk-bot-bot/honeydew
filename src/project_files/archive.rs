@@ -343,12 +343,26 @@ impl ProjectFiles {
 
     /// The song an archive extracted into `dir` gave: its `@L@` paths whose file `dir` holds at the same relative path
     /// lead there; any other path stays as it is.
+    /// A built-in Lemon sampler's sample is named by its path on the machine that saved the song, which another one's
+    /// user folder is not (#168): it leads to the file `dir` holds at the longest end of that path (`My Samples/a.wav`
+    /// of `C:\Users\me\Honeydew\My Samples\a.wav`), the file's own path here, which the plugin opens; on the
+    /// web, whose files are no files, handed to the plugins' sample reader too.
     pub(super) fn relink_to(&self, song: &mut Song, dir: &Path) {
         relink(song, &|path| {
             let file = dir.join(in_user_folder(path)?);
             (self.user_file_exists(&file))
                 .then(|| self.user_shorthand(&file))
                 .flatten()
+        });
+        super::lemon_samples::relink(song, &|path| {
+            let tails = super::lemon_samples::tails(path).into_iter();
+            let file = tails.map(|t| dir.join(t)).find(|f| self.user_file_exists(f))?;
+            if self.disk_user_dir().is_none()
+                && let Ok(bytes) = self.read_user_file(&file)
+            {
+                os_engine::sample::provide(&file, bytes);
+            }
+            Some(file.to_string_lossy().into_owned())
         });
     }
 
@@ -913,6 +927,56 @@ mod tests {
         assert_eq!(cache.slot(&kit[1]).map(|s| s.frames()), Some(5));
         // No copy of the archive in the library: SONGS lists songs, and its song is no `.zip`.
         assert!(!files.library.exists(Path::new("Pack.zip")));
+    }
+
+    /// #168: a built-in Lemon sampler names its samples by where they were on the machine that saved the song; they
+    /// lead to the archive's copies, which the web hands to the plugins.
+    #[test]
+    fn a_lemon_samplers_samples_lead_to_the_archives_copies() {
+        use crate::project_files::lemon_samples::files_of;
+        use crate::project_files::lemon_samples::tests::{
+            drums, plugins_in, sampler, slicer, song_of,
+        };
+        let song = song_of(vec![
+            sampler("C:\\Users\\me\\Honeydew\\My Samples\\a.wav"),
+            slicer("/storage/emulated/0/Honeydew/My Samples/loop.wav", ""),
+            drums(
+                &[
+                    (2, "/home/me/Honeydew/My Samples/Kit/snare.wav"),
+                    (3, "/home/me/elsewhere/hat.wav"),
+                ],
+                &[],
+            ),
+        ]);
+        let archive = zip_of(&[
+            ("Beat.flm", &crate::flm::write(&song).unwrap()),
+            ("My Samples/a.wav", &wav(3)),
+            ("My Samples/loop.wav", &wav(4)),
+            ("My Samples/Kit/snare.wav", &wav(5)),
+        ]);
+        let mut files = web("Pack.zip", &archive);
+        let song = open(&mut files).expect("the song opens");
+        assert_eq!(files.message, None);
+        let here = |parts: &[&str]| {
+            let dir = Path::new(UNZIPPED_FOLDER).join("Pack");
+            parts.iter().fold(dir, |at, part| at.join(part))
+        };
+        let a = here(&["My Samples", "a.wav"]);
+        let named: Vec<_> = plugins_in(&song).into_iter().map(files_of).collect();
+        let text = |path: &Path| path.to_string_lossy().into_owned();
+        assert_eq!(
+            named,
+            [
+                vec![text(&a)],
+                vec![text(&here(&["My Samples", "loop.wav"]))],
+                vec![
+                    text(&here(&["My Samples", "Kit", "snare.wav"])),
+                    "/home/me/elsewhere/hat.wav".to_owned()
+                ],
+            ]
+        );
+        // The web keeps no files: the plugins read the copy handed to them.
+        assert_eq!(os_engine::sample::read(&a).unwrap(), wav(3));
     }
 
     #[test]

@@ -966,6 +966,23 @@ fn outside_the_panel_and_escape_close_the_menu() {
 }
 
 #[test]
+fn the_close_triangle_left_of_help_closes_the_menu() {
+    let mut rig = Rig::new(Tab::Songs);
+    let l = shell_layout(Rect::from_min_size(Pos2::ZERO, SIZE.into()), &m());
+    let close = Rect::from_x_y_ranges(
+        l.panel.left()..=l.panel.left() + m().u(CLOSE_CELL),
+        l.header.y_range(),
+    );
+    assert!(close.right() <= rig.find("Help").left());
+    let ink = rig.shapes.iter().any(|c| match &c.shape {
+        egui::Shape::Path(p) => p.points.len() == 3 && p.points.iter().all(|&at| close.contains(at)),
+        _ => false,
+    });
+    assert!(ink, "the triangle is drawn in its cell");
+    assert_eq!(rig.click(close.center()), Some(MainMenuAction::Close));
+}
+
+#[test]
 fn help_opens_its_menu_the_quit_button_asks_quit_and_the_header_does_nothing() {
     let mut rig = Rig::new(Tab::Project);
     assert_eq!(rig.click_text("Help"), None);

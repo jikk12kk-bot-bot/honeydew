@@ -458,8 +458,9 @@ impl ProjectFiles {
     /// The project archive of `song` as `<name>.flm`: the song as a save writes it, then every user file it plays;
     /// and the count of original content files left out. An error carries its message's title.
     fn archive(&self, song: &Song, name: &str) -> Result<(Vec<u8>, usize), (&'static str, String)> {
-        let flm =
-            (self.codec.write)(&stamped(song, name.to_owned())).map_err(|e| (SAVE_FAILED, e))?;
+        // The plugins' states as they are now: a Lemon sampler's names the samples it plays (#168).
+        let song = &stamped(song, name.to_owned());
+        let flm = (self.codec.write)(song).map_err(|e| (SAVE_FAILED, e))?;
         let mut entries = vec![(format!("{name}.flm"), flm)];
         let (user_files, left_out) = self.user_files_of(song);
         entries.extend(user_files);
@@ -474,6 +475,8 @@ impl ProjectFiles {
     /// Only a DW program (`.dwp`) and an SFZ (`.sfz`, and the `.sfzh` it includes) are handed on, for the files they
     /// name; nothing else is decoded, parsed or stretched.
     /// A file it plays that really is in the Original Content folder, every link followed, is only counted.
+    /// The samples of the built-in Lemon samplers, which open their files themselves and name them in their plugin's
+    /// state ([`super::lemon_samples`]), are the files there that are in the user folder (#168).
     fn user_files_of(&self, song: &Song) -> (BTreeMap<String, Vec<u8>>, usize) {
         let (read, found) = (sample_cache::reader(self), RefCell::new(BTreeMap::new()));
         let left_out = RefCell::new(std::collections::BTreeSet::new());
@@ -492,6 +495,14 @@ impl ProjectFiles {
             (ext.is_some_and(|e| named.iter().any(|x| e.eq_ignore_ascii_case(x)))).then_some(bytes)
         };
         SampleCache::default().load(song, &record);
+        for file in super::lemon_samples::sample_files(song) {
+            let file = Path::new(&file);
+            if self.in_content(file) {
+                left_out.borrow_mut().insert(file.to_owned());
+            } else if let Some(path) = self.user_shorthand(file) {
+                record(&path);
+            }
+        }
         (found.into_inner(), left_out.into_inner().len())
     }
 }

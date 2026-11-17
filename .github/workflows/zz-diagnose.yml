@@ -1,0 +1,52 @@
+name: zz-diagnose (temporary)
+on:
+  push:
+    branches: [arena/ab7cf7ea-honeydew]
+permissions:
+  contents: write
+env:
+  CARGO_TERM_COLOR: never
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.0
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libclang-dev
+      - name: Format and push back
+        run: |
+          cargo fmt
+          if ! git diff --quiet; then
+            git -c user.name=jikk12kk-bot-bot -c user.email=259327750+jikk12kk-bot-bot@users.noreply.github.com commit -am "cargo fmt"
+            git push origin HEAD:${GITHUB_REF_NAME}
+            echo "formatted and pushed: $(git rev-parse HEAD)" > fmt.txt
+          else
+            echo "fmt clean" > fmt.txt
+          fi
+      - name: Checks
+        run: |
+          set +e
+          cargo clippy --workspace --all-targets -- -D warnings > clippy.txt 2>&1; echo "clippy exit $?" >> status.txt
+          cargo test --workspace > test.txt 2>&1; echo "test exit $?" >> status.txt
+          cargo check --workspace --target wasm32-unknown-unknown > wasm.txt 2>&1; echo "wasm exit $?" >> status.txt
+          true
+      - name: Report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo '```'; cat fmt.txt status.txt 2>/dev/null; echo '```'
+            echo '### clippy'; echo '```'; grep -E "^(error|warning)" -A12 clippy.txt | head -150; echo '```'
+            echo '### test failures'; echo '```'
+            grep -E "^test .* FAILED|panicked|^error|test result: FAILED|^---- " -A8 test.txt | head -200
+            grep -E "^test result" test.txt | sort | uniq -c | head -30
+            echo '```'
+            echo '### wasm'; echo '```'; grep -E "^error" -A12 wasm.txt | head -80; echo '```'
+          } > report.md
+          gh api repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments -F body=@report.md
