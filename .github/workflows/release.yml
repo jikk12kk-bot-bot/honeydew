@@ -180,7 +180,8 @@ jobs:
       - run: |
           cat sounds/honeydew-sounds.zip.[0-9][0-9][0-9] > "honeydew-${TAG}-sounds.zip"
           command -v zip >/dev/null || { sudo apt-get update && sudo apt-get install -y zip; }
-          zip -dq "honeydew-${TAG}-sounds.zip" '*.gz'
+          # Exit 12 is zip's "nothing to do": a library without the web's .gz copies (tools/fetch-sounds.sh).
+          zip -dq "honeydew-${TAG}-sounds.zip" '*.gz' || [ $? -eq 12 ]
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
