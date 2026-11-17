@@ -5,6 +5,7 @@ use eframe::egui::{Event, Id, Rect};
 use super::*;
 use crate::panels::cstm::settings_from_cstm;
 use crate::panels::{self, PanelState};
+use crate::project_files::SAMPLES_FOLDER;
 use crate::song::ModuleInstance;
 use crate::ui::modules_browser::add_module;
 use crate::ui::rack::{Flow, PresetTarget, card_height, content_rect, flow, rack_rect};
@@ -26,12 +27,14 @@ impl Rig {
     }
 }
 
-/// The centre of the side rack's collapse tab, which closes it.
+/// The centre of the side rack's collapse tab, which closes it: at the rack tab's default height.
 pub(super) fn collapse_tab() -> Pos2 {
-    crate::ui::rack::Chrome::new(rack(), U)
-        .collapse
-        .unwrap()
+    let m = Metrics::from_pixels_per_point(1.0, DEFAULT_UI_SCALE);
+    let screen = Rect::from_min_size(Pos2::ZERO, vec2(1170.0, 540.0));
+    let tab_y = crate::ui::main_screen::rack_tab_pill(&Regions::new(screen, &m), 0.5, &m)
         .center()
+        .y;
+    crate::ui::rack::collapse_tab(rack(), U, tab_y).center()
 }
 
 /// How `channel`'s rack lays out, unscrolled.
@@ -98,7 +101,7 @@ pub(super) fn close_picker(rig: &mut Rig) {
     rig.frame(vec![]);
 }
 
-fn pick(rig: &mut Rig, query: &str) {
+pub(super) fn pick(rig: &mut Rig, query: &str) {
     for _ in 0..3 {
         rig.frame(vec![]);
     }
@@ -1304,7 +1307,8 @@ pub(super) fn preset_button(channel: usize, instance_id: i32) -> Id {
         .with("preset")
 }
 
-/// Waits out the picker's slide-in and clicks its row `i` (at the root: `My Files`, then `Default`). A sample picker's
+/// Waits out the picker's slide-in and clicks its row `i` (at the root: `My Files`, then the shortcuts to folders that
+/// are there, the module's presets' folder first, then `Default`). A sample picker's
 /// pick, which decodes on the worker, lands before it returns ([`settle`]).
 pub(super) fn picker_row(rig: &mut Rig, i: usize) {
     click_row(rig, i);
@@ -1378,11 +1382,13 @@ fn the_preset_button_loads_default_or_a_saved_preset_staying_open_with_no_undo_s
     let target = PresetTarget::Module(id);
     let steps = rig.app.history.steps();
 
-    // `Default`: the module's defaults, kept in its place.
+    // `Default` (after `My Files` and the shortcut `Tuner`): the module's defaults, kept in its place. Its first opening
+    // is at the preset it has.
     rig.click_id(preset_button(2, id));
     assert_eq!(rig.overlays(), [Overlay::Rack(2), picker(2, target)]);
     rig.app.files.saved();
-    picker_row(&mut rig, 1);
+    picker_root(&mut rig);
+    picker_row(&mut rig, 2);
     assert!(rig.app.files.modified(), "a pick marks the song changed");
     // A pick applies at once and the picker stays open.
     assert_eq!(rig.overlays(), [Overlay::Rack(2), picker(2, target)]);
@@ -1391,8 +1397,8 @@ fn the_preset_button_loads_default_or_a_saved_preset_staying_open_with_no_undo_s
     assert_eq!(reset, default);
     assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
 
-    // `My Files`, then the preset saved: all of it is back, under its name.
-    picker_row(&mut rig, 0);
+    // The shortcut `Tuner` (`My Presets/Tuner`), then the preset saved: all of it is back, under its name.
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     assert_eq!(rig.overlays(), [Overlay::Rack(2), picker(2, target)]);
     assert_eq!(module(&rig), saved);
@@ -1418,7 +1424,8 @@ fn a_preset_that_does_not_load_shows_the_load_error_and_changes_nothing() {
     let steps = rig.app.history.steps();
     let id = instance_id(&rig, 2, 0);
     rig.click_id(preset_button(2, id));
-    picker_row(&mut rig, 0);
+    // The shortcut `Tuner`, then the preset.
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     let lines = message(&rig).expect("a message");
     assert_eq!(lines[0], crate::project_files::LOAD_FAILED);
@@ -1443,7 +1450,8 @@ fn load_rack_preset_replaces_the_racks_modules_staying_open_with_no_undo_step() 
         rig.overlays(),
         [Overlay::Rack(2), picker(2, PresetTarget::RackReplace)]
     );
-    picker_row(&mut rig, 0);
+    // The shortcut `My Racks`, then the preset.
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     assert_eq!(
         rig.overlays(),
@@ -1546,9 +1554,9 @@ fn the_add_channel_rack_picks_a_rack_preset_for_a_new_selected_channel() {
     rig.frame(vec![]);
     rig.frame(escape());
     assert_eq!((rig.overlays(), rig.app.song.channels.len()), (vec![], 3));
-    // A pick adds a Rack channel holding the preset, selected: one edit.
+    // A pick adds a Rack channel holding the preset, selected: one edit. `My Racks`, then the preset.
     add_rack(&mut rig);
-    picker_row(&mut rig, 0);
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     assert_eq!(rig.app.song.channels.len(), 4);
     assert_eq!(rig.app.song.channels[3].kind, ChannelKind::Rack);
@@ -1571,7 +1579,7 @@ fn the_add_channel_rack_picks_a_rack_preset_for_a_new_selected_channel() {
         rig.overlays(),
         [picker(0, PresetTarget::NewChannel(Some(1)))]
     );
-    picker_row(&mut rig, 0);
+    // In `My Racks`, where the last pick left it (issue #131).
     picker_row(&mut rig, 0);
     assert_eq!(rig.app.song.channels[1].kind, ChannelKind::Rack);
     assert_eq!(types(&rig, 1), [51, 6]);
@@ -1592,6 +1600,8 @@ fn an_instrument_preset_renames_a_channel_never_renamed_and_leaves_a_renamed_one
     let id = instance_id(&rig, 1, 0);
     let pick = |rig: &mut Rig, rows: &[usize]| {
         rig.click_id(preset_button(1, id));
+        // From the root, wherever it was left (issue #131).
+        picker_root(rig);
         for &row in rows {
             picker_row(rig, row);
         }
@@ -1601,16 +1611,17 @@ fn an_instrument_preset_renames_a_channel_never_renamed_and_leaves_a_renamed_one
         let ch = &rig.app.song.channels[1];
         (ch.name.clone(), ch.file.preset_name.clone())
     };
-    pick(&mut rig, &[0, 0]);
+    // The shortcut `MiniSynth`, then `Bass`.
+    pick(&mut rig, &[1, 0]);
     assert_eq!(names(&rig), ("Bass".into(), "Bass".into()));
     assert_eq!(rig.app.song.channels[1].rack.modules[0].params[1], 0.25);
     // `Default` gives back the base name the writer would write.
-    pick(&mut rig, &[1]);
+    pick(&mut rig, &[2]);
     assert_eq!(names(&rig), ("MiniSynth 1".into(), String::new()));
     // Renamed by the user: the name stays.
     rig.app.song.channels[1].name = "Keys".into();
     rig.app.song_edited(SongEdit::Final, 0);
-    pick(&mut rig, &[0, 0]);
+    pick(&mut rig, &[1, 0]);
     assert_eq!(names(&rig), ("Keys".into(), "Bass".into()));
 
     // A second MiniSynth ("MiniSynth 2", id 3 after a Drums channel) that never had a preset keeps its name on
@@ -1625,7 +1636,8 @@ fn an_instrument_preset_renames_a_channel_never_renamed_and_leaves_a_renamed_one
     rig.slide_rack();
     let id = instance_id(&rig, 3, 0);
     rig.click_id(preset_button(3, id));
-    picker_row(&mut rig, 1);
+    picker_root(&mut rig);
+    picker_row(&mut rig, 2);
     let ch = &rig.app.song.channels[3];
     assert_eq!((&*ch.name, &*ch.file.preset_name), ("MiniSynth 2", ""));
 }
@@ -1705,13 +1717,15 @@ fn default_never_gives_a_channel_another_channels_name() {
     rig.slide_rack();
     let id = instance_id(&rig, 2, 0);
     rig.click_id(preset_button(2, id));
-    picker_row(&mut rig, 0);
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     assert_eq!(rig.app.song.channels[2].name, "Bass");
-    // `Default`: its base name, "MiniSynth 2", is channel 3's, so the name stays.
+    // `Default`: its base name, "MiniSynth 2", is channel 3's, so the name stays. It opens in `MiniSynth`, where it
+    // was left (issue #131).
     close_picker(&mut rig);
     rig.click_id(preset_button(2, id));
-    picker_row(&mut rig, 1);
+    picker_root(&mut rig);
+    picker_row(&mut rig, 2);
     let names: Vec<_> = (rig.app.song.channels.iter())
         .map(|c| c.name.as_str())
         .collect();
@@ -1735,12 +1749,11 @@ fn with_rack_channel(types: &[u16]) -> Rig {
     rig
 }
 
-/// The browser's rows without a search: `Paste` 0, `Rack Preset` 1, `Instrument` 2, SYNTH 3, then 3x Osc 4, Lemon Trio
-/// 5, Citrus 6, DW Sampler 7, Lemon Sampler 8, GMSynth 9, Lemon Drum Sampler 10, MiniSynth 11, Slicer 12, Lemon Slicer
-/// 13, SoundFont Player 14, SuperSaw 15, Transistor Bass 16.
+/// The browser's rows without a search: `Paste` 0, `Rack Preset` 1, `Instrument` 2, SYNTH 3, then 3x Osc 4, DW Sampler
+/// 5, GMSynth 6, MiniSynth 7, Slicer 8, SoundFont Player 9, SuperSaw 10, Transistor Bass 11.
 const THREE_X_OSC: usize = 4;
-const DW_SAMPLER: usize = 7;
-const GM_SYNTH: usize = 9;
+const DW_SAMPLER: usize = 5;
+const GM_SYNTH: usize = 6;
 const INSERT_BELOW: (usize, usize) = (1, 2);
 
 #[test]
@@ -1993,6 +2006,28 @@ fn dw_pair(a: f32, r: f32) -> Vec<u8> {
     [a.to_le_bytes(), r.to_le_bytes()].concat()
 }
 
+/// Opens the DW Sampler's picker on [`DW`] at `My Presets` › `DW Sampler`, where these tests keep its files: from its
+/// root (it first opens in `My Samples`, else `My Files`, issue #109, later where it was left), its shortcut after
+/// `My Files`.
+pub(super) fn open_dw_presets(rig: &mut Rig) {
+    rig.click_id(preset_button(DW, instance_id(rig, DW, 0)));
+    picker_root(rig);
+    picker_row(rig, 1);
+}
+
+/// Backs the open picker up to its root, where a DW Sampler's does not open (issue #109).
+pub(super) fn picker_root(rig: &mut Rig) {
+    let back = Id::new(PICKER).with("back");
+    for _ in 0..8 {
+        rig.frame(vec![]);
+        if rig.ctx.read_response(back).is_none() {
+            return;
+        }
+        rig.click_id(back);
+    }
+    panic!("the picker never reached its root");
+}
+
 /// Frames until the pickers' worker is done and its pick applied (the picker stays open).
 pub(super) fn worker_done(rig: &mut Rig) {
     // Joined, not timed: a loaded machine only makes the worker slower.
@@ -2021,8 +2056,7 @@ fn a_picked_dwp_loads_off_the_ui_thread_and_sets_only_attack_and_release() {
     let before = dw_module(&rig);
     let id = before.instance_id;
     let steps = rig.app.history.steps();
-    rig.click_id(preset_button(DW, id));
-    picker_row(&mut rig, 0);
+    open_dw_presets(&mut rig);
     // The program picker lists the `.dwp` beside the module presets.
     picker_row(&mut rig, 0);
     // The worker's result is applied on a later frame, on the UI thread.
@@ -2069,10 +2103,8 @@ fn a_dw_preset_the_program_loader_rejects_loads_its_prms_then_its_path() {
     let bytes = crate::flm::write_preset(&preset).unwrap();
     let files = &mut rig.app.files;
     files.keep_user_file(Path::new("My Presets/DW Sampler/Piano.flmpst"), bytes);
-    let id = instance_id(&rig, DW, 0);
     let pick = |rig: &mut Rig, row: usize| {
-        rig.click_id(preset_button(DW, id));
-        picker_row(rig, 0);
+        open_dw_presets(rig);
         picker_row(rig, row);
         worker_done(rig);
         close_picker(rig);
@@ -2111,8 +2143,7 @@ fn a_file_no_dw_loader_takes_clears_its_zones_and_shows_the_load_error() {
     let files = &mut rig.app.files;
     files.keep_user_file(Path::new("My Presets/DW Sampler/Broken.flmpst"), broken);
     let before = dw_module(&rig);
-    rig.click_id(preset_button(DW, before.instance_id));
-    picker_row(&mut rig, 0);
+    open_dw_presets(&mut rig);
     picker_row(&mut rig, 0);
     worker_done(&mut rig);
     let lines = message(&rig).expect("a message");
@@ -2134,8 +2165,7 @@ pub(super) fn pick_keys(rig: &mut Rig) {
     rig.app
         .files
         .keep_user_file(Path::new("My Presets/DW Sampler/Keys.dwp"), program);
-    rig.click_id(preset_button(DW, instance_id(rig, DW, 0)));
-    picker_row(rig, 0);
+    open_dw_presets(rig);
     picker_row(rig, 0);
 }
 
@@ -2243,7 +2273,8 @@ fn a_rack_preset_loads_its_dw_samplers_program() {
     let program = one_zone_dwp([0.25, 1.0, 1.0, 0.6]);
     files.keep_user_file(Path::new("My Presets/DW Sampler/Keys.dwp"), program);
     load_rack_preset(&mut rig, DW);
-    picker_row(&mut rig, 0);
+    // The shortcut `My Racks`, then the preset.
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     let modules = &rig.app.song.channels[DW].rack.modules;
     let loaded = modules.iter().filter(|m| m.instance_id != 2);
@@ -2274,7 +2305,9 @@ fn a_failed_streams_meters_reach_no_panel() {
     rig.rec.0.borrow_mut().meters = vec![meter.clone()];
     rig.frame(vec![]);
     assert_eq!(rig.app.slots.rack.meters(), Some(&[meter][..]));
+    // Failed, and its reopen too (the device is gone).
     rig.rec.0.borrow_mut().failed = true;
+    rig.rec.0.borrow_mut().no_device = true;
     rig.frame(vec![]);
     assert_eq!(rig.app.slots.rack.meters(), None);
 }
@@ -2292,7 +2325,8 @@ fn a_minisynth_flms_preset_is_listed_and_loads_as_a_module_preset_does() {
     rig.app.files.keep_user_file(path, flms);
     let id = instance_id(&rig, 1, 0);
     rig.click_id(preset_button(1, id));
-    picker_row(&mut rig, 0);
+    // The shortcut `MiniSynth`, then the preset.
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     let target = PresetTarget::Module(id);
     assert_eq!(rig.overlays(), [Overlay::Rack(1), picker(1, target)]);
@@ -2316,7 +2350,8 @@ fn the_preset_pickers_file_actions_change_the_users_presets_not_the_song() {
     let song = rig.app.song.clone();
     let id = instance_id(&rig, 2, 0);
     rig.click_id(preset_button(2, id));
-    picker_row(&mut rig, 0);
+    // The shortcut `Distortion`.
+    picker_row(&mut rig, 1);
     // `Select`, the preset, then the ≡ menu's `Delete` (after `Select all` and `Create folder`).
     let ids = Id::new(PICKER);
     rig.click_id(ids.with("select"));
@@ -2408,8 +2443,7 @@ fn a_picked_programs_samples_decode_on_the_worker_so_the_next_build_reads_nothin
     let hold = crate::ui::views::preset_picker::WORKER_HOLD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    rig.click_id(preset_button(DW, instance_id(&rig, DW, 0)));
-    picker_row(&mut rig, 0);
+    open_dw_presets(&mut rig);
     picker_row(&mut rig, 0);
     rig.frame(vec![]);
     assert!(
@@ -2428,8 +2462,7 @@ fn a_zone_the_worker_found_missing_is_listed_and_not_read_again_at_the_build() {
     let (user, keys, c4) = keys_on_disk(&mut rig, "missing", "My Presets/DW Sampler");
     // The program is there, its zone file is not.
     std::fs::remove_file(user.0.join("My Presets/DW Sampler/Keys/C4.wav")).unwrap();
-    rig.click_id(preset_button(DW, instance_id(&rig, DW, 0)));
-    picker_row(&mut rig, 0);
+    open_dw_presets(&mut rig);
     picker_row(&mut rig, 0);
     worker_done(&mut rig);
     assert_eq!(dw_module(&rig).params[1], 0.25);
@@ -2467,8 +2500,7 @@ fn a_picked_dw_presets_program_samples_decode_on_the_worker_too() {
         .join("My Presets/DW Sampler");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(folder.join("Piano.flmpst"), bytes).unwrap();
-    rig.click_id(preset_button(DW, instance_id(&rig, DW, 0)));
-    picker_row(&mut rig, 0);
+    open_dw_presets(&mut rig);
     picker_row(&mut rig, 0);
     worker_done(&mut rig);
     assert_eq!(dw_module(&rig).file.preset_name, "Piano");
@@ -2761,7 +2793,8 @@ fn a_rack_preset_for_a_new_channel_past_the_id_limit_adds_nothing_and_says_why()
     rig.app.song.file.next_channel_id = crate::song::CHANNEL_ID_LIMIT;
     let song = rig.app.song.clone();
     rig.app.add_channel(ChannelKind::Rack, 0);
-    picker_row(&mut rig, 0);
+    // The shortcut `My Racks`, then the preset.
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     assert_eq!(message(&rig), Some(vec![CHANNEL_LIMIT.to_owned()]));
     assert_eq!(rig.app.song, song);
@@ -2806,7 +2839,8 @@ fn a_slicer_loop_picked_in_the_real_picker_names_its_file_in_its_cstm() {
     let hold = crate::ui::views::preset_picker::WORKER_HOLD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    picker_row(&mut rig, 0);
+    // The shortcut `Slicer`, then the loop.
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     let before = rig.app.song.channels[2].rack.modules[0].clone();
     rig.frame(vec![]);
@@ -2854,7 +2888,8 @@ fn a_slicer_preset_loads_on_the_worker_and_changes_nothing_until_it_is_done() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     rig.click_id(preset_button(2, id));
-    picker_row(&mut rig, 0);
+    // The shortcut `Slicer`, then the preset.
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     rig.frame(vec![]);
     // Still loading: the picker is open (drawing nothing) and the module is as it was.
@@ -2874,11 +2909,13 @@ fn a_slicer_preset_loads_on_the_worker_and_changes_nothing_until_it_is_done() {
 // ---- Chord sets ----
 
 /// The `ChordSet` picker, opened over the rig's channel 1 (the song's set belongs to no channel). Its root rows are `My
-/// Files`, `Default`, then our eight sets.
+/// Files`, its shortcut `My Chord Sets` once that is there, `Default`, then our eight sets.
 fn open_chord_sets(rig: &mut Rig) {
     let target = PresetTarget::ChordSet;
     rig.app.navigate(Nav::Open(picker(1, target)));
     assert_eq!(rig.overlays(), [picker(1, target)]);
+    // It opens where it was left (issue #131): these tests start at its root.
+    picker_root(rig);
 }
 
 #[test]
@@ -2962,10 +2999,10 @@ fn a_users_chord_set_loads_by_its_name_and_a_bad_file_shows_the_error_and_change
     let song = rig.app.song.clone();
     rig.take();
 
-    // `My Files` lists the user's A-Z: Empty, Garbled, Mine. A bad file: the load error, no edit.
+    // The shortcut `My Chord Sets` lists the user's A-Z: Empty, Garbled, Mine. A bad file: the load error, no edit.
     for (row, error) in [(0, "needs 8 chords"), (1, "key must be a string")] {
         open_chord_sets(&mut rig);
-        picker_row(&mut rig, 0);
+        picker_row(&mut rig, 1);
         picker_row(&mut rig, row);
         let lines = message(&rig).expect("a message");
         assert_eq!(lines[0], crate::project_files::LOAD_FAILED);
@@ -2978,7 +3015,7 @@ fn a_users_chord_set_loads_by_its_name_and_a_bad_file_shows_the_error_and_change
 
     // A good one is named by its file.
     open_chord_sets(&mut rig);
-    picker_row(&mut rig, 0);
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 2);
     assert_eq!(rig.overlays(), []);
     assert_eq!(rig.app.song.file.keyboard.chord_set_name, "Mine");
@@ -3003,9 +3040,19 @@ fn the_web_module_pickers_that_list_audio_import_into_the_modules_user_folder() 
         rig.app.add_channel(ChannelKind::Synth(kind), 0);
         let module = &rig.app.song.channels[2].rack.modules[0];
         let (id, type_id) = (module.instance_id, module.type_id);
+        // The DW Sampler's opens in `My Samples` and imports there (issue #109); the others import into their presets
+        // folder, which `My Files` › `My Presets` lists once it is there.
+        let samples = Path::new(SAMPLES_FOLDER);
+        rig.app
+            .files
+            .keep_user_file(&samples.join("Kick.wav"), b"RIFF".to_vec());
         rig.app
             .navigate(Nav::Open(picker(2, PresetTarget::Module(id))));
-        picker_row(&mut rig, 0);
+        let dw = kind == SynthKind::DwSampler;
+        match dw {
+            true => (0..3).for_each(|_| rig.frame(vec![])),
+            false => picker_row(&mut rig, 0),
+        }
         rig.frame(vec![]);
         assert_eq!(rig.color_of("Import").is_some(), import, "{kind:?}");
         if !import {
@@ -3014,11 +3061,19 @@ fn the_web_module_pickers_that_list_audio_import_into_the_modules_user_folder() 
         assert!(rig.color_of("Loop").is_none(), "{kind:?}");
         rig.click_id(Id::new(PICKER).with("import"));
         rig.frame(vec![]);
-        let dir = rig.app.files.presets_dir(type_id).unwrap();
+        let dir = match dw {
+            true => rig.app.files.user_dir().unwrap().join(SAMPLES_FOLDER),
+            false => rig.app.files.presets_dir(type_id).unwrap(),
+        };
         let kept = rig.app.files.read_user_file(&dir.join("Loop.wav"));
         assert_eq!(kept.unwrap(), b"RIFF picked", "{kind:?}");
         assert_eq!(rig.overlays(), [picker(2, PresetTarget::Module(id))]);
         rig.frame(vec![]);
+        if !dw {
+            // `My Presets` (before `My Samples`), then the module's folder.
+            picker_row(&mut rig, 0);
+            picker_row(&mut rig, 0);
+        }
         assert!(rig.color_of("Loop").is_some(), "{kind:?} lists it");
     }
     // The desktop's DW Sampler picker has none.
@@ -3029,8 +3084,9 @@ fn the_web_module_pickers_that_list_audio_import_into_the_modules_user_folder() 
     let id = rig.app.song.channels[2].rack.modules[0].instance_id;
     rig.app
         .navigate(Nav::Open(picker(2, PresetTarget::Module(id))));
-    picker_row(&mut rig, 0);
-    rig.frame(vec![]);
+    for _ in 0..4 {
+        rig.frame(vec![]);
+    }
     assert!(rig.color_of("Search").is_some() && rig.color_of("Import").is_none());
 }
 
@@ -3068,6 +3124,8 @@ fn our_banks_list_at_each_synths_picker_root_and_a_pick_makes_no_undo_step() {
     use crate::content::{ROOT, factory};
     use crate::ui::main_menu::SongLibrary;
     let mut rig = Rig::with_synth();
+    // The keys under an instrument's picker (#98) take 2 U: a taller window lists Transistor Bass's 10 root rows whole.
+    rig.screen.y = 700.0;
     // About our factory's content, which the rig leaves out.
     rig.app.files.factory = crate::content::factory();
     rig.app

@@ -17,8 +17,8 @@ fn uid(name: &str) -> String {
         .to_owned()
 }
 
-/// The energy of `song` rendered offline (the export's renderer), its tail cut.
-fn rendered_energy(song: &Song) -> f32 {
+/// `song` rendered offline (the export's renderer) at 48 kHz, its tail cut.
+fn rendered(song: &Song) -> honeydew::render::Stream {
     let spec = RenderSpec {
         range: RenderRange::Full,
         remainder: Remainder::Cut,
@@ -28,10 +28,15 @@ fn rendered_energy(song: &Song) -> f32 {
         solo: None,
         master_effects: true,
     };
-    let mut stream = Render::new(song, &SampleCache::default(), spec)
+    Render::new(song, &SampleCache::default(), spec)
         .unwrap()
         .finish()
-        .unwrap();
+        .unwrap()
+}
+
+/// The energy of `song` rendered offline, its tail cut.
+fn rendered_energy(song: &Song) -> f32 {
+    let mut stream = rendered(song);
     let mut energy = 0.0f32;
     while !stream.done() {
         if let Some([l, r]) = stream.step() {
@@ -70,6 +75,60 @@ fn a_built_in_lemon_trio_note_makes_sound() {
             "{name} plays: energy {energy}"
         );
     }
+}
+
+/// #125: a slide note glides a hosted synth's sounding note as it glides a built-in synth's, over the slide note's
+/// length: Lemon Trio's held A3 passes between A3 and A4 halfway through a one-beat slide to A4, and plays A4 after it.
+#[test]
+fn a_slide_note_glides_a_lemon_trio_note() {
+    // Zero crossings per second of the left channel over beats `from..to` (120 BPM: 24 000 frames a beat).
+    let pitch = |notes: &[(u32, u8, bool)], from: f64, to: f64| {
+        let mut song = Song {
+            tempo_bpm: 120.0,
+            ..Song::default()
+        };
+        song.add_channel(ChannelKind::Instrument);
+        let ch = &mut song.channels[1];
+        let id = ch.id;
+        plugins::add(&mut ch.rack, id, &uid("Lemon Trio"), 0).unwrap();
+        let clip = ch.lanes[0].add_clip(0, 4.0);
+        for &(pos, key, slide) in notes {
+            clip.events.push(Event::Note {
+                pos,
+                len_beats: if slide { 1.0 } else { 4.0 },
+                key,
+                velocity: 204,
+                pan: 127,
+                slide,
+            });
+        }
+        plugins::sync(&song);
+        let mut stream = rendered(&song);
+        let mut left = Vec::new();
+        while !stream.done() {
+            if let Some([l, _]) = stream.step() {
+                left.extend_from_slice(l);
+            }
+        }
+        let window = &left[(from * 24_000.0) as usize..(to * 24_000.0) as usize];
+        let crossings = window.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0));
+        crossings.count() as f64 / ((to - from) / 2.0)
+    };
+    let (low, high) = (
+        pitch(&[(0, 57, false)], 2.5, 3.5),
+        pitch(&[(0, 69, false)], 2.5, 3.5),
+    );
+    let slid = [(0, 57, false), (128, 69, true)];
+    let (halfway, after) = (pitch(&slid, 1.4, 1.6), pitch(&slid, 2.5, 3.5));
+    assert!(high > low * 1.8, "A4 {high} against A3 {low}");
+    assert!(
+        (after - high).abs() < high * 0.05,
+        "after the slide {after}, A4 {high}"
+    );
+    assert!(
+        halfway > low * 1.15 && halfway < high * 0.9,
+        "halfway {halfway}, between A3 {low} and A4 {high}"
+    );
 }
 
 /// Lemon Vocoder's carrier is its sidechain input (0.4.9): keyed by a channel, it plays that channel's chord through its
@@ -332,4 +391,54 @@ fn an_editor_slower_than_its_tick_parks_after_each_tick() {
     std::thread::sleep(std::time::Duration::from_millis(40));
     embed::pump(id);
     assert_eq!(ticks.load(Ordering::Relaxed), 2);
+}
+
+/// Issue #72: an editor's frame names the pixels that changed since the app last took one, so that its card's texture
+/// takes those only (a whole frame is megabytes a repaint on a phone).
+#[test]
+fn an_editor_frame_names_the_pixels_changed_since_the_app_took_the_last() {
+    use os_plugkit::embed::{self, Input, Window};
+    use std::sync::mpsc::{Receiver, channel};
+    struct Ed {
+        win: Window,
+        frames: Receiver<Vec<u32>>,
+    }
+    impl Ed {
+        fn run(mut self) {
+            while self.win.next().is_some() {
+                while let Ok(px) = self.frames.try_recv() {
+                    self.win.blit(&px, 4, 3);
+                }
+            }
+            os_plugkit::park!(self);
+        }
+    }
+    let (paint, frames) = channel();
+    let id = 0xADDF_0072;
+    let _editor = embed::spawn(id, (4, 3), &Default::default(), move |win| {
+        Ed { win, frames }.run()
+    });
+    let mut version = 0;
+    // Paints `px`, each in turn, then takes the frame: its changed pixels (x0, y0, x1, y1).
+    let mut show = |px: &[&[u32; 12]]| {
+        px.iter().for_each(|p| paint.send(p.to_vec()).unwrap());
+        embed::input(id, Input::Move { x: 0.0, y: 0.0 }, (false, false, false));
+        embed::pump(id);
+        let mut changed = None;
+        version = embed::frame(id, version, |f| changed = Some(f.changed)).expect("a frame");
+        changed.unwrap()
+    };
+    let a = [0; 12];
+    let mut b = a;
+    b[4 + 1] = 7;
+    let mut c = b;
+    c[2 * 4 + 3] = 9;
+    assert_eq!(show(&[&a]), Some((0, 0, 4, 3)), "the first: all of it");
+    assert_eq!(show(&[&b]), Some((1, 1, 2, 2)), "(1, 1)");
+    assert_eq!(show(&[&b]), None, "painted the same");
+    assert_eq!(
+        show(&[&c, &a]),
+        Some((1, 1, 4, 3)),
+        "two paints: (3, 2), then both back"
+    );
 }

@@ -1,0 +1,12 @@
+OSPRESET 1
+plugin=Lemon Phaser	id=clap:org.openstudio.lemon-phaser	format=clap	body=params
+# Honeydew's own preset (tools/lemon_presets.py).
+Sweep frequency = 3500
+Minimum depth = 200
+Maximum depth = 700
+Frequency range = 0
+Stereo = 512
+Stages = 4
+Feedback = 750
+Dry - wet = 512
+Output gain = 2500

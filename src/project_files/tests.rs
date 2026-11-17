@@ -195,7 +195,7 @@ fn a_song_without_the_master_channel_is_a_load_error() {
 fn an_unknown_file_type_is_an_error_even_if_it_decodes() {
     // A provider that skipped the check still loads nothing.
     let mut files = files(&MemFiles::default());
-    assert_eq!(files.opened("/songs/Beat.wav".into(), plain(0)), None);
+    assert_eq!(files.opened("/songs/Beat.txt".into(), plain(0)), None);
     assert_eq!(files.message, lines(&["Unknown project file type"]));
 }
 
@@ -480,14 +480,36 @@ fn a_long_version_string_is_ignored_and_version_parts_are_capped() {
 
 #[test]
 fn the_provider_checks_the_type_before_reading() {
-    let mem = MemFiles::with_file("/songs/Beat.wav", &plain(0));
+    let mem = MemFiles::with_file("/songs/Beat.txt", &plain(0));
     let mut files = files(&mem);
     assert_eq!(open(&mut files), None);
-    assert_eq!(files.message, lines(&[UNKNOWN_TYPE, "/songs/Beat.wav"]));
+    assert_eq!(files.message, lines(&[UNKNOWN_TYPE, "/songs/Beat.txt"]));
     assert!(is_project(Path::new("/a/B.FlM")));
     assert!(is_project(Path::new("t.songTMPL")));
     assert!(!is_project(Path::new("/a/flm")));
     assert!(!is_project(Path::new("/a/b.flm2")));
+}
+
+/// Issue #72: SONGS `Import` takes a sample or a SoundFont too. It goes into its user folder, where the sample picker
+/// or the SoundFont Player lists it, as an archive's file goes, and the song stays.
+#[test]
+fn import_keeps_a_picked_sample_or_soundfont_in_its_user_folder() {
+    for (name, folder, kind) in [
+        ("Kick.wav", "My Samples", "sample"),
+        ("Loop.MP3", "My Samples", "sample"),
+        ("Pad.flac", "My Samples", "sample"),
+        ("Hit.ogg", "My Samples", "sample"),
+        ("Piano.sf2", "My SoundFonts", "SoundFont"),
+    ] {
+        let mem = MemFiles::with_file(&format!("/Download/{name}"), b"bytes");
+        let mut files = files(&mem);
+        assert_eq!(open(&mut files), None, "{name}");
+        let line = format!("1 {kind} in {folder}");
+        assert_eq!(files.message, lines(&["Imported 1 file", &line]), "{name}");
+        let read = files.read_user_file(&Path::new(folder).join(name));
+        assert_eq!(read.ok().as_deref(), Some(&b"bytes"[..]), "{name}");
+        assert!(files.library_changes() > 0, "the pickers read again");
+    }
 }
 
 #[test]
@@ -524,14 +546,15 @@ fn file_kinds_follow_the_extension_in_any_case() {
 
 #[test]
 fn the_open_filter_lists_all_four_kinds_and_the_provider_enforces_it() {
-    let mut accept: Vec<_> = Pick::Song.accept().to_vec();
-    accept.sort_unstable();
-    assert_eq!(accept, ["flm", "flp", "mid", "midi", "songtmpl", "zip"]);
-    assert_eq!(
-        accept_attr(Pick::Song.accept()),
-        ".flm,.songtmpl,.zip,.mid,.midi,.flp"
+    assert!(
+        accept_attr(Pick::Song.accept()).starts_with(".flm,.songtmpl,.zip,.mid,.midi,.flp,.wav,")
     );
-    // Every extension of every kind is in it, and nothing else is.
+    // Every extension of every kind is in it, and else only what a user folder takes (#72).
+    for ext in Pick::Song.accept() {
+        let path = PathBuf::from(format!("x.{ext}"));
+        let known = file_kind(&path).is_some() || samples::import_folder(&path).is_some();
+        assert!(known, "{ext}");
+    }
     for kind in [
         FileKind::Song,
         FileKind::Template,
@@ -555,8 +578,12 @@ fn the_open_filter_lists_all_four_kinds_and_the_provider_enforces_it() {
     assert!(project.poll(&mut Song::default()).is_some());
     assert_eq!(project.pick, None);
 
-    // A provider only reads what the list names, in any case: `.WAV` is no project, `.MID` is a pick.
-    for (path, picked) in [("/m/Beat.WAV", false), ("/m/Tune.MID", true)] {
+    // A provider only reads what the list names, in any case: `.TXT` is unknown, `.WAV` and `.MID` are picks.
+    for (path, picked) in [
+        ("/m/Notes.TXT", false),
+        ("/m/Beat.WAV", true),
+        ("/m/Tune.MID", true),
+    ] {
         let mem = MemFiles::with_file(path, &plain(0));
         let mut project = files(&mem);
         project.open();
@@ -1223,7 +1250,7 @@ fn a_new_song_takes_the_song_options_even_after_the_unsaved_question() {
         beats_per_bar: 3,
     };
     let mut files = files(&MemFiles::default());
-    let song = (files.replace(Replace::NewWith(options))).unwrap();
+    let song = (files.replace(Replace::NewWith(options.clone()))).unwrap();
     assert_eq!((song.time_sig, song.tempo_bpm), (made, 240.0));
     assert!(created_now(&song.file.meta.created));
     assert!(!files.modified(), "a new song has nothing to save");
@@ -1685,8 +1712,6 @@ fn a_song_from_a_template_gets_fresh_guids_and_a_song_keeps_its_own() {
     );
 }
 
-// ---- The track menu's `Import MIDI Tracks` ----
-
 /// A one-note format-1 file on MIDI channel `ch`, a CC on it too when `cc`.
 fn midi_file(ch: u8, cc: bool) -> Vec<u8> {
     use crate::midi::MidiMsg::{Cc, NoteOff, NoteOn};
@@ -1724,49 +1749,6 @@ fn midi_file(ch: u8, cc: bool) -> Vec<u8> {
         division: 96,
         tracks: vec![track],
     })
-}
-
-#[test]
-fn import_midi_tracks_asks_for_a_midi_file_and_hands_it_over_scanned_with_its_channel() {
-    let bytes = midi_file(3, true);
-    let mem = MemFiles::with_file("/in/Tune.MID", &bytes);
-    let mut files = files(&mem);
-    files.pick_midi_tracks(42);
-    assert_eq!(mem.0.borrow().accepts, [&["mid", "midi"][..]]);
-    // No song is opened; nothing shows.
-    assert_eq!(files.poll(&mut song("Mine")), None);
-    assert_eq!(files.take_overlay(), None);
-    let picked = files.take_midi_tracks().expect("handed over");
-    assert_eq!(picked.channel, 42);
-    assert_eq!(picked.bytes, bytes);
-    assert_eq!(picked.scan, crate::smf::import::scan(&bytes).unwrap());
-    assert_eq!(picked.scan.used, 1 << 3);
-    assert_eq!(files.take_midi_tracks(), None, "once");
-    // A song open afterwards is a song again.
-    let mem = MemFiles::with_file("/songs/Song.flm", &plain(1));
-    let mut files = super::tests::files(&mem);
-    files.pick_midi_tracks(1);
-    assert_eq!(
-        files.poll(&mut song("Mine")),
-        None,
-        "not a MIDI file: unread"
-    );
-    assert_eq!(files.take_midi_tracks(), None);
-    assert_eq!(open(&mut files).map(|s| s.title), Some("Song".into()));
-}
-
-#[test]
-fn a_picked_file_that_is_no_midi_file_shows_the_midi_load_error() {
-    let mem = MemFiles::with_file("/in/Broken.mid", b"MThd\0\0\0\x06\0\x01");
-    let mut files = files(&mem);
-    files.pick_midi_tracks(1);
-    assert_eq!(files.poll(&mut song("Mine")), None);
-    assert_eq!(files.take_midi_tracks(), None);
-    let Some(Overlay::Message { lines, .. }) = files.take_overlay() else {
-        panic!("no message");
-    };
-    assert_eq!(lines[0], crate::smf::import::LOAD_FAILED);
-    assert_eq!(lines.len(), 2, "with the detail: {lines:?}");
 }
 
 // ---- The song-changed flag ----
@@ -1818,9 +1800,9 @@ fn only_the_flag_counts_whatever_the_song_holds() {
     );
 }
 
-/// Every load writes the whole project to `recent.state` in the user root, as the codec writes it, off the UI thread;
-/// The next load replaces it. Nothing reads it back. Where the session keeps copies (the web, tests in memory) there
-/// is no disk and nothing is written.
+/// Every load writes the whole project to `recent.state` in the user root, as the codec writes it (after its head,
+/// [`recent_parts`]), off the UI thread; the next load replaces it. Where the session keeps copies (the web, tests in
+/// memory) there is no disk and nothing is written.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn every_load_writes_the_project_to_recent_state_in_the_user_root() {
@@ -1839,11 +1821,12 @@ fn every_load_writes_the_project_to_recent_state_in_the_user_root() {
     disk.replace(Replace::Open(songs.join("A.flm")))
         .expect("A opens");
     disk.join_autosave();
-    assert_eq!(std::fs::read(&state).unwrap(), plain(1));
+    let project = |p: &Path| recent_parts(&std::fs::read(p).unwrap()).unwrap().2.to_vec();
+    assert_eq!(project(&state), plain(1));
     disk.replace(Replace::Open(songs.join("B.flm")))
         .expect("B opens");
     disk.join_autosave();
-    assert_eq!(std::fs::read(&state).unwrap(), plain(2));
+    assert_eq!(project(&state), plain(2));
     assert_eq!(std::fs::read(songs.join("A.flm")).unwrap(), plain(1));
     // In memory: nothing to write to.
     let mem = MemFiles::with_file("/songs/C.flm", &plain(1));
@@ -1885,7 +1868,8 @@ fn the_last_loads_recent_state_lands_last_after_a_slow_earlier_one() {
     disk.join_autosave();
     // Past the slow encode's end, had it run on after the fast one.
     std::thread::sleep(std::time::Duration::from_millis(600));
-    assert_eq!(std::fs::read(tmp.0.join(RECENT_STATE)).unwrap(), plain(2));
+    let state = std::fs::read(tmp.0.join(RECENT_STATE)).unwrap();
+    assert_eq!(recent_parts(&state).unwrap().2, plain(2));
 }
 
 /// `.mid` opened as a song is a load too: [`RECENT_STATE`] holds the song it made.
@@ -1906,5 +1890,63 @@ fn a_midi_file_opened_as_a_song_writes_recent_state() {
     let song = song.expect("the MIDI file opens");
     disk.join_autosave();
     let state = std::fs::read(tmp.0.join(RECENT_STATE)).unwrap();
-    assert_eq!(state, (disk.codec.write)(&song).unwrap());
+    assert_eq!(
+        recent_parts(&state).unwrap().2,
+        (disk.codec.write)(&song).unwrap()
+    );
+}
+
+/// #72: an edit reaches [`RECENT_STATE`] once the edits settle, [`AUTOSAVE_SECS`] after the last one, and at once when
+/// the app leaves the screen; nothing is written while nothing changed. The next start restores the song as it was
+/// left: its file's path, its changes still unsaved, the file itself untouched.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn edits_reach_recent_state_once_settled_or_when_the_app_leaves_and_a_start_restores_them() {
+    use crate::project_files::content::tests::{Temp, put};
+    use crate::ui::main_menu::{NativeLibrary, SONGS_FOLDER};
+    let tmp = Temp::new("autosave72");
+    let songs = tmp.0.join(SONGS_FOLDER);
+    let a = songs.join("A.flm");
+    put(&a, &plain(1));
+    let disk = || ProjectFiles {
+        codec: synthetic_codec(),
+        library: Box::new(NativeLibrary::at(songs.clone())),
+        ..ProjectFiles::on_disk(&tmp.0)
+    };
+    let state = tmp.0.join(RECENT_STATE);
+    let mut files = disk();
+    let mut song = files.replace(Replace::Open(a.clone())).expect("A opens");
+    files.join_autosave();
+    let loaded = std::fs::read(&state).unwrap();
+    // Two edits 0.8 s apart: nothing is written until AUTOSAVE_SECS after the second.
+    song.add_channel(ChannelKind::Drums);
+    files.song_changed();
+    assert!(files.keep_recent(&song, 10.0, false).is_some());
+    song.add_channel(ChannelKind::Drums);
+    files.song_changed();
+    files.keep_recent(&song, 10.8, false);
+    files.keep_recent(&song, 10.8 + AUTOSAVE_SECS - 0.1, false);
+    files.join_autosave();
+    assert_eq!(std::fs::read(&state).unwrap(), loaded, "still settling");
+    assert_eq!(files.keep_recent(&song, 10.8 + AUTOSAVE_SECS, false), None);
+    files.join_autosave();
+    assert_ne!(std::fs::read(&state).unwrap(), loaded, "settled");
+    // Nothing changed since: leaving writes nothing.
+    std::fs::remove_file(&state).unwrap();
+    assert_eq!(files.keep_recent(&song, 20.0, true), None);
+    files.join_autosave();
+    assert!(!state.exists());
+    // An edit, and the app leaves the screen in the same frame: written there and then.
+    song.add_channel(ChannelKind::Drums);
+    files.song_changed();
+    assert_eq!(files.keep_recent(&song, 20.1, true), None);
+    files.join_autosave();
+    // The next start.
+    let mut next = disk();
+    let unsaved = next.unsaved_recent().expect("unsaved changes");
+    let restored = next.restore_recent(&unsaved).expect("restored");
+    assert_eq!(restored.channels.len(), 5);
+    assert!(next.modified());
+    assert_eq!(next.song_file(), Some(a.as_path()));
+    assert_eq!(std::fs::read(&a).unwrap(), plain(1));
 }

@@ -68,14 +68,7 @@ fn open(picker: &mut PresetPicker, lib: &dyn SongLibrary, name: &str) {
             is_folder: true,
             recency: 0,
         },
-        Some(Item::Extra(Extra {
-            path: Some(path), ..
-        })) => SongEntry {
-            name: name.into(),
-            path: path.to_owned(),
-            is_folder: true,
-            recency: 0,
-        },
+        Some(Item::Shortcut(shortcut)) => shortcut.entry.clone(),
         Some(Item::Entry(e)) if e.is_folder => e.clone(),
         other => panic!("{name}: {other:?}"),
     };
@@ -743,6 +736,46 @@ fn a_dw_programs_sample_folder_is_left_out() {
     assert_eq!(names(&picker, ""), ["Other", "Gen Guitar"]);
 }
 
+/// A Honeydew addition (#109, #123): a folder and any other file each carry their mark at the row's end; the picker's
+/// own preset files, every plain row of a preset list, carry none. An audio file's is its extension too, even in the
+/// sample picker, whose own files they are.
+#[test]
+fn rows_mark_folders_and_files_by_extension() {
+    use crate::ui::search_bar::Mark;
+    let lib = library(&[
+        "Mine/",
+        "Mine/Sub/",
+        "Mine/Kick.wav",
+        "Mine/Strings.sf2",
+        "Mine/Keys.sfz",
+        "Mine/Pad.flmpst",
+    ]);
+    let mut picker = PresetPicker::new("DW Sampler", Some("Mine".into()), PRESET_EXT, true)
+        .of_exts(&[PRESET_EXT, "wav", "sf2", "sfz"]);
+    fn marks(p: &PresetPicker) -> Vec<Option<Mark<'_>>> {
+        p.rows("").into_iter().map(|i| i.mark(p.exts[0])).collect()
+    }
+    assert_eq!(marks(&picker), [Some(Mark::Folder), None]);
+    open(&mut picker, &lib, MY_FILES);
+    assert_eq!(
+        names(&picker, ""),
+        ["Sub", "Keys", "Kick", "Pad", "Strings"]
+    );
+    assert_eq!(
+        marks(&picker),
+        [
+            Some(Mark::Folder),
+            Some(Mark::Ext("sfz")),
+            Some(Mark::Ext("wav")),
+            None,
+            Some(Mark::Ext("sf2")),
+        ]
+    );
+    let rows = picker.rows("");
+    let kick = rows.iter().find(|i| i.name() == "Kick").unwrap();
+    assert_eq!(kick.mark("wav"), Some(Mark::Ext("wav")));
+}
+
 #[test]
 fn dw_factory_categories_merge_without_changing_preset_paths() {
     for root in [
@@ -1041,18 +1074,14 @@ fn minisynth_and_gmsynth_pickers_list_their_legacy_presets_too() {
     assert_eq!(preset_exts(6), [PRESET_EXT]);
 }
 
-/// The SoundFont Player's picker over `My Presets/SoundFont Player`, with `My SoundFonts` beside `My Files`.
+/// The SoundFont Player's picker over the whole user folder, with its default shortcuts (its presets' folder and
+/// `My SoundFonts`) and one to a folder that is not there.
 fn soundfont_player() -> PresetPicker {
-    use crate::project_files::{SF2_EXT, preset_exts};
-    PresetPicker::new(
-        "SoundFont Player",
-        Some("My Presets/SoundFont Player".into()),
-        PRESET_EXT,
-        true,
-    )
-    .of_exts(preset_exts(52))
-    .of_type(52)
-    .with_root("My SoundFonts", Some("My SoundFonts".into()), &[SF2_EXT])
+    use crate::project_files::preset_exts;
+    PresetPicker::new("SoundFont Player", Some("".into()), PRESET_EXT, true)
+        .of_exts(preset_exts(52))
+        .of_type(52)
+        .with_shortcuts(["My Presets/SoundFont Player", "My SoundFonts", "My Gone"])
 }
 
 fn soundfont_player_lib() -> MemoryLibrary {
@@ -1065,13 +1094,13 @@ fn soundfont_player_lib() -> MemoryLibrary {
     let preset = crate::flm::write_preset(&crate::song::ModuleInstance::new(52, 0)).unwrap();
     let files: [(&str, &[u8]); 7] = [
         ("My Presets/SoundFont Player/Warm.flmpst", &preset),
-        // A `.sf2` among the presets lists in `My Files` too: the module's loader takes it, as the DW Sampler's takes
-        // its audio files there (`project_files::fits`).
+        // A `.sf2` among the presets lists too: the module's loader takes it, as the DW Sampler's takes its audio
+        // files (`project_files::fits`).
         ("My Presets/SoundFont Player/Stray.sf2", b"sf2"),
         ("My SoundFonts/Piano.sf2", b"sf2"),
         ("My SoundFonts/Pad.SF2", b"sf2"),
         ("My SoundFonts/Keys/Organ.sf2", b"sf2"),
-        // Not SoundFonts: not listed in `My SoundFonts`, whatever they hold.
+        // The module's own preset lists wherever it is; a text file nowhere.
         ("My SoundFonts/Warm.flmpst", &preset),
         ("My SoundFonts/notes.txt", b"x"),
     ];
@@ -1081,41 +1110,66 @@ fn soundfont_player_lib() -> MemoryLibrary {
     lib
 }
 
+/// Reads the root's shortcut rows, as the picker does with its root listing.
+fn read_root(picker: &mut PresetPicker, lib: &dyn SongLibrary) {
+    picker.shortcuts = picker.read_shortcuts(lib);
+}
+
 #[test]
-fn the_soundfont_players_root_lists_my_soundfonts_beside_my_files_and_other_modules_do_not() {
+fn the_root_lists_my_files_then_the_shortcuts_that_are_there_then_default() {
+    let lib = soundfont_player_lib();
+    let mut picker = soundfont_player();
+    read_root(&mut picker, &lib);
     assert_eq!(
-        names(&soundfont_player(), ""),
-        [MY_FILES, "My SoundFonts", DEFAULT]
+        names(&picker, ""),
+        [MY_FILES, "SoundFont Player", "My SoundFonts", DEFAULT]
     );
-    assert_eq!(names(&soundfont_player(), "sound"), ["My SoundFonts"]);
-    // No user folder: the row is there, dimmed (as `My Files` is).
-    let none = PresetPicker::new("SoundFont Player", None, PRESET_EXT, true).with_root(
-        "My SoundFonts",
-        None,
-        &["sf2"],
+    // Under a shortcut's name its path from the user folder; none for a folder right in it.
+    let subs: Vec<Option<String>> = picker.shortcuts.iter().map(|s| s.sub.clone()).collect();
+    assert_eq!(subs, [Some("My Presets/SoundFont Player".to_owned()), None]);
+    assert_eq!(names(&picker, "sound"), ["SoundFont Player", "My SoundFonts"]);
+    // A removed default goes; an added folder lists after the defaults.
+    let (scope, defaults) = (picker.scope.clone(), picker.defaults.clone());
+    picker.store.remove(&scope, &defaults, "My SoundFonts");
+    picker.store.add(&scope, &defaults, "My SoundFonts/Keys");
+    read_root(&mut picker, &lib);
+    assert_eq!(
+        names(&picker, ""),
+        [MY_FILES, "SoundFont Player", "Keys", DEFAULT]
     );
-    assert_eq!(names(&none, ""), [MY_FILES, "My SoundFonts", DEFAULT]);
+    // No user folder: no shortcuts.
+    let mut none = PresetPicker::new("SoundFont Player", None, PRESET_EXT, true)
+        .with_shortcuts(["My SoundFonts"]);
+    read_root(&mut none, &lib);
+    assert_eq!(names(&none, ""), [MY_FILES, DEFAULT]);
     assert_eq!(names(&reverb(), ""), [MY_FILES, DEFAULT]);
 }
 
 #[test]
-fn my_files_lists_the_presets_and_my_soundfonts_the_sf2_files_of_any_case_down_its_folders() {
+fn my_files_is_the_user_folder_and_a_shortcut_opens_its_folder_listing_what_the_picker_loads() {
     let lib = soundfont_player_lib();
-    let mut picker = soundfont_player();
+    let fresh = || {
+        let mut picker = soundfont_player();
+        read_root(&mut picker, &lib);
+        picker
+    };
+    let mut picker = fresh();
     open(&mut picker, &lib, MY_FILES);
+    assert_eq!(names(&picker, ""), ["My Presets", "My SoundFonts"]);
+    let mut picker = fresh();
+    open(&mut picker, &lib, "SoundFont Player");
     assert_eq!(names(&picker, ""), ["Stray", "Warm"]);
-    let mut picker = soundfont_player();
+    let mut picker = fresh();
     open(&mut picker, &lib, "My SoundFonts");
-    assert_eq!(names(&picker, ""), ["Keys", "Pad", "Piano"]);
-    // Inside a folder of it: still its files, though the module type (and its `HEAD` check) is the scope's.
+    assert_eq!(names(&picker, ""), ["Keys", "Pad", "Piano", "Warm"]);
     open(&mut picker, &lib, "Keys");
     assert_eq!(names(&picker, ""), ["Organ"]);
 }
 
 #[test]
 fn the_soundfont_players_root_lists_the_content_folders_soundfonts_as_factory_rows_read_only() {
-    // The factory folders, with `My SoundFonts`: `My Files`, `My SoundFonts`, `Default`, then the content folder's
-    // `SoundFonts` (its folders, then its `.sf2` files), in which no file action applies.
+    // The factory folders after `My Files`, the shortcuts and `Default`: the content folder's `SoundFonts` (its
+    // folders, then its `.sf2` files), in which no file action applies.
     let mut lib = soundfont_player_lib();
     for path in [
         "Original Content/",
@@ -1133,9 +1187,17 @@ fn the_soundfont_players_root_lists_the_content_folders_soundfonts_as_factory_ro
     let factory =
         || soundfont_player().with_factory([PathBuf::from("Original Content/SoundFonts")]);
     let mut picker = factory();
+    read_root(&mut picker, &lib);
     assert_eq!(
         picker.names_in(&lib, &[]),
-        [MY_FILES, "My SoundFonts", DEFAULT, "Bass", "Strings"]
+        [
+            MY_FILES,
+            "SoundFont Player",
+            "My SoundFonts",
+            DEFAULT,
+            "Bass",
+            "Strings"
+        ]
     );
     assert_eq!(picker.names_in(&lib, &["Bass"]), ["Fretless"]);
     let mut rig = Rig::files(factory(), lib);
@@ -1150,23 +1212,43 @@ fn the_soundfont_players_root_lists_the_content_folders_soundfonts_as_factory_ro
 }
 
 #[test]
-fn a_soundfont_is_picked_by_its_path_and_my_soundfonts_offers_no_file_action() {
+fn remove_shortcut_and_add_shortcut_in_the_menu_change_the_roots_rows_and_the_app_keeps_them() {
     let mut rig = Rig::files(soundfont_player(), soundfont_player_lib());
-    // At the root both are dimmed; in `My Files` they are on; in `My SoundFonts` they are dimmed again, which no
-    // file action may touch (the SoundFonts are the SoundFont picker's files: it offers none).
-    rig.click_text("My Files");
-    assert_eq!(rig.color("Select"), text());
-    rig.back();
+    assert!(rig.shows("My SoundFonts") && rig.shows("My Presets/SoundFont Player"));
+    // A shortcut's folder is the user's: the file actions apply in it.
     rig.click_text("My SoundFonts");
-    assert_eq!(rig.color("Select"), text().gamma_multiply(DISABLED_ALPHA));
-    assert!(rig.shows("Piano") && !rig.shows("Warm"));
+    assert_eq!(rig.color("Select"), text());
+    rig.pick("Remove shortcut");
+    rig.back();
+    assert!(!rig.shows("My SoundFonts"));
+    // `Add shortcut` on a folder of `My Files`: its row after the defaults, its path under its name.
+    rig.click_text(MY_FILES);
+    rig.click_text("My SoundFonts");
+    rig.click_text("Keys");
+    rig.pick("Add shortcut");
+    for _ in 0..3 {
+        rig.back();
+    }
+    assert!(rig.shows("Keys") && rig.shows("My SoundFonts/Keys"));
+    // What the app keeps as settings.
+    let kept = shortcuts::take_edit(&rig.ctx).unwrap();
+    assert_eq!(kept.added, ["SoundFont Player|My SoundFonts/Keys"]);
+    assert_eq!(kept.hidden, ["SoundFont Player|My SoundFonts"]);
+    // In the shortcut's folder ≡ offers to remove it.
+    rig.click_text("Keys");
     rig.options();
-    assert!(!rig.shows("Select all") && !rig.shows("Create folder"));
-    // The ≡ button is inert there: nothing is open, so the click picks.
-    assert_eq!(
-        rig.click_text("Piano"),
-        Some(PickerAction::Pick("My SoundFonts/Piano.sf2".into()))
-    );
+    assert!(rig.shows("Remove shortcut") && !rig.shows("Add shortcut"));
+}
+
+#[test]
+fn without_the_file_actions_the_menu_inside_a_folder_has_the_shortcut_item_alone() {
+    let mut rig = Rig::with(soundfont_player(), soundfont_player_lib());
+    rig.click_text(MY_FILES);
+    rig.click_text("My Presets");
+    // ≡ is the button after `Search`.
+    rig.click(layout(SCREEN, 1.0, &metrics()).button(SELECT));
+    rig.frame(vec![]);
+    assert!(rig.shows("Add shortcut") && !rig.shows("Select all"));
 }
 
 // ---- the file actions, offscreen ----

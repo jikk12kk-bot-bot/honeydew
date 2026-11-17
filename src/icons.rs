@@ -104,12 +104,14 @@ pub enum IconId {
     RackTab = 88,
     /// Issue #68: a Lemon card's full screen button.
     Expand = 89,
+    /// The transport's Displayer button: a screen with a play triangle, a small mountain and a sun.
+    Displayer = 90,
 }
 
 impl IconId {
     /// Every icon, in ID order (`ALL[n] as u8 == n`).
     #[rustfmt::skip]
-    pub const ALL: [IconId; 90] = {
+    pub const ALL: [IconId; 91] = {
         use IconId::*;
         [
             Browser, StepSeq, Piano, Play, Rewind, Record, AppLogo, More, Mixer, Tempo, Collapse,
@@ -122,7 +124,7 @@ impl IconId {
             RightStickHorizontal, LeftStickClick, RightStickClick, PadMenu, PadView, FavoriteOff,
             FavoriteOn, AddSmall, Confirm, Done, Filter, Music, Download, Randomize, CloudSync,
             SnapOff, SoloClip, Undo, Redo, Knob, Hide, Stop, GraphLane, ChevronDown, RackTab,
-            Expand,
+            Expand, Displayer,
         ]
     };
 }
@@ -793,6 +795,15 @@ pub fn icon_shapes(id: IconId, square: Rect, color: Color32) -> Vec<Shape> {
             ] {
                 p.line(&[(x, y + 8.0 * dy), (x, y), (x + 8.0 * dx, y)], 3.0);
             }
+        }
+        // A screen on a stand; in it a play triangle at the left, a mountain at the bottom right and a sun above it.
+        Displayer => {
+            p.frame(6.0, 9.0, 42.0, 33.0, 2.5, 2.5);
+            p.rect(22.75, 33.0, 25.25, 37.5, 0.0);
+            p.rect(15.0, 37.5, 33.0, 40.0, 1.25);
+            p.poly(&[(12.5, 14.5), (23.0, 21.0), (12.5, 27.5)]);
+            p.poly(&[(23.5, 29.5), (30.5, 19.5), (37.5, 29.5)]);
+            p.disc(34.5, 15.5, 2.25);
         }
     }
     p.shapes

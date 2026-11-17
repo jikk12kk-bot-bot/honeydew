@@ -111,6 +111,12 @@ pub fn builtin(folder: &str) -> Option<SampleData> {
         None => default_pad(rel)?,
         Some(("Loops", name)) => return crate::builtin_loops::loop_sample(name),
         Some(("Shapes", name)) => return crate::builtin_shapes::shape(name),
+        // A factory kit's pad as a one-shot in the sample picker: `Built-in/Samples/<Key> Kit/<Pad>`. Any other
+        // `Samples/` path is a bundled one-shot, which the caller reads from its pack.
+        Some(("Samples", rest)) => {
+            let (kit, pad) = rest.split_once(['/', '\\'])?;
+            kit_pad(kit.strip_suffix(" Kit")?, pad)?
+        }
         Some((kit, pad)) => kit_pad(kit, pad)?,
     };
     let peak = peak(&samples);
@@ -946,6 +952,20 @@ mod tests {
             let samples = kit_pad("Foundry", pad).unwrap();
             assert_eq!(peak(&samples), 2.0_f32.tanh(), "{pad}");
         }
+    }
+
+    #[test]
+    fn a_kit_pad_under_samples_plays_the_kits_pad() {
+        for (key, pads) in KITS {
+            for pad in pads {
+                let under = builtin(&format!("Built-in/Samples/{key} Kit/{pad}")).unwrap();
+                let kit = builtin(&format!("Built-in/{key}/{pad}")).unwrap();
+                assert_eq!(under.left, kit.left, "{key} {pad}");
+            }
+        }
+        // A bundled one-shot's folder is not ours: the pack plays it.
+        assert!(builtin("Built-in/Samples/Kick/K1").is_none());
+        assert!(builtin("Built-in/Samples/Nope Kit/Kick").is_none());
     }
 
     #[test]

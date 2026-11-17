@@ -1,0 +1,9 @@
+OSPRESET 1
+plugin=Lemon Stereo Enhancer	id=clap:org.openstudio.lemon-stereo-enhancer	format=clap	body=params
+# Honeydew's own preset (tools/lemon_presets.py).
+Pan = 128
+Volume = 256
+Stereo separation = 146
+Phase offset = 512
+Phase offset placement = 1
+Inversion = 0

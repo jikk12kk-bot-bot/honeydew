@@ -67,3 +67,27 @@ Only enable the bridge for trusted local clients. The token is a bearer secret:
 any local process that obtains it can edit the song. The bridge binds only to
 loopback and validates/bounds each request, but it does not implement per-tool
 permissions or expose a public endpoint.
+
+## Direct HTTP (desktop, Android, iOS)
+
+The app also answers MCP itself over Streamable HTTP, so an assistant that speaks HTTP needs no adapter:
+
+```json
+{
+  "mcpServers": {
+    "honeydew": {
+      "type": "http",
+      "url": "http://127.0.0.1:57831/mcp",
+      "headers": { "Authorization": "Bearer <token from SETTINGS>" }
+    }
+  }
+}
+```
+
+Answers are plain JSON (no event stream); `GET` returns 405. On a phone, turn on
+SETTINGS → Allow over Wi-Fi: the app listens on every network interface and the Address row (and its QR code)
+shows the phone's URL; the token is then the only protection, so keep it secret.
+
+Tools: `get_song`, `list_instruments`, `get_instrument_params`, `set_instrument_params`, `apply_arrangement`, `play`,
+`stop`, `seek` (`bar`, zero-based), `get_mixer`, `set_mixer` (`changes`: `channel_id` with any of `level`, `pan` 0–1,
+`mute`, `solo`). Mixer and knob changes are not undo steps.

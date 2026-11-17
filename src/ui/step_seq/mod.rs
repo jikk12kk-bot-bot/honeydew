@@ -149,9 +149,9 @@ pub(crate) const MIXER_W: f32 = 12.0;
 /// The fold's step per 60 Hz frame, and how near its target it snaps.
 const FOLD_RATE: f32 = 0.4;
 const FOLD_SNAP: f32 = 0.05;
-/// The row pitch is the vertical zoom, clamped to 2 U … 100/24 U. A new clip asks for 1 U, so it opens at 2 U.
-const PITCH_MIN: f32 = 2.0;
-const PITCH_MAX: f32 = 100.0 / 24.0;
+/// The row pitch is the vertical zoom, clamped to 0.75 U … 12 U. A new clip asks for 1 U, so it opens at 2 U.
+const PITCH_MIN: f32 = 0.75;
+const PITCH_MAX: f32 = 12.0;
 const NEW_PITCH: f32 = 1.0;
 /// The scroll range is the rows plus this many rows of room, which holds the `+` add-drum button: `ADD_D` square,
 /// `ADD_GAP` below the last row.
@@ -161,9 +161,9 @@ const ADD_GAP: f32 = 0.75;
 /// The swing popup below `SWING`, and the inset of its slider (label `Swing` on top, the % value below).
 const SWING_POPUP: [f32; 2] = [6.0, 3.0];
 const SWING_INSET: f32 = 0.25;
-/// The time zoom k in step mode: a beat is U·d/(4k) wide, so [(0.1/U)·4/d, (0.33/U)·4/d] beats per px (at d = 4 a
-/// beat is 3.03 U … 10 U).
-const STEP_K: [f32; 2] = [0.1, 0.33];
+/// The time zoom k in step mode: a beat is U·d/(4k) wide, so [(0.025/U)·4/d, (1.0/U)·4/d] beats per px (at d = 4 a
+/// beat is 1 U … 40 U).
+const STEP_K: [f32; 2] = [0.025, 1.0];
 /// A clip with no saved view asks for this many U per beat; the zoom clamp then applies (3.03 U at d = 4).
 const NEW_BEAT_U: f32 = 3.0;
 /// The pop-in: step mode's a ← 0.9·a per frame; a is 0 once under [`POP_FLOOR`].
@@ -433,7 +433,7 @@ pub struct StepSeqView {
     pub playhead: u64,
     /// How far past `playhead` the playhead is drawn ([`crate::audio_link::AudioLink::playhead_lead`]): the line, the
     /// knob and follow playhead only, never an edit. The host sets it each frame.
-    pub lead: u64,
+    pub lead: i64,
     pub playing: bool,
     /// REC is armed: the playhead disc shows the record icon. The host sets it each frame.
     pub armed: bool,
@@ -462,6 +462,8 @@ pub struct StepSeqView {
     /// and whether it has sent an edit (its end then closes it, even with the hits back as they were).
     pub graph: GraphLane,
     graph_drag: Option<(Vec<Event>, bool)>,
+    /// The drag's touch-down while it keeps to its column ([`graph_lane::drum_paint_x`]).
+    graph_lock: Option<Pos2>,
     /// The selected steps, as (pad, step) cells that hold a hit.
     selection: BTreeSet<(u8, usize)>,
     /// The marquee, from its long press: its selection is live.
@@ -864,7 +866,11 @@ impl StepSeqView {
         let loop_beats = clip.map_or(f64::from(sig.bar_beats()), |c| c.loop_len_beats);
         let origin = region::clip_origin(clip);
         let folded = ruler::folded(self.playhead, origin, loop_beats * BEAT);
-        let drawn = ruler::folded(self.playhead + self.lead, origin, loop_beats * BEAT);
+        let drawn = ruler::folded(
+            self.playhead.saturating_add_signed(self.lead),
+            origin,
+            loop_beats * BEAT,
+        );
         let (rect, graph_rect) = lane_split(ui.max_rect(), m, &self.graph);
         // The drum mixer's fold: the header column is 3 U + c·12 U, and the layout follows it every frame.
         let (now, dt) = ui.input(|i| (i.time, i.stable_dt));
@@ -1403,13 +1409,14 @@ impl StepSeqView {
         // Every drag starts afresh, also after one that an undo cancelled (`Context::stop_dragging`) without an end.
         if response.drag_started() && live && !pinch {
             self.graph_drag = Some((events.to_vec(), false));
+            self.graph_lock = ui.input(|i| i.pointer.press_origin());
         }
         if response.dragged()
             && live
             && let Some(p) = response.interact_pointer_pos()
             && self.graph_drag.is_some()
         {
-            let at = (p.x - l.x0) / l.step_w;
+            let at = (graph_lane::drum_paint_x(&mut self.graph_lock, p, m) - l.x0) / l.step_w;
             let v = if centred {
                 graph_lane::v_centred(values, p.y, m)
             } else {

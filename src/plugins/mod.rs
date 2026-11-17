@@ -10,9 +10,11 @@
 //! they load like any Linux plugin.
 
 pub mod builtin;
+pub mod citrus_presets;
 mod engine;
 pub(crate) use engine::{begin_callback, lock_stats};
 mod host;
+pub mod presets;
 #[cfg(plugin_host)]
 pub mod scan;
 mod window;

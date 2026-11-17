@@ -5,7 +5,7 @@
 use eframe::egui::Id;
 
 use super::instruments_picker::PLUCK;
-use super::rack_wiring::{click_row, types, worker_done};
+use super::rack_wiring::{click_row, picker_root, types, worker_done};
 use super::*;
 use crate::song::ModuleInstance;
 use crate::ui::add_channel_menu::{AddChannelPick, add_channel_menu};
@@ -301,8 +301,8 @@ fn a_close_grand_whose_zones_do_not_decode_leaves_the_supersaw_and_the_name() {
 // ---- Every new DW Sampler loads Close Grand ----
 
 /// The Modules browser's DW Sampler row ([`super::rack_wiring::browser_row`]: `Paste` 0, `Rack Preset` 1, `Instrument`
-/// 2, SYNTH 3, 3x Osc 4, Lemon Trio 5, Citrus 6, DW Sampler 7).
-const DW_ROW: usize = 7;
+/// 2, SYNTH 3, 3x Osc 4, DW Sampler 5).
+const DW_ROW: usize = 5;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
@@ -462,8 +462,10 @@ fn a_default_pick_on_the_new_card_while_close_grand_loads_stays() {
     let id = rig.app.song.channels[2].rack.modules[0].instance_id;
     rig.app
         .navigate(Nav::Open(picker(2, PresetTarget::Module(id))));
-    // At the root: `My Files`, `My Instruments`, then `Default`.
-    click_row(&mut rig, 2);
+    // At the root: `My Files`, then `Default` (its shortcuts list once their folders are there; this user folder has
+    // only the content).
+    picker_root(&mut rig);
+    click_row(&mut rig, 1);
     drop(hold);
     worker_done(&mut rig);
     let ch = &rig.app.song.channels[2];
@@ -553,6 +555,8 @@ fn a_new_drums_channel_added_past_the_first_bar_sounds_where_the_song_plays() {
     rig.app.add_channel(ChannelKind::Drums, tick);
     rig.frame(vec![]);
     super::rack_wiring::picker_row(&mut rig, 1);
+    // The picker stays for the next kit (#88): a click right of it closes it.
+    rig.click(pos2(1000.0, 300.0));
     rig.slide_split();
     let at = rig.step(0, 0);
     rig.click(at);

@@ -66,7 +66,7 @@ impl HoneydewApp {
                     tag: SOUNDS_TAG,
                     lines: vec![
                         "No sounds downloaded.".into(),
-                        "Download them any time: Main menu > UPDATES > Download sound library, or Main menu > SETTINGS > Install sound library….".into(),
+                        "Download them any time: Main menu > UPDATES > Download sound library.".into(),
                     ],
                         confirm: None,
                         extra: None,

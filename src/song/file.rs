@@ -110,6 +110,8 @@ pub struct SongFileState {
     /// The project versions (#69, Honeydew's own `HDVb` chunks): shared, as every undo step holds them. No edit
     /// ([`super::Song::keep_unedited`]).
     pub versions: std::sync::Arc<crate::versions::Versions>,
+    /// The track folders (Honeydew's own `HDFo` chunks, [`super::folders`]).
+    pub folders: Vec<super::folders::Folder>,
 }
 
 impl Default for SongFileState {
@@ -130,6 +132,7 @@ impl Default for SongFileState {
             keyboard: KeyboardState::default(),
             unknown_chunks: Vec::new(),
             versions: Default::default(),
+            folders: Vec::new(),
         }
     }
 }
@@ -165,6 +168,12 @@ pub struct MetaState {
     pub modified: String,
     /// Bytes after @3081.
     pub extra: Vec<u8>,
+    /// PROJECT's `Album:`, `Genre:`, `Year:` and `Comment:` (#139, Honeydew's own: an `HDTg` in the file, not META),
+    /// which renders write as tags.
+    pub album: String,
+    pub genre: String,
+    pub year: String,
+    pub comment: String,
 }
 
 impl Default for MetaState {
@@ -178,6 +187,10 @@ impl Default for MetaState {
             info_url: String::new(),
             modified: "Never / demo project".into(),
             extra: Vec::new(),
+            album: String::new(),
+            genre: String::new(),
+            year: String::new(),
+            comment: String::new(),
         }
     }
 }

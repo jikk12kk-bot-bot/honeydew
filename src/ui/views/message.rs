@@ -112,7 +112,12 @@ pub fn show_wrapped(
         dialog::panel(&painter, c, m, grown);
     }
     let backdrop = crate::ui::backdrop(&ctx, id);
-    let outside = backdrop.clicked() || backdrop.secondary_clicked() || backdrop.middle_clicked();
+    // The backdrop (`Middle`) lies under any dialog the message opened over (`Foreground`), and egui raises a pressed
+    // area to the top of its order: a blocker over the whole screen, raised to the top of `Foreground` every frame with
+    // the panel right over it ([`blocker`]), takes those presses as clicks outside, so the message stays on top.
+    let blocker = blocker(&ctx, id, screen);
+    let clicked = |r: &egui::Response| r.clicked() || r.secondary_clicked() || r.middle_clicked();
+    let outside = clicked(&backdrop) || clicked(&blocker);
     let mut answer = (crate::ui::close_pressed(&ctx) || outside).then_some(Answer::No);
     Area::new(id)
         .order(Order::Foreground)
@@ -169,11 +174,27 @@ pub fn show_wrapped(
                 }
             }
         });
+    ctx.move_to_top(blocker.layer_id);
+    ctx.set_sublayer(blocker.layer_id, LayerId::new(Order::Foreground, id));
     answer.map(|answer| match (confirm, answer) {
         (None, _) => Nav::Close,
         (Some(_), Answer::Extra) => Nav::Extra(tag),
         (Some(_), answer) => Nav::Answer(tag, answer == Answer::Yes),
     })
+}
+
+/// The message `id`'s blocker: a full-screen `Foreground` area under its panel ([`show_wrapped`]).
+fn blocker(ctx: &egui::Context, id: Id, screen: Rect) -> egui::Response {
+    Area::new(id.with("blocker"))
+        .order(Order::Foreground)
+        .fixed_pos(screen.min)
+        .constrain(false)
+        .fade_in(false)
+        .sense(Sense::click_and_drag())
+        .show(ctx, |ui| {
+            ui.allocate_exact_size(screen.size(), Sense::hover())
+        })
+        .response
 }
 
 #[cfg(test)]

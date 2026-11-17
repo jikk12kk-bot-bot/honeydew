@@ -21,7 +21,7 @@ const SETTINGS: (usize, usize) = (0, 1);
 const CLONE: (usize, usize) = (0, 2);
 const INSERT: (usize, usize) = (0, 3);
 const DELETE_TRACK: (usize, usize) = (0, 4);
-const DELETE_CHANNEL: (usize, usize) = (0, 5);
+const DELETE_CHANNEL: (usize, usize) = (0, 8);
 /// `Add Track` of an instrument, `Add StepSeq Track` and `Add Notes Track` of a drums channel.
 const ADD_TRACK: (usize, usize) = (1, 3);
 const ADD_STEP_SEQ: (usize, usize) = (1, 2);
@@ -271,7 +271,7 @@ fn hide_tracks_hides_the_sub_track_rows_and_show_tracks_brings_them_back() {
     let mut rig = Rig::with_drums_and_synth();
     rig.track_menu(1, ADD_NOTES);
     // Rows: master, drums, its notes track, synth.
-    assert_eq!(track_rows(&rig.app.song, false).len(), 4);
+    assert_eq!(track_rows(&rig.app.song).len(), 4);
     // A clip selected on the notes track goes with it.
     rig.app.song.channels[1].lanes[1].add_clip(0, 16.0);
     rig.app.song_edited(SongEdit::Final, 0);
@@ -280,7 +280,7 @@ fn hide_tracks_hides_the_sub_track_rows_and_show_tracks_brings_them_back() {
     assert_eq!(selected(&rig), Some((1, 1)));
     rig.track_menu(1, HIDE);
     assert!(rig.app.song.channels[1].zipped);
-    assert_eq!(track_rows(&rig.app.song, false).len(), 3);
+    assert_eq!(track_rows(&rig.app.song).len(), 3);
     assert_eq!(rig.app.main_screen.clips.selected, None);
     // The synth moved up a row: a tap on its header makes it current.
     rig.click(header(2));
@@ -999,6 +999,10 @@ fn a_track_that_has_clips_again_when_the_question_is_answered_stays() {
 // ---- Load Drumset / Save Drumset ----
 
 use super::rack_wiring::{dialog_save, picker_row};
+
+/// Right of the 18 U picker panel: a click there closes it, also after a pick, whose audition strip holds the focus
+/// (an Escape then only takes the focus).
+const RIGHT_OF_PICKER: Pos2 = pos2(1000.0, 300.0);
 use crate::project_files::mem::MemFiles;
 use crate::project_files::{LOAD_FAILED, PresetKind, ProjectFiles};
 use crate::song::DrumKit;
@@ -1096,18 +1100,20 @@ fn save_drumset_then_load_drumset_brings_the_kit_back_in_one_undo_step() {
     rig.take();
     let before = rig.app.song.clone();
 
-    // `Load Drumset`: the `Drumsets` picker; `My Files`, then the kit.
+    // `Load Drumset`: the `Drumsets` picker; its shortcut `My Drumsets`, then the kit.
     rig.track_menu(1, LOAD_DRUMSET);
     let picker = Overlay::PresetPicker {
         channel: 1,
         target: PresetTarget::Drumset,
     };
-    assert_eq!(rig.overlays(), [picker]);
-    picker_row(&mut rig, 0);
+    assert_eq!(rig.overlays(), std::slice::from_ref(&picker));
+    picker_row(&mut rig, 1);
     assert!(rig.color_of("Drumsets").is_some(), "the picker's title");
     picker_row(&mut rig, 0);
-    assert_eq!(rig.overlays(), []);
+    // The picker stays for the next kit (#88).
+    assert_eq!(rig.overlays(), [picker]);
     assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
+    rig.click(RIGHT_OF_PICKER);
     // The saved kit, its slots with new ids after the channel's last (9): ids are never reused. The send
     // names a channel of the song it was saved from: the pad plays into its channel.
     let loaded = kit(&rig);
@@ -1162,18 +1168,24 @@ fn closing_the_drumset_picker_or_a_kit_that_does_not_read_changes_nothing() {
     rig.frame(vec![]);
     assert_eq!(rig.overlays(), []);
     assert_eq!(rig.app.song, song);
-    // A PADS shorter than 22: the load error, and no edit.
+    // A PADS shorter than 22: the load error, and no edit. The picker opens in `My Files`, where it was left (issue
+    // #131): back to its root first, then its shortcut `My Drumsets`.
     rig.track_menu(1, LOAD_DRUMSET);
-    picker_row(&mut rig, 0);
+    super::rack_wiring::picker_root(&mut rig);
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     assert_eq!(rig.message()[0], LOAD_FAILED);
     assert_eq!(rig.app.song, song);
     assert_eq!(rig.take(), Vec::<String>::new());
     rig.answer(true);
-    // The empty kit loads nothing, and says nothing.
+    // The empty kit loads nothing, and says nothing: the picker stays (#88).
     rig.track_menu(1, LOAD_DRUMSET);
-    picker_row(&mut rig, 0);
+    super::rack_wiring::picker_root(&mut rig);
     picker_row(&mut rig, 1);
+    picker_row(&mut rig, 1);
+    assert_eq!(rig.overlays().len(), 1);
+    assert!(rig.color_of("Drumsets").is_none(), "inside My Drumsets");
+    rig.click(RIGHT_OF_PICKER);
     assert_eq!(rig.overlays(), []);
     assert_eq!(rig.app.song, song);
     assert_eq!(rig.take(), Vec::<String>::new());
@@ -1240,7 +1252,9 @@ fn the_drumset_pickers_default_is_the_built_in_kit_in_one_undo_step() {
     assert!(rig.color_of("Default").is_some(), "listed at the root");
     picker_row(&mut rig, 1);
     rig.frame(vec![]);
-    assert_eq!(rig.overlays(), []);
+    // The picker stays for the next kit (#88).
+    assert_eq!(rig.overlays().len(), 1);
+    rig.click(RIGHT_OF_PICKER);
     // The built-in kit, its slots with new ids after the empty pad's (1): ids are never reused.
     let loaded = kit(&rig);
     let ids: Vec<u32> = loaded.slots.iter().map(|s| s.file.id).collect();
@@ -1343,7 +1357,7 @@ impl Rig {
 fn shown(rig: &mut Rig) -> Vec<usize> {
     rig.frame(vec![]);
     rig.frame(vec![]);
-    let tracks = track_rows(&rig.app.song, false);
+    let tracks = track_rows(&rig.app.song);
     let top = |i: usize| {
         let id = Id::new(("track_header", i));
         rig.ctx.read_response(id).expect("drawn").rect.top()
@@ -1566,7 +1580,7 @@ fn a_marquee_group_follows_its_clips_through_undos_made_while_the_playlist_is_aw
     }
     rig.release(on);
     rig.frame(vec![]);
-    rig.click_id(Id::new(("clip_button", 1_usize)));
+    rig.click_id(Id::new(("clip_button", 2_usize)));
     let clips = |c: usize| rig.app.song.channels[c].lanes[0].clips.len();
     assert_eq!((clips(1), clips(2)), (2, 0));
 }
@@ -1695,14 +1709,25 @@ fn tune(ch: u8) -> Vec<(u64, MidiMsg)> {
     ]
 }
 
-/// [`Rig::with_drums_and_synth`] with `bytes` as the file the open dialog picks, and a handle on the files.
+/// [`Rig::with_drums_and_synth`] with `bytes` as `My MIDI/Tune.mid`, and as the file the system's dialog picks (the
+/// MIDI picker's `Import`), and a handle on the files.
 fn picking(bytes: &[u8]) -> (Rig, MemFiles) {
     let mut rig = Rig::with_drums_and_synth();
     let mem = MemFiles::with_file("/in/Tune.mid", bytes);
     rig.app.files = ProjectFiles::with_provider(Box::new(mem.clone()));
+    let tune = std::path::Path::new(crate::project_files::MIDI_FOLDER).join("Tune.mid");
+    rig.app.files.keep_user_file(&tune, bytes.to_vec());
     rig.frame(vec![]);
     rig.take();
     (rig, mem)
+}
+
+/// `Import MIDI Tracks` in the track menu of header `row`, then a tap on `My MIDI/Tune.mid` in its picker, which opens
+/// there.
+fn import_tune(rig: &mut Rig, row: usize) {
+    rig.track_menu(row, IMPORT_MIDI);
+    super::rack_wiring::picker_row(rig, 0);
+    rig.frame(vec![]);
 }
 
 /// `song` with `bytes` imported into channel `current` as the track menu imports it.
@@ -1720,13 +1745,38 @@ fn imported(song: &Song, current: usize, bytes: &[u8], opts: ImportOpts) -> Song
     song
 }
 
+/// Issue #113: the app's own picker, not the system's, opening in `My MIDI` over the user folder's MIDI files. Its
+/// `Import` asks the system's for a MIDI file, kept in `My MIDI`; a pick imports as the system's pick did.
 #[test]
-fn import_midi_tracks_of_one_midi_channel_goes_into_the_channel_at_once_in_one_undo_step() {
+fn import_midi_tracks_opens_our_picker_in_my_midi_whose_pick_goes_into_the_channel_in_one_undo_step()
+ {
     let bytes = smf(&[("Lead", tune(4))]);
     let (mut rig, mem) = picking(&bytes);
     let before = rig.app.song.clone();
     rig.track_menu(2, IMPORT_MIDI);
+    assert!(mem.0.borrow().accepts.is_empty(), "no system picker");
+    for _ in 0..3 {
+        rig.frame(vec![]);
+    }
+    // Its breadcrumb, elided in the middle.
+    let crumb = rig.out.shapes.iter().any(|s| match &s.shape {
+        egui::Shape::Text(t) => {
+            let text = t.galley.text();
+            text.starts_with("     MIDI Files |") && text.ends_with(" | My MIDI")
+        }
+        _ => false,
+    });
+    assert!(crumb && rig.painted("Tune"));
+    rig.click_id(Id::new("preset_picker").with("import"));
+    rig.frame(vec![]);
     assert_eq!(mem.0.borrow().accepts, [&["mid", "midi"][..]]);
+    let kept = std::path::Path::new(crate::project_files::MIDI_FOLDER).join("Tune (1).mid");
+    assert_eq!(rig.app.files.read_user_file(&kept).unwrap(), bytes);
+    rig.frame(vec![]);
+    assert!(rig.painted("Tune (1)"), "listed at once");
+    assert_eq!(rig.app.song, before, "nothing yet");
+    super::rack_wiring::picker_row(&mut rig, 0);
+    rig.frame(vec![]);
     // No dialog: Split off, automation on, Only supported off, into the channel whose menu it is.
     assert_eq!(rig.overlays(), []);
     let opts = ImportOpts {
@@ -1771,7 +1821,7 @@ fn import_midi_tracks_of_a_file_with_no_channel_does_nothing() {
     )]);
     let (mut rig, _) = picking(&bytes);
     let before = rig.app.song.clone();
-    rig.track_menu(2, IMPORT_MIDI);
+    import_tune(&mut rig, 2);
     assert_eq!(rig.overlays(), []);
     assert_eq!(rig.app.song, before);
     assert_eq!(rig.take(), Vec::<String>::new());
@@ -1781,7 +1831,7 @@ fn import_midi_tracks_of_a_file_with_no_channel_does_nothing() {
 fn a_file_that_does_not_read_shows_the_midi_load_error() {
     let (mut rig, _) = picking(b"RIFF....");
     let before = rig.app.song.clone();
-    rig.track_menu(2, IMPORT_MIDI);
+    import_tune(&mut rig, 2);
     assert_eq!(rig.message()[0], crate::smf::import::LOAD_FAILED);
     assert_eq!(rig.app.song, before);
 }
@@ -1791,7 +1841,7 @@ fn several_midi_channels_open_the_dialog_whose_import_makes_a_channel_each_in_on
     let bytes = smf(&[("Lead", tune(4)), ("Bass", tune(1)), ("Kit", tune(9))]);
     let (mut rig, _) = picking(&bytes);
     let before = rig.app.song.clone();
-    rig.track_menu(2, IMPORT_MIDI);
+    import_tune(&mut rig, 2);
     assert_eq!(rig.overlays(), [Overlay::MidiImport]);
     // Its contents from its second frame on, as every dialog box's (an egui area's first frame only sizes it).
     rig.frame(vec![]);
@@ -1847,7 +1897,7 @@ fn split_off_imports_into_the_channel_and_what_the_app_keeps_by_track_follows() 
     rig.frame(vec![]);
     rig.app.slots.automation_editor.clips.insert(2, (1, 1));
     let before = rig.app.song.clone();
-    rig.track_menu(2, IMPORT_MIDI);
+    import_tune(&mut rig, 2);
     rig.click_id(import_id("Split MIDI channels"));
     rig.click_id(import_id("import"));
     rig.frame(vec![]);
@@ -1877,7 +1927,7 @@ fn cancel_closes_the_dialog_and_imports_nothing() {
     let bytes = smf(&[("Lead", tune(4)), ("Bass", tune(1))]);
     let (mut rig, mem) = picking(&bytes);
     let before = rig.app.song.clone();
-    rig.track_menu(2, IMPORT_MIDI);
+    import_tune(&mut rig, 2);
     // A modal dialog: `Ctrl+O` asks for no file under it.
     rig.frame(vec![egui::Event::Key {
         key: egui::Key::O,
@@ -1886,7 +1936,7 @@ fn cancel_closes_the_dialog_and_imports_nothing() {
         repeat: false,
         modifiers: egui::Modifiers::COMMAND,
     }]);
-    assert_eq!(mem.0.borrow().accepts.len(), 1);
+    assert!(mem.0.borrow().accepts.is_empty());
     rig.click_id(import_id("cancel"));
     rig.frame(vec![]);
     assert_eq!(rig.overlays(), []);
@@ -2055,7 +2105,7 @@ fn the_one_channel_import_ignores_a_stray_note_off_on_another_midi_channel() {
     events.sort_by_key(|e| e.0);
     let bytes = smf(&[("Lead", events)]);
     let (mut rig, _) = picking(&bytes);
-    rig.track_menu(2, IMPORT_MIDI);
+    import_tune(&mut rig, 2);
     assert_eq!(rig.overlays(), []);
     let lane = &rig.app.song.channels[2].lanes[1];
     let SongEvent::Note { len_beats, .. } = lane.clips[0].events[0] else {
@@ -2073,7 +2123,7 @@ fn an_import_shows_the_hidden_tracks_of_its_channel() {
     synth.zipped = true;
     rig.app.song_edited(SongEdit::Final, 0);
     rig.frame(vec![]);
-    rig.track_menu(2, IMPORT_MIDI);
+    import_tune(&mut rig, 2);
     assert_eq!(lanes(&rig, 2).len(), 3 + 2, "imported");
     assert!(!rig.app.song.channels[2].zipped);
 }
@@ -2085,7 +2135,10 @@ fn gone_under(bytes: &[u8], item: (usize, usize)) -> (Rig, MemFiles) {
     rig.app
         .add_bare_channel(ChannelKind::Synth(SynthKind::MiniSynth), 0);
     rig.frame(vec![]);
-    rig.track_menu(3, item);
+    match item {
+        IMPORT_MIDI => import_tune(&mut rig, 3),
+        _ => rig.track_menu(3, item),
+    }
     assert_eq!(rig.overlays().len(), 1);
     rig.app.delete_channel(3, 0);
     assert_eq!(rig.app.song.channels.len(), 3);

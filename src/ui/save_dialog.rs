@@ -6,21 +6,23 @@
 //!
 //! The format tabs are a row of equal cells, labels FontSize 2 in `text`; the selected one has a `text` underline 2t
 //! thick along its cell's bottom, and the mouse lights a cell with `text` at α 0.05. The divider (1 px of `text` at
-//! α 0.18, 0.25 U in from the band's sides) runs along the tabs' bottom. `Send` (no share target) is dimmed and takes no
-//! input. With FLP selected, an `Include rendered audio` toggle (off whenever a dialog opens) sits left of `Save`: on,
-//! the project also holds each channel's render as an audio clip. With MIDI selected (and in `Save as MIDI`), an `Apply
-//! note effects` toggle (on by default, kept in the settings) sits there: on, the notes are written as the channels'
-//! note effects play them.
+//! α 0.18, 0.25 U in from the band's sides) runs along the tabs' bottom. `Send` (#72) does what `Save` does, then
+//! hands the written file to the system's share sheet ([`crate::project_files::FileProvider::share`]); a preset's
+//! dialog's `Send` is dimmed and takes no input. With FLP selected, an `Include rendered audio` toggle (off whenever a
+//! dialog opens) sits left of `Save`: on, the project also holds each channel's render as an audio clip. With MIDI
+//! selected (and in `Save as MIDI`), an `Apply note effects` toggle (on by default, kept in the settings) sits there:
+//! on, the notes are written as the channels' note effects play them.
 //! The song's dialog with FLM selected has `Save project version` in the right column level with `Save` (#69): it saves
-//! as `Save` does, with the song as a new project version ([`crate::versions`]), and opens the versions window.
+//! as `Save` does, with the song as a new project version ([`crate::versions`]), and opens the versions window. On a
+//! band too narrow for that (a portrait phone) it takes its own row under `Save` and `Send`, and the band grows by it.
 //! `Save` with FLM, FLP (an FL Studio project and its samples, as a `.zip`), ZIP or MIDI saves; with WAV, FLAC, OGG or
 //! MP3 it turns the band into
 //! the render page: the title `<name>.<ext>` (with Split on, the stems' folder `<name> - Multitrack <ext>`) over a dim
 //! `Estimated length:`, the `Normalize level` and `High quality` toggles on the left, `Split mixer tracks` (and, only
 //! while it is on, `Enable master FX`) on the right, the range and remainder spinners side by side in the centre under
 //! their captions `Range` and `Tail`, `Render` under them, and `Back` (the arrow icon) left of the close X. The band is
-//! modal: a backdrop under it takes every click elsewhere, and only the close X, Escape, `Save` (or Enter in the field)
-//! and `Render` end it.
+//! modal: a backdrop under it takes every click elsewhere, and only the close X, Escape, `Save` (or Enter in the field),
+//! `Send` and `Render` end it.
 //!
 //! The render options ([`RenderPage`]) all start off. The caller keeps them while the app runs and opens each dialog
 //! with [`RenderPage::reopened`], which turns `Split mixer tracks` off.
@@ -45,7 +47,9 @@ use crate::ui::widgets::{
 };
 
 /// The format tabs, in order.
-pub const FORMATS: [&str; 8] = ["FLM", "FLP", "ZIP", "MIDI", "WAV", "FLAC", "OGG", "MP3"];
+pub const FORMATS: [&str; 9] = [
+    "FLM", "FLP", "ZIP", "MIDI", "WAV", "FLAC", "OGG", "MP3", "MP4",
+];
 /// The description over the format tabs for FLM.
 const FLM_DESCRIPTION: &str = "Project (.flm)";
 /// The range spinner's and the remainder spinner's items, in order.
@@ -87,10 +91,28 @@ const TOGGLE_ROWS: [(f32, f32); 2] = [(2.0, 1.5), (3.5, 1.5)];
 const TOGGLE_W: f32 = 6.0;
 const SPINNER_ROW: (f32, f32) = (2.5, 2.0);
 const SPINNER_W: f32 = 4.5;
+/// The narrowest the spinners go beside the toggle columns (a 20 U band leaves them 3.3 U); a narrower band (a portrait
+/// phone) stacks them under the toggles.
+const SPINNER_MIN_W: f32 = 3.25;
 const SPINNER_GAP: f32 = 0.25;
 const COLUMN_GAP: f32 = 0.25;
 const EDGE_INSET: f32 = 0.25;
 const BACK_GAP: f32 = 0.25;
+/// A band narrower than this (a phone held upright, or a large UI scale) stacks what sits side by side on a wide one
+/// ([`layout_for`]): the side columns would cross `Save`, `Send` and the spinners.
+const NARROW_W: f32 = 20.0;
+/// The narrow format page: the option (FLP's or MIDI's toggle, FLM's `Save project version`) gets a row of its own
+/// under the tabs, and `Save` and `Send` move under it.
+const NARROW_OPTION_ROW: (f32, f32) = (5.25, 1.25);
+const NARROW_BUTTON_ROW: (f32, f32) = (7.0, 1.0);
+const NARROW_BAND_H: f32 = 8.5;
+/// The narrow render page: the spinners at full width under the estimate, the four toggles under them in two columns,
+/// `Render` at the bottom.
+const NARROW_TOGGLE_ROWS: [(f32, f32); 2] = [(4.75, 1.5), (6.25, 1.5)];
+const NARROW_RENDER_ROW: (f32, f32) = (8.25, 1.0);
+const NARROW_RENDER_BAND_H: f32 = 9.75;
+/// The narrow page's option toggle: at most this wide, centred.
+const NARROW_OPTION_W: f32 = 9.0;
 
 /// The formats of the format row, in its order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -104,10 +126,12 @@ pub enum ExportFormat {
     Flac,
     Ogg,
     Mp3,
+    /// The song's sound with the Displayer's picture (our own addition, [`crate::displayer::mp4`]).
+    Mp4,
 }
 
 impl ExportFormat {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Flm,
         Self::Flp,
         Self::Zip,
@@ -116,11 +140,12 @@ impl ExportFormat {
         Self::Flac,
         Self::Ogg,
         Self::Mp3,
+        Self::Mp4,
     ];
 
     /// The stored format id.
     pub fn id(self) -> u8 {
-        [0, 8, 6, 1, 2, 5, 7, 3][self as usize]
+        [0, 8, 6, 1, 2, 5, 7, 3, 9][self as usize]
     }
 
     /// The format stored as `id`.
@@ -144,6 +169,7 @@ impl ExportFormat {
             Wav => "Audio Wave",
             Flac => "Lossless FLAC Audio",
             Ogg | Mp3 => "Compressed Audio",
+            Mp4 => "Video with the Displayer",
         }
     }
 
@@ -158,6 +184,7 @@ impl ExportFormat {
             Flac => "flac",
             Ogg => "ogg",
             Mp3 => "mp3",
+            Mp4 => "mp4",
         }
     }
 
@@ -167,7 +194,7 @@ impl ExportFormat {
         match self {
             Flm | Flp | Zip => SONGS_FOLDER,
             Midi => crate::project_files::MIDI_FOLDER,
-            Wav | Flac | Ogg | Mp3 => crate::project_files::TRACKS_FOLDER,
+            Wav | Flac | Ogg | Mp3 | Mp4 => crate::project_files::TRACKS_FOLDER,
         }
     }
 
@@ -177,9 +204,14 @@ impl ExportFormat {
         matches!(self, Wav | Flac | Ogg | Mp3)
     }
 
-    /// Selectable: every format (FLP is the FL Studio project, `crate::flp::export`).
+    /// Rendered: `Save` opens the render page (audio, or MP4's own).
+    pub fn is_rendered(self) -> bool {
+        self.is_audio() || self == Self::Mp4
+    }
+
+    /// Selectable: every format (FLP is the FL Studio project, `crate::flp::export`); MP4 with the `video` feature.
     pub fn available(self) -> bool {
-        true
+        self != Self::Mp4 || cfg!(feature = "video")
     }
 }
 
@@ -248,10 +280,14 @@ pub struct SaveDialog {
     pub flp_audio: bool,
     /// MIDI's `Apply note effects` (#31): the notes as the channels' note effects play them. The caller keeps it.
     pub midi_effects: bool,
+    /// `Send`, not `Save`, was pressed last: what [`DialogAction::Save`] or [`DialogAction::Render`] writes is shared.
+    pub send: bool,
     /// The caller's estimated lengths in seconds, for `Estimated length:`: the song's (`Full song`, `Trim initial
     /// silence`) and the selection's. `None`: there is no selection, and the range spinner skips `Selection`.
     pub song_secs: f32,
     pub selection_secs: Option<f32>,
+    /// MP4's render page options; the caller keeps them with the Displayer's settings.
+    pub mp4: crate::displayer::Mp4Options,
 }
 
 impl SaveDialog {
@@ -265,8 +301,10 @@ impl SaveDialog {
             render: RenderPage::default(),
             flp_audio: false,
             midi_effects: true,
+            send: false,
             song_secs: 0.0,
             selection_secs: None,
+            mp4: crate::displayer::Mp4Options::default(),
         }
     }
 
@@ -284,7 +322,7 @@ impl SaveDialog {
     pub fn show(&mut self, ctx: &Context, cx: &UiCtx) -> Option<DialogAction> {
         let (c, m) = (&cx.theme.colors, cx.m);
         let screen = ctx.content_rect();
-        let l = layout(screen, m);
+        let l = layout_for(screen, m, self.page);
         let id = Id::new("save_dialog");
         // The dialog base: the screen dimmed at α 0.6, then a `moduleFill` band, from the first frame; below the band
         // (`Foreground`), above the screens, the backdrop.
@@ -318,9 +356,21 @@ impl SaveDialog {
         action
     }
 
-    /// `Save`: saves a project format, opens the render page for an audio one.
-    fn save(&mut self) -> Option<DialogAction> {
-        if self.format.is_audio() {
+    /// The song's dialog with FLM selected shows `Save project version`.
+    fn shows_version(&self) -> bool {
+        self.preset.is_none() && self.fixed.is_none() && self.format == ExportFormat::Flm
+    }
+
+    /// FLP's `Include rendered audio` (the song's dialog) or MIDI's `Apply note effects` shows, level with `Save`.
+    fn shows_toggle(&self) -> bool {
+        let song = self.preset.is_none() && self.fixed.is_none();
+        self.format == ExportFormat::Midi || (song && self.format == ExportFormat::Flp)
+    }
+
+    /// `Save` (or with `send`, `Send`): saves a project format, opens the render page for an audio one.
+    fn save(&mut self, send: bool) -> Option<DialogAction> {
+        self.send = send;
+        if self.format.is_rendered() {
             self.page = Page::Render;
             return None;
         }
@@ -383,7 +433,7 @@ impl SaveDialog {
         let mut field = ui.put(l.field, field);
         crate::android_text::edit(&mut field, &mut self.name, usize::MAX);
         if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-            action = self.save();
+            action = self.save(false);
         } else if crate::android_text::REFOCUS && ui.memory(|mem| mem.focused().is_none()) {
             field.request_focus();
         }
@@ -434,9 +484,9 @@ impl SaveDialog {
         }
         let save = crate::ui::dialog::button(id.with("save"), l.save, "Save", c, m);
         if button(ui, cx, &save, true).clicked() {
-            action = self.save();
+            action = self.save(false);
         }
-        if title.is_none() && self.format == ExportFormat::Flm {
+        if self.shows_version() {
             let label = "Save project version";
             let version =
                 crate::ui::dialog::button(id.with("version"), l.save_version, label, c, m);
@@ -444,13 +494,19 @@ impl SaveDialog {
                 action = Some(DialogAction::SaveVersion);
             }
         }
-        let send = Button {
-            fill_on: text.gamma_multiply(DISABLED_ALPHA),
-            text_on: fill.gamma_multiply(DISABLED_ALPHA),
-            disabled: true,
-            ..crate::ui::dialog::button(id.with("send"), l.send, "Send", c, m)
-        };
-        button(ui, cx, &send, true);
+        // A preset is saved only.
+        let mut send = crate::ui::dialog::button(id.with("send"), l.send, "Send", c, m);
+        if self.preset.is_some() {
+            send = Button {
+                fill_on: text.gamma_multiply(DISABLED_ALPHA),
+                text_on: fill.gamma_multiply(DISABLED_ALPHA),
+                disabled: true,
+                ..send
+            };
+        }
+        if button(ui, cx, &send, true).clicked() {
+            action = self.save(true);
+        }
         action
     }
 
@@ -466,7 +522,8 @@ impl SaveDialog {
         let painter = ui.painter().clone();
         // With Split on, the stems' folder.
         let ext = self.format.ext();
-        let tail = match self.render.split {
+        let split = self.render.split && self.format.is_audio();
+        let tail = match split {
             true => format!(" - Multitrack {ext}"),
             false => format!(".{ext}"),
         };
@@ -483,7 +540,10 @@ impl SaveDialog {
             tail.chars().count(),
         );
         let secs = match self.render.range {
-            RenderRange::Selection => self.selection_secs.unwrap_or(self.song_secs),
+            // MP4 renders the whole song.
+            RenderRange::Selection if self.format != ExportFormat::Mp4 => {
+                self.selection_secs.unwrap_or(self.song_secs)
+            }
             _ => self.song_secs,
         };
         painter.text(
@@ -495,6 +555,9 @@ impl SaveDialog {
             text.gamma_multiply(DIM_ALPHA),
         );
 
+        if self.format == ExportFormat::Mp4 {
+            return self.mp4_page(ui, cx, id, l);
+        }
         let r = &mut self.render;
         let [normalize, hq, split, master] = l.toggles;
         toggle(ui, cx, id, normalize, "Normalize level", &mut r.normalize);
@@ -561,6 +624,75 @@ impl SaveDialog {
     }
 }
 
+impl SaveDialog {
+    /// MP4's render page, below the title and the estimate: `1080p`, `60 fps` and `Include video sound` (off unless
+    /// turned on) where the audio toggles go, the `Frame` (16:9, 9:16, 1:1) and `Fit` spinners where the range and
+    /// tail ones go, then `Back` and `Render`. It renders the whole song, its remainder left as the default.
+    fn mp4_page(
+        &mut self,
+        ui: &mut Ui,
+        cx: &UiCtx,
+        id: Id,
+        l: &DialogLayout,
+    ) -> Option<DialogAction> {
+        use crate::displayer::{Aspect, Fit};
+        let (c, m) = (&cx.theme.colors, cx.m);
+        let text = c.text.to_color32();
+        let o = &mut self.mp4;
+        let [hd, fps, sound, _] = l.toggles;
+        let mut full = o.height >= 1080;
+        toggle(ui, cx, id, hd, "1080p", &mut full);
+        o.height = if full { 1080 } else { 720 };
+        let mut fast = o.fps >= 60;
+        toggle(ui, cx, id, fps, "60 fps", &mut fast);
+        o.fps = if fast { 60 } else { 30 };
+        toggle(ui, cx, id, sound, "Include video sound", &mut o.video_sound);
+        let aspects = [Aspect::Wide, Aspect::Tall, Aspect::Square];
+        let mut aspect = aspects.iter().position(|&a| a == o.aspect).unwrap_or(0);
+        spinner(
+            ui,
+            cx,
+            id.with("aspect"),
+            l.spinners[0],
+            "Frame",
+            &["16:9", "9:16", "1:1"],
+            &mut aspect,
+            &[],
+        );
+        o.aspect = aspects[aspect];
+        let fits = [Fit::Fit, Fit::Fill, Fit::Stretch];
+        let mut fit = fits.iter().position(|&f| f == o.fit).unwrap_or(0);
+        spinner(
+            ui,
+            cx,
+            id.with("fit"),
+            l.spinners[1],
+            "Fit",
+            &["Fit", "Fill", "Stretch"],
+            &mut fit,
+            &[],
+        );
+        o.fit = fits[fit];
+
+        let back = ui.interact(l.back, id.with("back"), Sense::click());
+        draw_icon(ui.painter(), l.back, IconId::Previous, text, 0.7, m);
+        if back.clicked() {
+            self.page = Page::Formats;
+        }
+        let render = crate::ui::dialog::button(id.with("render"), l.render, "Render", c, m);
+        button(ui, cx, &render, true)
+            .clicked()
+            .then_some(DialogAction::Render(RenderPage {
+                range: RenderRange::Full,
+                remainder: Remainder::Leave,
+                normalize: false,
+                high_quality: true,
+                split: false,
+                master_effects: false,
+            }))
+    }
+}
+
 /// A render page toggle in `rect`: the pill at its left, `label` right of it, in `text`. (The MIDI import dialog's too.)
 pub(crate) fn toggle(ui: &mut Ui, cx: &UiCtx, id: Id, rect: Rect, label: &str, on: &mut bool) {
     let text = cx.theme.colors.text.to_color32();
@@ -617,28 +749,53 @@ pub struct DialogLayout {
     /// The format description's line.
     pub description: Rect,
     /// The format tabs' cells, and the divider's band: the tabs' bottom row of pixels is its line.
-    pub formats: [Rect; 8],
+    pub formats: [Rect; 9],
     pub divider: Rect,
     pub save: Rect,
     pub send: Rect,
-    /// FLP's `Include rendered audio` (MIDI's `Apply note effects`), in the left column level with `Save`.
+    /// FLP's `Include rendered audio` (MIDI's `Apply note effects`), in the left column level with `Save`; on a narrow
+    /// band, centred on its own row under `Save` and `Send` ([`DialogLayout::band_for`]).
     pub flp_audio: Rect,
-    /// FLM's `Save project version`, at the right column's left, level with `Save`.
+    /// FLM's `Save project version`, at the right column's left, level with `Save`; where that would reach `Send` or
+    /// the band's edge (a portrait phone), on its own row under `Save` and `Send`, as wide as the pair
+    /// ([`DialogLayout::band_for`]).
     pub save_version: Rect,
     /// The render page: the `<name>.<ext>` title line and the `Estimated length:` line under it.
     pub heading: Rect,
     pub estimate: Rect,
     /// `Normalize level`, `High quality` (the left column), `Split mixer tracks`, `Enable master FX` (the right).
     pub toggles: [Rect; 4],
-    /// The range and the remainder spinner, side by side, without their caption strip above.
+    /// The range and the remainder spinner, side by side, without their caption strip above: between the toggle
+    /// columns, or on a narrow band on their own row under the toggles, `Render` under them.
     pub spinners: [Rect; 2],
     pub render: Rect,
     /// `Back`, the arrow icon in a square the close X's size, left of it.
     pub back: Rect,
 }
 
-/// Lays the dialog out on `screen`, in whole device pixels.
+impl DialogLayout {
+    /// The band as drawn: grown downward, with its bottom margin, to hold `lowest`, the page's lowest control (on a
+    /// narrow band: `Save project version` or the FLP/MIDI toggle on its own row, or `Render` under stacked spinners).
+    pub fn band_for(&self, lowest: Rect) -> Rect {
+        let margin = self.band.bottom() - self.save.bottom();
+        self.band
+            .with_max_y(self.band.bottom().max(lowest.bottom() + margin))
+    }
+}
+
+/// Lays the format page out on `screen`, in whole device pixels ([`layout_for`]).
 pub fn layout(screen: Rect, m: &Metrics) -> DialogLayout {
+    layout_for(screen, m, Page::Formats)
+}
+
+/// Lays the dialog out on `screen` for `page`, in whole device pixels. A band at least [`NARROW_W`] wide has its side
+/// columns beside the centre; a narrower one stacks them ([`narrow`]), its band as tall as the page needs.
+pub fn layout_for(screen: Rect, m: &Metrics, page: Page) -> DialogLayout {
+    let x = crate::ui::dialog::floating_x(screen, m);
+    // A pixel's slack: a full-width band is rounded to whole pixels.
+    if x.span() < m.u(NARROW_W) - 1.0 / m.ppp() {
+        return narrow(screen, m, page);
+    }
     let band_h = m.round_px(m.u(BAND_H));
     let band = Rect::from_x_y_ranges(
         crate::ui::dialog::floating_x(screen, m),
@@ -676,15 +833,43 @@ pub fn layout(screen: Rect, m: &Metrics) -> DialogLayout {
     let spinner_w = (band.width() / 2.0 / m.u(1.0)
         - (EDGE_INSET + TOGGLE_W + COLUMN_GAP + SPINNER_GAP / 2.0))
         .min(SPINNER_W);
-    let spinners = row(SPINNER_ROW, spinner_w, SPINNER_GAP, 2);
+    let side_by_side = row(SPINNER_ROW, spinner_w, SPINNER_GAP, 2);
     let (toggle_w, gap) = (m.round_px(m.u(TOGGLE_W)), m.round_px(m.u(COLUMN_GAP)));
     let toggle = |left: f32, (t, h): (f32, f32)| {
         Rect::from_min_size(pos2(left, top(t)), vec2(toggle_w, m.round_px(m.u(h))))
     };
     let (left, right) = (
-        spinners[0].left() - gap - toggle_w,
-        spinners[1].right() + gap,
+        side_by_side[0].left() - gap - toggle_w,
+        side_by_side[1].right() + gap,
     );
+    // A narrow band (a portrait phone): the spinners, too narrow for their items between the toggle columns, take their
+    // own row under the toggles, which meet in the middle, and `Render` goes under them; the band grows for it
+    // ([`DialogLayout::band_for`]).
+    let stacked = spinner_w < SPINNER_MIN_W;
+    let drop = match stacked {
+        true => TOGGLE_ROWS[1].0 + TOGGLE_ROWS[1].1 + STRIP_H - SPINNER_ROW.0,
+        false => 0.0,
+    };
+    let spinners = match stacked {
+        true => {
+            let w = (band.width() / m.u(1.0) - 2.0 * EDGE_INSET - SPINNER_GAP) / 2.0;
+            row(
+                (SPINNER_ROW.0 + drop, SPINNER_ROW.1),
+                w.min(SPINNER_W),
+                SPINNER_GAP,
+                2,
+            )
+        }
+        false => side_by_side,
+    };
+    // ponytail: the meeting columns need a 12.75 U band; phones are 13 U and wider at 100 % (U = 1/6 inch).
+    let (toggle_left, toggle_right) = match stacked {
+        true => {
+            let (mid, half) = (m.round_px(mid), m.round_px(gap / 2.0));
+            (mid - half - toggle_w, mid + half)
+        }
+        false => (left, right),
+    };
     let back = close.translate(vec2(-m.round_px(m.u(CLOSE_D + BACK_GAP)), 0.0));
     // The title lines: centred, and clear of `Back` by the same gap.
     let heading_w = (m.u(HEADING_W) / 2.0).min(back.left() - m.u(BACK_GAP) - mid);
@@ -709,21 +894,139 @@ pub fn layout(screen: Rect, m: &Metrics) -> DialogLayout {
         divider,
         save: buttons[0],
         send: buttons[1],
-        flp_audio: toggle(left, BUTTON_ROW),
-        save_version: Rect::from_min_size(
-            pos2(right, top(BUTTON_ROW.0)),
-            vec2(m.round_px(m.u(VERSION_W)), m.round_px(m.u(BUTTON_ROW.1))),
-        ),
+        flp_audio: {
+            let beside = toggle(left, BUTTON_ROW);
+            // A narrow band: on its own row under `Save` and `Send`, centred, where `Save project version` would go.
+            match beside.right() + gap <= buttons[0].left()
+                && beside.left() >= band.left() + m.round_px(m.u(EDGE_INSET))
+            {
+                true => beside,
+                false => beside.translate(vec2(
+                    m.round_px(mid - toggle_w / 2.0) - beside.left(),
+                    top(BUTTON_ROW.0 + BUTTON_ROW.1 + BUTTON_GAP) - beside.top(),
+                )),
+            }
+        },
+        save_version: {
+            let (w, h) = (m.round_px(m.u(VERSION_W)), m.round_px(m.u(BUTTON_ROW.1)));
+            let beside = Rect::from_min_size(pos2(right, top(BUTTON_ROW.0)), vec2(w, h));
+            // A narrow band (a portrait phone): on its own row under `Save` and `Send`, as wide as the pair.
+            match beside.left() >= buttons[1].right() + gap
+                && beside.right() <= band.right() - m.round_px(m.u(EDGE_INSET))
+            {
+                true => beside,
+                false => Rect::from_min_size(
+                    pos2(
+                        buttons[0].left(),
+                        top(BUTTON_ROW.0 + BUTTON_ROW.1 + BUTTON_GAP),
+                    ),
+                    vec2(buttons[1].right() - buttons[0].left(), h),
+                ),
+            }
+        },
         heading: heading(HEADING_ROW),
         estimate: heading(ESTIMATE_ROW),
         toggles: [
-            toggle(left, TOGGLE_ROWS[0]),
-            toggle(left, TOGGLE_ROWS[1]),
-            toggle(right, TOGGLE_ROWS[0]),
-            toggle(right, TOGGLE_ROWS[1]),
+            toggle(toggle_left, TOGGLE_ROWS[0]),
+            toggle(toggle_left, TOGGLE_ROWS[1]),
+            toggle(toggle_right, TOGGLE_ROWS[0]),
+            toggle(toggle_right, TOGGLE_ROWS[1]),
         ],
         spinners: [spinners[0], spinners[1]],
-        render: row(BUTTON_ROW, BUTTON_W, 0.0, 1)[0],
+        render: row((BUTTON_ROW.0 + drop, BUTTON_ROW.1), BUTTON_W, 0.0, 1)[0],
+        back,
+    }
+}
+
+/// [`layout_for`] on a narrow band: the same parts, stacked so that none crosses another. The format page puts its
+/// option on a row of its own between the tabs and `Save` / `Send`; the render page puts the spinners at full width
+/// under the estimate, the toggles under them in two columns (`Normalize level` / `High quality` left, `Split mixer
+/// tracks` / `Enable master FX` right), and `Render` at the bottom.
+fn narrow(screen: Rect, m: &Metrics, page: Page) -> DialogLayout {
+    let band_h = m.round_px(m.u(match page {
+        Page::Formats => NARROW_BAND_H,
+        Page::Render => NARROW_RENDER_BAND_H,
+    }));
+    let band = Rect::from_x_y_ranges(
+        crate::ui::dialog::floating_x(screen, m),
+        m.round_px(screen.center().y - band_h / 2.0)
+            ..=m.round_px(screen.center().y - band_h / 2.0) + band_h,
+    );
+    let mid = band.center().x;
+    let top = |t: f32| band.top() + m.round_px(m.u(t));
+    let row = |(t, h): (f32, f32), w: f32, gap: f32, n: usize| -> Vec<Rect> {
+        let (w, gap, h) = (m.round_px(w), m.round_px(m.u(gap)), m.round_px(m.u(h)));
+        let left = m.round_px(mid - (n as f32 * w + (n - 1) as f32 * gap) / 2.0);
+        (0..n)
+            .map(|i| Rect::from_min_size(pos2(left + i as f32 * (w + gap), top(t)), vec2(w, h)))
+            .collect()
+    };
+    let inset = m.round_px(m.u(EDGE_INSET));
+    let inner = band.width() - 2.0 * inset;
+    // The field and the lines over it: as wide as the field, or the band less its insets.
+    let line = |r: (f32, f32)| row(r, m.u(FIELD_W).min(inner), 0.0, 1)[0];
+    // The tabs share what the band holds, up to their wide size.
+    let tab_w = m.u(FORMAT_W).min(inner / FORMATS.len() as f32).floor();
+    let formats = row(FORMAT_ROW, tab_w, 0.0, FORMATS.len());
+    let divider = Rect::from_x_y_ranges(
+        band.left() + inset..=band.right() - inset,
+        formats[0].y_range(),
+    );
+    let buttons = row(NARROW_BUTTON_ROW, m.u(BUTTON_W), BUTTON_GAP, 2);
+    let close_inset = m.u(CLOSE_INSET + CLOSE_D / 2.0);
+    let close = Rect::from_center_size(
+        pos2(
+            m.round_px(band.right() - close_inset),
+            m.round_px(band.top() + close_inset),
+        ),
+        vec2(m.u(CLOSE_D), m.u(CLOSE_D)),
+    );
+    let field = line(FIELD_ROW);
+    // The spinners: full size when the band holds them, else half of it each.
+    let spinner_w = m.u(SPINNER_W).min((inner - m.u(SPINNER_GAP)) / 2.0);
+    let spinners = row(SPINNER_ROW, spinner_w, SPINNER_GAP, 2);
+    // The toggle columns: the band's halves, less the insets and the gap between them.
+    let gap = m.round_px(m.u(COLUMN_GAP));
+    let column_w = m.round_px((inner - gap) / 2.0);
+    let toggle = |left: f32, (t, h): (f32, f32)| {
+        Rect::from_min_size(pos2(left, top(t)), vec2(column_w, m.round_px(m.u(h))))
+    };
+    let (left, right) = (band.left() + inset, band.left() + inset + column_w + gap);
+    let back = close.translate(vec2(-m.round_px(m.u(CLOSE_D + BACK_GAP)), 0.0));
+    let heading_w = (m.u(HEADING_W) / 2.0).min(back.left() - m.u(BACK_GAP) - mid);
+    let heading = |(t, h): (f32, f32)| {
+        let half = m.round_px(heading_w);
+        Rect::from_x_y_ranges(
+            mid - half..=mid + half,
+            top(t)..=top(t) + m.round_px(m.u(h)),
+        )
+    };
+    DialogLayout {
+        band,
+        close,
+        title: {
+            let left = m.round_px(band.left() + m.u(CLOSE_INSET));
+            Rect::from_x_y_ranges(left..=field.left().max(left), close.y_range())
+        },
+        name_label: line(NAME_LABEL_ROW),
+        field,
+        description: line(DESCRIPTION_ROW),
+        formats: std::array::from_fn(|i| formats[i]),
+        divider,
+        save: buttons[0],
+        send: buttons[1],
+        flp_audio: row(NARROW_OPTION_ROW, m.u(NARROW_OPTION_W).min(inner), 0.0, 1)[0],
+        save_version: row(NARROW_OPTION_ROW, m.u(VERSION_W).min(inner), 0.0, 1)[0],
+        heading: heading(HEADING_ROW),
+        estimate: heading(ESTIMATE_ROW),
+        toggles: [
+            toggle(left, NARROW_TOGGLE_ROWS[0]),
+            toggle(left, NARROW_TOGGLE_ROWS[1]),
+            toggle(right, NARROW_TOGGLE_ROWS[0]),
+            toggle(right, NARROW_TOGGLE_ROWS[1]),
+        ],
+        spinners: [spinners[0], spinners[1]],
+        render: row(NARROW_RENDER_ROW, m.u(BUTTON_W), 0.0, 1)[0],
         back,
     }
 }
@@ -752,11 +1055,13 @@ mod tests {
         let buttons = ExportFormat::ALL.map(ExportFormat::button);
         assert_eq!(
             buttons,
-            ["FLM", "FLP", "ZIP", "MIDI", "WAV", "FLAC", "OGG", "MP3"]
+            [
+                "FLM", "FLP", "ZIP", "MIDI", "WAV", "FLAC", "OGG", "MP3", "MP4"
+            ]
         );
         assert_eq!(
             ExportFormat::ALL.map(ExportFormat::id),
-            [0, 8, 6, 1, 2, 5, 7, 3]
+            [0, 8, 6, 1, 2, 5, 7, 3, 9]
         );
         for f in ExportFormat::ALL {
             assert_eq!(ExportFormat::from_id(f.id()), Some(f));
@@ -770,7 +1075,12 @@ mod tests {
         let available: Vec<_> = (ExportFormat::ALL.into_iter())
             .filter(|f| f.available())
             .collect();
-        assert_eq!(available, ExportFormat::ALL);
+        // MP4 needs the `video` feature (FFmpeg).
+        let all = ExportFormat::ALL.into_iter();
+        let want: Vec<_> = all
+            .filter(|&f| f != Mp4 || cfg!(feature = "video"))
+            .collect();
+        assert_eq!(available, want);
     }
 
     #[test]
@@ -784,6 +1094,7 @@ mod tests {
             (Flac, "Lossless FLAC Audio", "My Tracks", "flac", true),
             (Ogg, "Compressed Audio", "My Tracks", "ogg", true),
             (Mp3, "Compressed Audio", "My Tracks", "mp3", true),
+            (Mp4, "Video with the Displayer", "My Tracks", "mp4", false),
         ];
         for (f, description, folder, ext, audio) in table {
             assert_eq!(f.description(), description, "{f:?}");
@@ -848,6 +1159,57 @@ mod tests {
         all
     }
 
+    /// A phone held upright: the band is under 20 U, and each page stacks its parts so that none crosses another.
+    #[test]
+    fn a_narrow_band_stacks_its_options_and_nothing_overlaps() {
+        let portrait = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(540.0, 1170.0));
+        let m = metrics();
+        let apart = |what: &str, a: Rect, b: Rect| {
+            assert!(!a.intersects(b), "{what}: {a:?} crosses {b:?}");
+        };
+        let l = layout(portrait, &m);
+        assert!(l.band.width() < 20.0 * U);
+        // The format page's parts (the render page's are laid out for its own, taller band).
+        let render_only = ["render", "toggle", "spinner", "heading", "estimate"];
+        for (what, r) in rects(&l)
+            .into_iter()
+            .filter(|(w, _)| !render_only.contains(w))
+        {
+            assert!(l.band.contains_rect(r), "{what} {r:?} is outside the band");
+        }
+        assert!(l.band.contains_rect(l.flp_audio) && l.band.contains_rect(l.save_version));
+        // The format page: the option row between the tabs and Save / Send, crossing neither.
+        assert!(l.formats[0].bottom() <= l.flp_audio.top());
+        assert!(l.flp_audio.bottom() <= l.save.top());
+        for (what, option) in [("toggle", l.flp_audio), ("version", l.save_version)] {
+            apart(what, option, l.save);
+            apart(what, option, l.send);
+            apart(what, option, l.formats[0]);
+        }
+        apart("save", l.save, l.send);
+        // The render page: the spinners at full size, the toggles under them in two columns, Render last.
+        let r = layout_for(portrait, &m, Page::Render);
+        assert!(r.band.height() > l.band.height());
+        assert_eq!(r.spinners[0].width(), SPINNER_W * U);
+        apart("spinners", r.spinners[0], r.spinners[1]);
+        for (i, t) in r.toggles.iter().enumerate() {
+            assert!(r.band.contains_rect(*t), "toggle {i}");
+            apart("toggle under a spinner", *t, r.spinners[0]);
+            apart("toggle under a spinner", *t, r.spinners[1]);
+            apart("toggle over Render", *t, r.render);
+            for other in &r.toggles[i + 1..] {
+                apart("toggles", *t, *other);
+            }
+        }
+        assert!(r.band.contains_rect(r.render));
+        assert!(r.spinners[0].bottom() <= r.toggles[0].top());
+        // A wide band keeps its side columns.
+        assert_eq!(
+            layout_for(SCREEN, &m, Page::Render).band,
+            layout(SCREEN, &m).band
+        );
+    }
+
     #[test]
     fn the_band_is_a_20_u_floating_panel_across_the_middle_and_holds_everything() {
         let l = layout(SCREEN, &metrics());
@@ -859,7 +1221,7 @@ mod tests {
         // Centred: the field, the format row and the button pair.
         let mid = SCREEN.center().x;
         assert_eq!(l.field.center().x, mid);
-        assert_eq!((l.formats[0].left() + l.formats[7].right()) / 2.0, mid);
+        assert_eq!((l.formats[0].left() + l.formats[8].right()) / 2.0, mid);
         assert_eq!((l.save.left() + l.send.right()) / 2.0, mid);
         // Top to bottom: field, formats, buttons; Save left of Send; the close X at the right.
         assert!(l.field.bottom() < l.formats[0].top());
@@ -1004,15 +1366,77 @@ mod tests {
     }
 
     #[test]
-    fn save_and_the_close_x_act_and_send_does_nothing() {
+    fn save_send_and_the_close_x_act() {
         let l = layout(SCREEN, &metrics());
         let mut rig = Rig::new();
-        assert_eq!(rig.click(l.send.center()), None);
+        assert_eq!(rig.click(l.send.center()), Some(DialogAction::Save(Flm)));
+        assert!(rig.dialog.send);
         assert_eq!(rig.click(l.save.center()), Some(DialogAction::Save(Flm)));
+        assert!(!rig.dialog.send);
         assert_eq!(rig.click(l.close.center()), Some(DialogAction::Close));
         // The band and the backdrop swallow clicks without closing.
         assert_eq!(rig.click(pos2(5.0, 5.0)), None);
         assert_eq!(rig.click(l.band.left_center() + egui::vec2(5.0, 0.0)), None);
+    }
+
+    /// `Save` and `Send` never overlap what shares their row (FLM's `Save project version`, FLP's and MIDI's toggle):
+    /// on a portrait phone (15 U wide) that takes its own row under the pair, inside the band, which grows for it.
+    #[test]
+    fn save_send_and_their_row_mates_never_overlap() {
+        let screen = |w: f32, h: f32| Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(w * U, h * U));
+        for screen in [screen(15.0, 33.0), screen(33.0, 15.0), SCREEN] {
+            let l = layout(screen, &metrics());
+            // Never shown together.
+            for mate in [l.save_version, l.flp_audio] {
+                let band = l.band_for(mate);
+                let rects = [l.save, l.send, mate];
+                for (i, a) in rects.iter().enumerate() {
+                    assert!(
+                        band.contains_rect(*a),
+                        "{a:?} is outside {band:?} on {screen:?}"
+                    );
+                    for b in &rects[i + 1..] {
+                        assert!(
+                            !a.intersect(*b).is_positive(),
+                            "{a:?} overlaps {b:?} on {screen:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The render page's toggles, spinners (with their caption strips) and `Render` never overlap, and each spinner is
+    /// wide enough for its items: on a portrait phone (15 U wide) the spinners take their own row under the toggles.
+    #[test]
+    fn the_render_page_controls_never_overlap() {
+        let screen = |w: f32, h: f32| Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(w * U, h * U));
+        for screen in [screen(15.0, 33.0), screen(33.0, 15.0), SCREEN] {
+            let l = layout(screen, &metrics());
+            let strip = |r: Rect| r.with_min_y(r.top() - STRIP_H * U);
+            let mut all = l.toggles.to_vec();
+            all.extend(l.spinners.map(strip));
+            all.push(l.render);
+            for (i, a) in all.iter().enumerate() {
+                let band = l.band_for(l.render);
+                assert!(
+                    band.contains_rect(*a),
+                    "{a:?} is outside {band:?} on {screen:?}"
+                );
+                for b in &all[i + 1..] {
+                    assert!(
+                        !a.intersect(*b).is_positive(),
+                        "{a:?} overlaps {b:?} on {screen:?}"
+                    );
+                }
+            }
+            for r in l.spinners {
+                assert!(
+                    r.width() >= SPINNER_MIN_W * U,
+                    "{r:?} is too narrow on {screen:?}"
+                );
+            }
+        }
     }
 
     /// Which format tabs `shapes` underline: a `text` line 2t thick along the cell's bottom.
@@ -1366,7 +1790,7 @@ mod tests {
     }
 
     #[test]
-    fn only_flm_is_underlined_and_send_is_dimmed() {
+    fn only_flm_is_underlined_and_send_looks_like_save() {
         let l = layout(SCREEN, &metrics());
         let colors = theme_by_id(0).colors;
         let text = colors.text.to_color32();
@@ -1385,7 +1809,7 @@ mod tests {
             })
         };
         assert_eq!(rect_fill(l.save), Some(text));
-        assert_eq!(rect_fill(l.send), Some(text.gamma_multiply(0.3)));
+        assert_eq!(rect_fill(l.send), Some(text));
         assert_eq!(rect_fill(l.band), Some(colors.menu_fill.to_color32()));
         assert_eq!(rect_fill(l.field), Some(colors.background.to_color32()));
     }

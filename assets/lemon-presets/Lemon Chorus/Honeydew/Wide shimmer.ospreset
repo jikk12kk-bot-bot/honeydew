@@ -1,0 +1,15 @@
+OSPRESET 1
+plugin=Lemon Chorus	id=clap:org.openstudio.lemon-chorus	format=clap	body=params
+# Honeydew's own preset (tools/lemon_presets.py).
+Delay = 300
+Depth = 3000
+Stereo = 900
+LFO 1 speed = 1200
+LFO 2 speed = 2200
+LFO 3 speed = 3100
+LFO 1 wave = 0
+LFO 2 wave = 0
+LFO 3 wave = 0
+Cross type = 0
+Cross cutoff = 2500
+Wet only = 0

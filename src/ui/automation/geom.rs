@@ -27,8 +27,12 @@ pub const HIT_R: f32 = 1.25;
 const NEW_BEAT_U: f32 = 4.0;
 /// The value range is 127 rows, V/127 each when the whole range shows.
 pub const ROWS: f64 = 127.0;
-/// The value zoom's deepest: 1/64 of the range over V (#60).
-pub const VALUE_ZOOM: f64 = 64.0;
+/// The value zoom's deepest: 1/256 of the range over V (#60).
+pub const VALUE_ZOOM: f64 = 256.0;
+/// The value ruler's labelled steps (#135), in ten-thousandths of the range: 0.1, 0.25, 0.5 … 50, 100 %, the finest
+/// at least [`RULER_LABEL_U`] apart; its fine marks split one in five.
+const RULER_STEPS: [i64; 10] = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10_000];
+const RULER_LABEL_U: f32 = 1.5;
 
 /// The editor's rects. `ruler` is the whole ruler row (the `background` rect over the margin and the ruler); `snap`
 /// its left cell, 1.5 U × (ruler h − 1 px); `time` the time ruler, from x + 1.5 U + ceil(U/16). Below the ruler: `grid`
@@ -148,6 +152,28 @@ impl Frame {
             .collect()
     }
 
+    /// The value ruler (#135, where there were fixed ticks): zoomed in, the marks over the value area
+    /// at whole fifths of the labelled step ([`RULER_STEPS`]), each its fraction of the range and whether it is
+    /// labelled (every fifth). They move and spread with the view, as the time ruler's. None at 1×.
+    pub fn ruler_marks(&self, m: &Metrics) -> Vec<(f32, bool)> {
+        let ([r0, n], (k, o)) = (self.rows, self.frac_law());
+        if n >= ROWS {
+            return Vec::new();
+        }
+        // In ten-thousandths of the range: one's height on screen, and the view's bottom and top.
+        let unit = f64::from(self.value.height()) / n * k / 1e4;
+        let at = |r: f64| (1.0 - (r - o) / k) * 1e4;
+        let step = (RULER_STEPS.into_iter())
+            .find(|&s| s as f64 * unit >= f64::from(m.u(RULER_LABEL_U)))
+            .unwrap_or(10_000);
+        let fine = step / 5;
+        let from = (at(r0 + n).max(0.0) / fine as f64).ceil() as i64;
+        let to = (at(r0).min(1e4) / fine as f64).floor() as i64;
+        (from..=to)
+            .map(|j| ((j * fine) as f32 / 1e4, j % 5 == 0))
+            .collect()
+    }
+
     /// The axis tick at fraction `f` of the range (1 at the top), y = [`Self::frac_y`], labelled `label`.
     pub fn axis_tick(&self, f: f32, label: String, m: &Metrics) -> AxisTick {
         let (a, px) = (self.axis, 1.0 / m.ppp());
@@ -165,11 +191,11 @@ impl Frame {
     }
 }
 
-/// The beat widths (points per beat) the zoom allows: (12/U)·4/d … (0.01/U)·4/d beats per point, so U·d/48 …
-/// 25·U·d points per beat, d = `sig`'s subdivision, TDIV byte 0.
+/// The beat widths (points per beat) the zoom allows: U·d/192 … 100·U·d points per beat, d = `sig`'s subdivision,
+/// TDIV byte 0.
 pub fn zoom_limits(u: f32, sig: TimeSig) -> [f32; 2] {
     let ud = u * sig.steps_per_beat() as f32;
-    [ud / 48.0, ud * 25.0]
+    [ud / 192.0, ud * 100.0]
 }
 
 /// The view: the beat at the grid's left edge and the beat width in points, and the value view's [`Frame::rows`].
@@ -434,20 +460,39 @@ mod tests {
             assert_eq!(labels, ["100", "50", "0"]);
             assert_eq!(ticks[1].y, 68.0 + 45.0);
         }
+        // #135: zoomed, a ruler instead, moving with the view. A quarter of the range shows over V = 220, 880 points
+        // the whole range: labelled every 10 % (5 % would be under 1.5 U), a fine mark every 2 %.
+        let m = metrics(1.0);
+        let mut f = frame(300.0, 1.0);
+        assert!(f.ruler_marks(&m).is_empty(), "none at 1×");
+        f.rows = [0.0, 31.5];
+        let percents = |f: &Frame, labelled: bool| -> Vec<i32> {
+            (f.ruler_marks(&m).into_iter())
+                .filter(|&(_, l)| l || !labelled)
+                .map(|(v, _)| (v * 100.0).round() as i32)
+                .collect()
+        };
+        assert_eq!(percents(&f, true), [80, 90, 100]);
+        assert_eq!(
+            percents(&f, false),
+            (38..=50).map(|i| 2 * i).collect::<Vec<_>>()
+        );
+        f.rows = [31.5, 31.5];
+        assert_eq!(percents(&f, true), [60, 70]);
     }
 
     #[test]
     fn zoom_scroll_and_the_initial_view() {
-        // (12/U)·4/d … (0.01/U)·4/d beats per point, d = TDIV byte 0: U·d/48 … 25·U·d points per beat.
+        // U·d/192 … 100·U·d points per beat, d = TDIV byte 0.
         // Byte 1 (b) plays no part.
         let sig = |subdivision, beats_per_bar| TimeSig {
             subdivision,
             beats_per_bar,
         };
-        assert_eq!(zoom_limits(32.0, sig(4, 4)), [32.0 * 4.0 / 48.0, 3200.0]);
+        assert_eq!(zoom_limits(32.0, sig(4, 4)), [32.0 * 4.0 / 192.0, 12800.0]);
         assert_eq!(zoom_limits(32.0, sig(4, 3)), zoom_limits(32.0, sig(4, 4)));
-        assert_eq!(zoom_limits(32.0, sig(3, 4)), [2.0, 2400.0]);
-        assert_eq!(zoom_limits(32.0, sig(8, 4)), [32.0 * 8.0 / 48.0, 6400.0]);
+        assert_eq!(zoom_limits(32.0, sig(3, 4)), [32.0 * 3.0 / 192.0, 9600.0]);
+        assert_eq!(zoom_limits(32.0, sig(8, 4)), [32.0 * 8.0 / 192.0, 25600.0]);
         assert_eq!(zoom_limits(32.0, sig(8, 7)), zoom_limits(32.0, sig(8, 4)));
         assert_eq!(zoom_limits(32.0, sig(0, 4)), zoom_limits(32.0, sig(1, 4)));
         // The first point's beat at 4 U per beat; beat 0 without points.

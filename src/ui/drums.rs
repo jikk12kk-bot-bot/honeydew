@@ -477,6 +477,7 @@ pub fn show_pads(
         actions.extend(held.map(|f| DrumsAction::PadUp(f.pad)));
     }
     let reach = (1.5 * m.u_px()).trunc();
+    crate::ui::touch_route::takes_fingers(ui.ctx(), response.id);
     for finger in fingers(ui, response.id) {
         match finger {
             Finger::Down(id, at) => {
@@ -736,6 +737,7 @@ fn control(
             let pill = Pill {
                 label_right: true,
                 inverted: true,
+                ..Pill::default()
             };
             let value = &mut slot.params[p];
             widgets::pill_toggle(ui, cx, &c, pill, value, |_| String::new()).changed()
@@ -784,7 +786,14 @@ fn control(
                 label_font: FontSize::Pt10,
                 ..c
             };
-            let clicked = widgets::text_button(ui, cx, &text).clicked();
+            // `AUX` routed to a send channel shows it, lit: `FX 5` for `Effect 5`.
+            let routed = (spec.ctl == Ctl::Aux)
+                .then(|| aux_label(slot.file.send_target, &state.sends))
+                .flatten();
+            let clicked = match &routed {
+                Some(label) => widgets::value_button(ui, cx, &text, label).clicked(),
+                None => widgets::text_button(ui, cx, &text).clicked(),
+            };
             if clicked {
                 state.menu = Some((row, spec.ctl, rect.center()));
             }
@@ -899,6 +908,22 @@ pub fn create_pad_send(song: &mut Song, channel: usize, slot: usize) -> Option<u
     let kit = song.channels[channel].drum_kit.as_mut()?;
     kit.slots[slot].file.send_target = id;
     Some(new)
+}
+
+/// What a slot's `AUX` button shows while it is routed to send channel `target` of `sends` (by id): the channel's name,
+/// `Effect N` shortened to `FX N`, and `FX` for one with no name. `None` at `Default` (−1), or for a target no longer
+/// in the song.
+fn aux_label(target: i32, sends: &[(i32, String)]) -> Option<String> {
+    if target < 0 {
+        return None;
+    }
+    let (_, name) = sends.iter().find(|(id, _)| *id == target)?;
+    let name = name.trim();
+    Some(match name.strip_prefix("Effect") {
+        _ if name.is_empty() => "FX".to_owned(),
+        Some(rest) if rest.is_empty() || rest.starts_with(' ') => format!("FX{rest}"),
+        _ => name.to_owned(),
+    })
 }
 
 /// What the `AUX` menu picks: a target id (−1 `Default`), or `Create FX Channel`.

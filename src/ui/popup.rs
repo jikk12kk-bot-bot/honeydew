@@ -97,16 +97,17 @@ fn just_opened(ctx: &Context, id: Id) -> bool {
 ///
 /// The popup is modal. A full-screen backdrop just below it takes every click outside the popup, so those
 /// clicks close it (`close`) and never reach the widgets underneath, and Escape closes it too. A backdrop that
-/// first appears this frame cannot have seen the click that opened the popup.
+/// first appears this frame cannot have seen the click that opened the popup. Both stay above any dialog or panel,
+/// the one it opened from too (#118, [`raise`]).
 ///
 /// Escape is consumed here, so with two popups open the one shown first in the frame takes it: show a popup opened
 /// over another before that one (egui still draws the newer on top), as a container shows its popups before its
 /// own Escape check.
 ///
-/// It opens with the menu sweep, on frame time: the screen dims (`background` α 0.6) at once, a 2 px bar grows at the
-/// popup's left edge to full height, then the fill grows rightwards to full width ([`Sweep`]); the items show once it
-/// ends (frame 21 at 60 fps). The items take input from the first frame, and a close is instant. A popup not shown for a frame
-/// opens from the start again.
+/// It opens with the menu sweep, on frame time: the screen dims (`background` α 0.6) at once (once however popups nest:
+/// the first shown in the frame dims it, under itself), a 2 px bar grows at the popup's left edge to full height, then
+/// the fill grows rightwards to full width ([`Sweep`]); the items show once it ends (frame 21 at 60 fps). The items take
+/// input from the first frame, and a close is instant. A popup not shown for a frame opens from the start again.
 pub fn show<T: Copy>(
     ctx: &Context,
     id: Id,
@@ -120,9 +121,13 @@ pub fn show<T: Copy>(
         ctx.request_repaint();
     }
     // The dim goes into the popup's own layer before the popup: under it, over everything else.
-    let ink = cx.theme.colors.background.to_color32();
-    ctx.layer_painter(LayerId::new(Order::Foreground, id))
-        .rect_filled(ctx.content_rect(), 0.0, anim::dim(ink, anim::DIM_ALPHA));
+    // Once a pass however popups nest (#118): the first shown dims the screen, under itself.
+    let (key, pass) = (Id::new("popup dim pass"), Some(ctx.cumulative_pass_nr()));
+    if ctx.data_mut(|d| std::mem::replace(d.get_temp_mut_or_default(key), pass) != pass) {
+        let ink = cx.theme.colors.background.to_color32();
+        ctx.layer_painter(layer(id))
+            .rect_filled(ctx.content_rect(), 0.0, anim::dim(ink, anim::DIM_ALPHA));
+    }
     show_as(
         ctx,
         id,
@@ -133,6 +138,16 @@ pub fn show<T: Copy>(
         Sweep { phase, a },
         false,
     )
+}
+
+/// The order of a popup list's layers: above every dialog, panel and full-screen view, which are all `Foreground`
+/// areas. egui raises an area of an order to its top when it is pressed, so a popup in the same order as the dialog
+/// it opened from went under that dialog at a press on it; no press lifts a `Foreground` area over this order.
+pub(crate) const ORDER: Order = Order::Tooltip;
+
+/// The layer popup `id` draws in (its items, its dim).
+pub(crate) fn layer(id: Id) -> LayerId {
+    LayerId::new(ORDER, id)
 }
 
 /// A message box's items (`views::message`), in its own look: `text` labels on the `background` box the caller paints
@@ -200,12 +215,30 @@ fn show_as<T: Copy>(
         close: false,
     };
 
-    // Below the popup (`Foreground`) but above the screens (`Background`). Not in the popup's own layer order:
-    // egui raises a clicked area to the top of its order, which would put the backdrop over the popup.
+    // Below the popup but above the screens (`Background`). Not in the popup's own layer order: egui raises a clicked
+    // area to the top of its order, which would put the backdrop over the popup.
     let backdrop = crate::ui::backdrop(ctx, id);
     let escape = crate::ui::close_pressed(ctx);
     result.close |=
         escape || backdrop.clicked() || backdrop.secondary_clicked() || backdrop.middle_clicked();
+    // A popup list lies above every dialog (`ORDER`), so the backdrop (at `Middle`) is under a dialog it opened from:
+    // a blocker just under the popup, over the whole screen, takes the presses on the dialog around it and closes
+    // it, as a tap outside it anywhere else does. A message box's items stay in the box's own layer (`Foreground`),
+    // over a blocker of that order raised to its top every frame, so that a press on a dialog or view under the box
+    // never lifts that over it.
+    let order = if on_box { Order::Foreground } else { ORDER };
+    let screen = ctx.content_rect();
+    let blocker = Area::new(id.with("popup blocker"))
+        .order(order)
+        .fixed_pos(screen.min)
+        .constrain(false)
+        .fade_in(false)
+        .sense(Sense::click_and_drag())
+        .show(ctx, |ui| {
+            ui.allocate_exact_size(screen.size(), Sense::hover())
+        })
+        .response;
+    result.close |= blocker.clicked() || blocker.secondary_clicked() || blocker.middle_clicked();
 
     // Taller than its bounds even at the smallest rows, or wider (a long list in columns, the SoundFont Player's patch
     // menu): it scrolls that way (drag, wheel, or its visible scrollbar).
@@ -276,7 +309,7 @@ fn show_as<T: Copy>(
         }
     };
     Area::new(id)
-        .order(Order::Foreground)
+        .order(order)
         .fixed_pos(rect.min)
         .constrain(false)
         .fade_in(false)
@@ -310,6 +343,12 @@ fn show_as<T: Copy>(
                 contents(ui);
             }
         });
+    // Right over its blocker, whichever of the two a press raised: egui places a sublayer just above its parent
+    // after it sorts the layers. Set every frame (egui forgets it at the frame's end).
+    if on_box {
+        ctx.move_to_top(blocker.layer_id);
+    }
+    ctx.set_sublayer(blocker.layer_id, LayerId::new(order, id));
     result
 }
 
@@ -910,6 +949,16 @@ mod tests {
             .position(|c| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == Color32::RED))
             .unwrap();
         assert!(screen < index("Outer") && index("Outer") < index("Inner"));
+        // One dim for both (#118), the inner popup's: over the outer one.
+        let dim = anim::dim(theme.colors.background.to_color32(), anim::DIM_ALPHA);
+        let dims: Vec<usize> = (shapes.iter().enumerate())
+            .filter(|(_, c)| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == dim))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            dims.len() == 1 && index("Outer") < dims[0] && dims[0] < index("Inner"),
+            "{dims:?}"
+        );
 
         let escape = || key_tap(egui::Key::Escape, Default::default());
         let closed = |r: Option<PopupResult<usize>>| r.unwrap().close;

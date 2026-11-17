@@ -10,6 +10,7 @@ pub mod audio_link;
 #[cfg(any(target_arch = "wasm32", test))]
 pub mod collaboration;
 pub mod content;
+pub mod displayer;
 pub mod flm;
 pub mod flp;
 pub mod fonts;
@@ -35,6 +36,8 @@ pub mod theme;
 pub mod token_map;
 pub mod ui;
 pub mod versions;
+#[cfg(feature = "video")]
+pub mod video;
 pub mod zip;
 // In-app updates and the sound library's download (#66); the web is always current.
 #[cfg(not(target_arch = "wasm32"))]

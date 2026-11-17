@@ -61,8 +61,10 @@ pub fn show(
     if state.dialog.is_none() {
         state.midi_channel = None;
     }
+    let mp4 = app.settings.displayer.mp4;
     let dialog = state.dialog.get_or_insert_with(|| SaveDialog {
         render: page.reopened(),
+        mp4,
         ..SaveDialog::new(std::mem::take(name))
     });
     let song = &*app.song;
@@ -74,7 +76,12 @@ pub fn show(
     name.clone_from(&dialog.name);
     state.page = dialog.render;
     app.settings.midi_note_effects = dialog.midi_effects;
-    match action? {
+    app.settings.displayer.mp4 = dialog.mp4;
+    let action = action?;
+    // `Send`: what this writes is shared once written.
+    app.files.send =
+        dialog.send && matches!(action, DialogAction::Save(_) | DialogAction::Render(_));
+    match action {
         DialogAction::Save(ExportFormat::Flm) => {
             app.files.dialog_save(app.song, name).then_some(Nav::Close)
         }
@@ -93,6 +100,11 @@ pub fn show(
                     app.files.save_as_midi(app.song, channel, name);
                 }
             }
+            None
+        }
+        // MP4's options are the dialog's `mp4` ([`crate::project_files::export::Job::with_video`]).
+        DialogAction::Render(_) if dialog.format == ExportFormat::Mp4 => {
+            app.files.export(app.song, ExportFormat::Mp4, name, false);
             None
         }
         DialogAction::Render(_) => {

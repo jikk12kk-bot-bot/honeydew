@@ -64,6 +64,8 @@ pub enum RenderError {
     TooLong,
     /// The web's archive of the stems could not be made (past zip's 4 GiB).
     Archive,
+    /// The MP4 could not be written: FFmpeg's reason.
+    Video(String),
 }
 
 /// The engine renders in blocks of this many frames.
@@ -243,13 +245,8 @@ impl Render {
         }
         let (start, end) = ticks(&song, spec.range);
         let engine = engine(&song, samples, spec.rate, start)?;
-        // As the engine's seek maps ticks to frames.
-        let frame = |tick: f64| {
-            (tick / f64::from(PPQ) * 60.0 * f64::from(spec.rate as f32)
-                / f64::from(song.tempo_bpm as f32))
-            .ceil()
-        };
-        let range = frame(end) - frame(start);
+        // As long as playback plays it, at the tempo automation's tempos (Honeydew change, #126).
+        let range = engine.frames_to_tick(end as u64).ceil();
         if range.is_nan() || range > f64::from(MAX_SECS) * f64::from(spec.rate) {
             return Err(RenderError::TooLong);
         }
@@ -281,6 +278,11 @@ impl Render {
             }
         }
         self.pass.ended()
+    }
+
+    /// How far pass 1 is, 0 to 1 (the busy screen's bar).
+    pub fn progress(&self) -> f32 {
+        self.pass.progress()
     }
 
     /// Renders what is left of pass 1 and starts pass 2: `Silent` when no frame the stream would hand out is audible.
@@ -356,6 +358,11 @@ impl Stream {
         }
         self.handed = self.out[0].len().min(BLOCK);
         Some([&self.out[0][..self.handed], &self.out[1][..self.handed]])
+    }
+
+    /// How far pass 2 is, 0 to 1 (the busy screen's bar).
+    pub fn progress(&self) -> f32 {
+        self.pass.progress()
     }
 
     /// Every frame is handed out.
@@ -440,6 +447,14 @@ impl Pass {
 
     fn ended(&self) -> bool {
         self.done >= self.end
+    }
+
+    /// How far it is, 0 to 1.
+    fn progress(&self) -> f32 {
+        match self.end {
+            0 => 1.0,
+            end => (self.done as f64 / end as f64).clamp(0.0, 1.0) as f32,
+        }
     }
 }
 

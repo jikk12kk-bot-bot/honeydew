@@ -444,9 +444,9 @@ const Y0: f32 = 52.0;
 
 #[test]
 fn the_row_pitch_is_a_zoom_clamped_to_2_to_100_24_u() {
-    assert_eq!(clamp_pitch(1.0), 2.0);
+    assert_eq!(clamp_pitch(0.5), 0.75);
     assert_eq!(clamp_pitch(3.0), 3.0);
-    assert_eq!(clamp_pitch(5.0), 100.0 / 24.0);
+    assert_eq!(clamp_pitch(15.0), 12.0);
     assert_eq!(
         RowView::default(),
         RowView {
@@ -467,10 +467,10 @@ fn the_row_pitch_is_a_zoom_clamped_to_2_to_100_24_u() {
         }
     );
     rig.pinch(top, 10.0);
-    assert_eq!(rig.row_view().pitch, 100.0 / 24.0);
-    rig.pinch(top, 0.4);
-    assert_eq!(rig.row_view().pitch, 2.0);
-    assert_eq!(rig.layout().pitch, 64.0);
+    assert_eq!(rig.row_view().pitch, 12.0);
+    rig.pinch(top, 0.01);
+    assert_eq!(rig.row_view().pitch, 0.75);
+    assert_eq!(rig.layout().pitch, 24.0);
 }
 
 #[test]
@@ -4070,14 +4070,14 @@ fn the_playlist_length_follows_l_until_the_clip_is_resized() {
 
 #[test]
 fn the_time_zoom_keeps_a_beat_between_3_03_u_and_10_u_at_d_4() {
-    // [(0.1/U)·4/d, (0.33/U)·4/d] beats per px.
+    // [(0.025/U)·4/d, (1.0/U)·4/d] beats per px.
     let u = 32.0;
     let w = |k| drum_grid::edit::beat_w(u, 4, step_k(k));
-    assert_eq!(w(0.01), 10.0 * u);
-    assert!((w(1.0) - u / 0.33).abs() < 1e-4);
+    assert_eq!(w(0.01), 40.0 * u);
+    assert!((w(2.0) - u).abs() < 1e-4);
     assert_eq!(
         drum_grid::edit::beat_w(u, 8, step_k(0.01)),
-        20.0 * u,
+        80.0 * u,
         "d = 8: steps keep their width"
     );
     // The wheel over the ruler zooms the time within them, the beat under the pointer kept.
@@ -4086,16 +4086,16 @@ fn the_time_zoom_keeps_a_beat_between_3_03_u_and_10_u_at_d_4() {
     rig.wheel(ruler, vec2(0.0, 300.0));
     // zoom ← zoom·(1 − 0.001·300): k × 0.7.
     let k = rig.clip_view().k;
-    assert!((k - 0.33 * 0.7).abs() < 1e-5, "{k}");
+    assert!((k - (1.0 / 3.0) * 0.7).abs() < 1e-5, "{k}");
     for _ in 0..10 {
         rig.wheel(ruler, vec2(0.0, 600.0));
     }
-    assert_eq!(rig.clip_view().k, 0.1);
-    assert!((rig.layout().step_w - 10.0 * u / 4.0).abs() < 1e-4);
+    assert_eq!(rig.clip_view().k, 0.025);
+    assert!((rig.layout().step_w - 40.0 * u / 4.0).abs() < 1e-4);
     for _ in 0..10 {
         rig.wheel(ruler, vec2(0.0, -600.0));
     }
-    assert_eq!(rig.clip_view().k, 0.33);
+    assert_eq!(rig.clip_view().k, 1.0);
 }
 
 #[test]

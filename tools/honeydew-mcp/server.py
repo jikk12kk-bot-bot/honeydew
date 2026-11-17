@@ -113,10 +113,101 @@ TOOLS = [
             }, "required": ["tracks"], "additionalProperties": False
         },
     },
+    {
+        "name": "play",
+        "description": "Start Honeydew's playback from the current song position (as the Play button does).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False
+        }
+    },
+    {
+        "name": "stop",
+        "description": "Stop Honeydew's playback (as the Stop button does); the position stays where it is.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False
+        }
+    },
+    {
+        "name": "seek",
+        "description": "Move the song position to a zero-based bar (fractions allowed: 1.5 is half way through the second bar). Playback continues from there if it is playing.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "bar": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 4096
+                }
+            },
+            "required": [
+                "bar"
+            ],
+            "additionalProperties": False
+        }
+    },
+    {
+        "name": "get_mixer",
+        "description": "Read the mixer: each channel's ID (0 is the master), name, level and pan (normalized 0-1, with their display text), mute and solo.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False
+        }
+    },
+    {
+        "name": "set_mixer",
+        "description": "Set 1-32 mixer changes: per channel ID (0 is the master), any of level (0-1, the default 0.8531 is 0 dB), pan (0-1, 0.5 centred), mute and solo. All changes validate before applying. Not individually undoable, as mixer moves are not.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "changes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "channel_id": {
+                                "type": "integer"
+                            },
+                            "level": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1
+                            },
+                            "pan": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1
+                            },
+                            "mute": {
+                                "type": "boolean"
+                            },
+                            "solo": {
+                                "type": "boolean"
+                            }
+                        },
+                        "required": [
+                            "channel_id"
+                        ],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            "required": [
+                "changes"
+            ],
+            "additionalProperties": False
+        }
+    },
 ]
 
 
-def honeydew(action, payload=None, channel_id=None):
+def honeydew(action, payload=None, channel_id=None, extra=None):
     token = load_token()
     if len(token) < 24:
         raise RuntimeError("Honeydew MCP token file is missing or invalid; generate a token in Honeydew Settings")
@@ -126,6 +217,8 @@ def honeydew(action, payload=None, channel_id=None):
         request["arrangement" if action == "arrange" else "edit"] = payload
     if channel_id is not None:
         request["channel_id"] = channel_id
+    if extra:
+        request.update(extra)
     with socket.create_connection(("127.0.0.1", port), timeout=4) as conn:
         conn.settimeout(4)
         conn.sendall(json.dumps(request, separators=(",", ":")).encode())
@@ -147,7 +240,7 @@ def handle(message):
         return {"protocolVersion": message.get("params", {}).get("protocolVersion", "2025-03-26"),
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "honeydew", "version": "0.1.0"},
-                "instructions": "Use get_song before edits. Reuse existing configured VST channels by ID. apply_arrangement changes the open song and is one undo step. For built-in synth sound design, use get_instrument_params before set_instrument_params; these knob changes are not individually undoable. Do not claim to have auditioned the result; ask the user to listen and give feedback."}
+                "instructions": "Use get_song before edits. Reuse existing configured VST channels by ID. apply_arrangement changes the open song and is one undo step. For built-in synth sound design, use get_instrument_params before set_instrument_params; these knob changes are not individually undoable. play, stop and seek drive the transport; get_mixer and set_mixer read and set the channels' level, pan, mute and solo. Do not claim to have auditioned the result; ask the user to listen and give feedback."}
     if method == "ping":
         return {}
     if method == "tools/list":
@@ -159,12 +252,18 @@ def handle(message):
         action = {"get_song": "song", "list_instruments": "instruments",
                   "get_instrument_params": "instrument_params",
                   "set_instrument_params": "set_instrument_params",
-                  "apply_arrangement": "arrange"}.get(name)
+                  "apply_arrangement": "arrange",
+                  "play": "play", "stop": "stop", "seek": "seek",
+                  "get_mixer": "mixer", "set_mixer": "set_mixer"}.get(name)
         if action is None:
             return {"content": [{"type": "text", "text": f"Unknown tool: {name}"}], "isError": True}
         try:
+            extra = {"seek": {"bar": args.get("bar")},
+                     "set_mixer": {"changes": args.get("changes")}}.get(action)
+            kwargs = {"extra": extra} if extra else {}
             response = honeydew(action, args if action in ("arrange", "set_instrument_params") else None,
-                                channel_id=args.get("channel_id") if action == "instrument_params" else None)
+                                channel_id=args.get("channel_id") if action == "instrument_params" else None,
+                                **kwargs)
             error = response.get("error")
             return {"content": [{"type": "text", "text": json.dumps(response.get("result") if not error else {"error": error})}],
                     "isError": bool(error)}

@@ -56,6 +56,9 @@ pub struct OutputSnapshot {
     /// The commands the audio thread has taken from the queue so far: those up to [`AudioOutput::sent`]'s count then
     /// have reached the renderer.
     pub taken: u64,
+    /// The transport tick at the frame heard now, on the output clock as the meters ([`AudioOutput::snapshot_at`]):
+    /// the drawn playhead's. Behind [`Self::transport_tick`] by the output's latency (most with Bluetooth).
+    pub heard_tick: u64,
 }
 
 /// Why a latency calibration failed.
@@ -239,9 +242,12 @@ enum CallbackCommand<R> {
     Replace(Box<R>, Arc<MeterBank>),
 }
 
-/// A callback's visual frames each meter keeps: a callback of up to `SLOTS / 2` sub-blocks plays back whole with the
-/// one before it.
-const SLOTS: usize = 16;
+/// The visual frames each meter keeps (and the transport, [`OutputSnapshot::heard_tick`]): 680 ms at 48 kHz, for the
+/// output's latency (a Bluetooth headset's 200 ms or more, #92) and a callback beside it.
+const SLOTS: usize = 64;
+
+/// How fast the output clock may run ahead of the latest callback's: 1000 ppm, a device clock running fast.
+const DRIFT: f64 = 1e-3;
 
 /// One sub-block's visuals for a meter ([`MeterCell::frames`]), under a seqlock: one writer, the audio thread, which
 /// never waits.
@@ -250,6 +256,8 @@ struct Visual {
     version: AtomicU32,
     /// The stream frame its sub-block ended at; 0 before the first write.
     end: AtomicU64,
+    /// The transport tick its sub-block ended at.
+    tick: AtomicU64,
     /// Peak left, peak right, gain reduction and input peak over the sub-block, as f32 bits.
     meter: [AtomicU32; 4],
     /// The analysis as the sub-block left it, as f32 bits.
@@ -261,18 +269,20 @@ impl Visual {
         Self {
             version: AtomicU32::new(0),
             end: AtomicU64::new(0),
+            tick: AtomicU64::new(0),
             meter: Default::default(),
             analysis: (0..analysis).map(|_| AtomicU32::new(0)).collect(),
         }
     }
 
     /// The audio thread's write. Extra analysis values are dropped.
-    fn write(&self, end: u64, meter: MeterSnapshot, analysis: &[f32]) {
+    fn write(&self, end: u64, tick: u64, meter: MeterSnapshot, analysis: &[f32]) {
         let version = self.version.load(Ordering::Relaxed);
         self.version
             .store(version.wrapping_add(1), Ordering::Relaxed);
         fence(Ordering::Release);
         self.end.store(end, Ordering::Relaxed);
+        self.tick.store(tick, Ordering::Relaxed);
         let values = [
             meter.peak_left,
             meter.peak_right,
@@ -332,19 +342,18 @@ impl Visual {
     }
 }
 
-/// The level meters' release (#41), in stream frames: a peak falls ×0.95 per this many, the Leveller's ballistics
-/// (×0.95 per audio buffer, at the 1024-frame block its panel takes). 20.9 dB/s at 48 kHz, 19.2 at
-/// 44.1 kHz, whatever the buffer size and the UI's frame rate.
-const RELEASE_FRAMES: f32 = 1024.0;
+/// The level meters' release (#41), in dB a second, whatever the sample rate, the buffer size and the UI's frame rate.
+/// Honeydew change (#135): twice the earlier 20.9 dB/s at 48 kHz (19.2 at 44.1 kHz), so a meter shows the level sooner.
+const RELEASE_DB_PER_S: f32 = 40.0;
 
 /// A released level under −96 dB, the floor of the deepest meter scale (the Compressor's), is silence: a meter comes
 /// to rest.
 const RELEASE_FLOOR: f32 = 1.5849e-5;
 
-/// `m` `frames` stream frames on: both peaks and the input peak fallen at the release ([`RELEASE_FRAMES`]), 0 under
-/// [`RELEASE_FLOOR`], and the gain reduction as it was.
-fn released(m: MeterSnapshot, frames: u64) -> MeterSnapshot {
-    let k = 0.95f32.powf(frames as f32 / RELEASE_FRAMES);
+/// `m` `frames` stream frames on at `rate` Hz: both peaks and the input peak fallen at the release
+/// ([`RELEASE_DB_PER_S`]), 0 under [`RELEASE_FLOOR`], and the gain reduction as it was.
+fn released(m: MeterSnapshot, frames: u64, rate: u32) -> MeterSnapshot {
+    let k = 10f32.powf(-RELEASE_DB_PER_S / 20.0 * frames as f32 / rate.max(1) as f32);
     let fall = |peak: f32| match peak.abs() * k {
         p if p > RELEASE_FLOOR => p,
         _ => 0.0,
@@ -442,7 +451,7 @@ impl MeterBank {
     /// The audio thread's write of a sub-block's visuals, ending at stream frame `end`, into `slot`.
     fn publish<R: AudioRenderer>(&self, renderer: &R, slot: usize, end: u64) {
         for (index, cell) in self.0.iter().enumerate() {
-            cell.frames[slot].write(end, renderer.meter(index), renderer.analysis(index));
+            cell.frames[slot].write(end, 0, renderer.meter(index), renderer.analysis(index));
         }
     }
 
@@ -480,8 +489,8 @@ impl MeterBank {
     /// `u64::MAX`: as last published), as of the last sub-block that ended by then: every meter's levels the loudest
     /// peak so far, each fallen at the release ([`released`]) since its sub-block ended (item 18: a peak between two
     /// reads is not lost), and its gain reduction the largest since the last read, or the last read's with none; and
-    /// each analysis as that sub-block left it.
-    fn take(&self, upto: u64) -> Vec<ModuleMeter> {
+    /// each analysis as that sub-block left it. The stream runs at `rate` Hz.
+    fn take(&self, upto: u64, rate: u32) -> Vec<ModuleMeter> {
         let mut reader = self.reader();
         (self.0.iter().zip(reader.iter_mut()))
             .map(|(cell, (seen, last))| {
@@ -494,16 +503,18 @@ impl MeterBank {
                 let newest = ends().filter(|&(end, _)| end <= upto).max();
                 let now = newest.map_or(*seen, |(end, _)| end.max(*seen));
                 let fresh = (read.iter().flatten()).filter(|(end, _)| *seen < *end && *end <= upto);
-                if let Some(peaks) = fresh.map(|&(end, m)| released(m, now - end)).reduce(louder) {
+                if let Some(peaks) =
+                    (fresh.map(|&(end, m)| released(m, now - end, rate))).reduce(louder)
+                {
                     let held = MeterSnapshot {
                         gain_reduction_db: 0.0,
-                        ..released(*last, now - *seen)
+                        ..released(*last, now - *seen, rate)
                     };
                     *last = louder(peaks, held);
                 }
                 *seen = now;
-                // ponytail: a callback longer than the ring shows its oldest frame until the clock reaches it; widen
-                // the ring if buffers over `SLOTS / 2` sub-blocks ever matter.
+                // ponytail: a callback longer than the ring beside the latency shows its oldest frame until the clock
+                // reaches it; widen the ring if buffers over the latency's room in `SLOTS` ever matter.
                 let analysis = (newest.or(oldest))
                     .and_then(|(_, slot)| cell.frames[slot].read(Visual::analysis))
                     .map_or_else(|| cell.rest.to_vec(), |(_, analysis)| analysis);
@@ -528,12 +539,14 @@ struct Shared {
     ping: AtomicU64,
     /// [`AudioRenderer::set_buffer_frames`]: the first callback's frames, 0 before it.
     buffer_frames: AtomicU32,
-    /// The output clock, once a callback has set it: when stream frame 0 would have started at the last callback's
-    /// pace, ns since [`clock`]'s epoch ([`AudioOutput::snapshot_at`]).
+    /// The output clock, once a callback has set it: when stream frame 0 is heard at the callbacks' pace, ns since
+    /// [`clock`]'s epoch ([`AudioOutput::snapshot_at`], [`CallbackState::callback`]).
     clocked: AtomicBool,
     origin: AtomicI64,
     /// The commands the audio thread has taken from the queue ([`OutputSnapshot::taken`]).
     taken: AtomicU64,
+    /// Each sub-block's transport tick, as the meters' visual frames ([`OutputSnapshot::heard_tick`]).
+    ticks: Box<[Visual]>,
 }
 
 /// Now, ns since the first call: the output clock's time base. `None` on the web, which has no clock to read here
@@ -575,6 +588,17 @@ fn unpack(word: u64) -> Option<PingReport> {
 }
 
 impl Shared {
+    /// A stream's error report, on the thread cpal reports it on (the audio thread for some): an xrun counts as an
+    /// underrun, and one that stops the stream fails it ([`stops`]), which the app then reopens. Atomics only.
+    fn report(&self, error: &cpal::Error) {
+        if error.kind() == cpal::ErrorKind::Xrun {
+            self.underruns.fetch_add(1, Ordering::Release);
+        }
+        if stops(error) {
+            self.failed.store(true, Ordering::Release);
+        }
+    }
+
     /// The renderer's count-in and latency measurement after a render call.
     fn publish<R: AudioRenderer>(&self, renderer: &R) {
         self.counting_in
@@ -595,10 +619,10 @@ impl Shared {
 #[derive(Debug)]
 pub enum StartError<E> {
     NoDevice,
-    Config(cpal::DefaultStreamConfigError),
+    Config(cpal::Error),
     Renderer(E),
-    Build(cpal::BuildStreamError),
-    Play(cpal::PlayStreamError),
+    Build(cpal::Error),
+    Play(cpal::Error),
     UnsupportedSampleFormat,
 }
 
@@ -616,6 +640,9 @@ pub struct AudioOutput<R: AudioRenderer> {
     buffer_mode: BufferMode,
     /// The commands queued so far ([`OutputSnapshot::taken`]).
     sent: u64,
+    /// The stream frame the last snapshot showed on the output clock: a clock that moves later (a callback later than
+    /// any before it) holds the visuals there, never back.
+    heard: u64,
 }
 
 impl<R: AudioRenderer> AudioOutput<R> {
@@ -652,9 +679,12 @@ impl<R: AudioRenderer> AudioOutput<R> {
         Self::start_with_mode_at(mode, 0, make_renderer)
     }
 
-    /// Starts the output with an explicit buffer profile, requesting `rate` as the stream's sample rate when the
-    /// device supports it (0: the device's default). The renderer is built at the rate the stream actually runs,
-    /// so a renderer always matches its stream.
+    /// [`Self::start_with_mode`] at `rate` Hz (PR #87: a project's sample rate) where the device takes it in its
+    /// default format and channel count; else, and for 0, at the device's default rate. The renderer is built at the
+    /// rate the stream runs, so a fallback shows as [`Self::sample_rate`] differing from `rate`.
+    ///
+    /// 0 is the default rate as cpal 0.16 chose it: 44.1 kHz where the device takes it on ALSA, AAudio and the web,
+    /// where cpal 0.18 prefers 48, so a song at the output's own rate plays and renders at the rate it did.
     pub fn start_with_mode_at<F, E>(
         mode: BufferMode,
         rate: u32,
@@ -663,70 +693,76 @@ impl<R: AudioRenderer> AudioOutput<R> {
     where
         F: FnOnce(u32) -> Result<R, E>,
     {
+        let rate = match rate {
+            0 if cfg!(any(
+                target_os = "linux",
+                target_os = "freebsd",
+                target_os = "android",
+                target_arch = "wasm32"
+            )) =>
+            {
+                44_100
+            }
+            rate => rate,
+        };
         let device = cpal::default_host()
             .default_output_device()
             .ok_or(StartError::NoDevice)?;
-        let supported = device.default_output_config().map_err(StartError::Config)?;
-        let default_rate = supported.sample_rate().0;
-        let sample_rate = if rate > 0
-            && device
-                .supported_output_configs()
-                .ok()
-                .into_iter()
-                .flatten()
-                .any(|range| {
-                    range.channels() == supported.channels()
-                        && range.sample_format() == supported.sample_format()
-                        && range.min_sample_rate().0 <= rate
-                        && rate <= range.max_sample_rate().0
-                }) {
-            rate
-        } else {
-            default_rate
+        let default = device.default_output_config().map_err(StartError::Config)?;
+        let takes = |r: &cpal::SupportedStreamConfigRange| {
+            r.channels() == default.channels()
+                && r.sample_format() == default.sample_format()
+                && (r.min_sample_rate()..=r.max_sample_rate()).contains(&rate)
         };
+        let asked = (rate > 0 && rate != default.sample_rate())
+            .then(|| device.supported_output_configs().ok())
+            .flatten()
+            .and_then(|mut ranges| ranges.find(takes));
+        let supported = match asked {
+            Some(range) => range.with_sample_rate(rate),
+            None => default,
+        };
+        let sample_rate = supported.sample_rate();
         let channels = usize::from(supported.channels());
         let renderer = make_renderer(sample_rate).map_err(StartError::Renderer)?;
         let (mut output, state) = Self::unstarted(renderer, sample_rate);
         output.buffer_mode = mode;
         let error_shared = output.shared.clone();
-        let error = move |_| {
-            error_shared.failed.store(true, Ordering::Release);
-        };
-        let mut config = output_config(&device, &supported, mode);
-        config.sample_rate = cpal::SampleRate(sample_rate);
+        let error = move |error: cpal::Error| error_shared.report(&error);
+        let config = output_config(&device, &supported, mode);
         let stream = match supported.sample_format() {
             cpal::SampleFormat::I8 => {
-                build_stream::<i8, _, _>(&device, &config, channels, state, error)
+                build_stream::<i8, _, _>(&device, config, channels, state, error)
             }
             cpal::SampleFormat::I16 => {
-                build_stream::<i16, _, _>(&device, &config, channels, state, error)
+                build_stream::<i16, _, _>(&device, config, channels, state, error)
             }
             cpal::SampleFormat::I24 => {
-                build_stream::<cpal::I24, _, _>(&device, &config, channels, state, error)
+                build_stream::<cpal::I24, _, _>(&device, config, channels, state, error)
             }
             cpal::SampleFormat::I32 => {
-                build_stream::<i32, _, _>(&device, &config, channels, state, error)
+                build_stream::<i32, _, _>(&device, config, channels, state, error)
             }
             cpal::SampleFormat::I64 => {
-                build_stream::<i64, _, _>(&device, &config, channels, state, error)
+                build_stream::<i64, _, _>(&device, config, channels, state, error)
             }
             cpal::SampleFormat::U8 => {
-                build_stream::<u8, _, _>(&device, &config, channels, state, error)
+                build_stream::<u8, _, _>(&device, config, channels, state, error)
             }
             cpal::SampleFormat::U16 => {
-                build_stream::<u16, _, _>(&device, &config, channels, state, error)
+                build_stream::<u16, _, _>(&device, config, channels, state, error)
             }
             cpal::SampleFormat::U32 => {
-                build_stream::<u32, _, _>(&device, &config, channels, state, error)
+                build_stream::<u32, _, _>(&device, config, channels, state, error)
             }
             cpal::SampleFormat::U64 => {
-                build_stream::<u64, _, _>(&device, &config, channels, state, error)
+                build_stream::<u64, _, _>(&device, config, channels, state, error)
             }
             cpal::SampleFormat::F32 => {
-                build_stream::<f32, _, _>(&device, &config, channels, state, error)
+                build_stream::<f32, _, _>(&device, config, channels, state, error)
             }
             cpal::SampleFormat::F64 => {
-                build_stream::<f64, _, _>(&device, &config, channels, state, error)
+                build_stream::<f64, _, _>(&device, config, channels, state, error)
             }
             _ => return Err(StartError::UnsupportedSampleFormat),
         }
@@ -743,6 +779,7 @@ impl<R: AudioRenderer> AudioOutput<R> {
         let meters = Arc::new(MeterBank::new(&renderer));
         let shared = Arc::new(Shared {
             tick: AtomicU64::new(renderer.transport_tick()),
+            ticks: (0..SLOTS).map(|_| Visual::new(0)).collect(),
             ..Shared::default()
         });
         let (sender, receiver) = bounded(1024);
@@ -757,7 +794,9 @@ impl<R: AudioRenderer> AudioOutput<R> {
             taken: 0,
             frames: 0,
             visuals: 0,
+            clock: None,
             load: 0.0,
+            playing: false,
         };
         let output = Self {
             stream: None,
@@ -770,6 +809,7 @@ impl<R: AudioRenderer> AudioOutput<R> {
             transport_playing: false,
             buffer_mode: BufferMode::Native,
             sent: 0,
+            heard: 0,
         };
         (output, state)
     }
@@ -824,7 +864,7 @@ impl<R: AudioRenderer> AudioOutput<R> {
         self.reopen_with_mode_at(mode, 0, make_renderer)
     }
 
-    /// [`Self::reopen_with_mode`], requesting `rate` as the new stream's sample rate when supported (0: default).
+    /// [`Self::reopen_with_mode`] at `rate` Hz, as [`Self::start_with_mode_at`] takes it (PR #87).
     pub fn reopen_with_mode_at<F, E>(
         &mut self,
         mode: BufferMode,
@@ -915,16 +955,20 @@ impl<R: AudioRenderer> AudioOutput<R> {
         self.snapshot_at(clock())
     }
 
-    /// [`Self::snapshot`] at `now`, ns on [`clock`]. The meters and analyses play back on the output clock, one buffer
-    /// late: a callback publishes its sub-blocks' visuals at once, and they show as its frames' time goes by, from its
-    /// start, as the audio does (each sub-block once the clock has passed its end). Without a clock (`now` or the
-    /// callbacks' `None`), as last published. The transport tick and the rest are always as last published.
+    /// [`Self::snapshot`] at `now`, ns on [`clock`]. The meters, analyses and [`OutputSnapshot::heard_tick`] play back
+    /// on the output clock, as the audio is heard: a callback publishes its sub-blocks' visuals at once, and they show
+    /// as its frames' time goes by (each sub-block once the clock has passed its end), from when its first frame is
+    /// heard (the callbacks' clock, [`CallbackState::callback`]). The frame shown never goes back. Without a clock
+    /// (`now` or the callbacks' `None`), as last published. The transport tick and the rest are always as last
+    /// published.
     pub fn snapshot_at(&mut self, now: Option<i64>) -> OutputSnapshot {
         let rate = f64::from(self.sample_rate) / 1e9;
         let upto = match now {
             Some(now) if self.shared.clocked.load(Ordering::Acquire) => {
-                let since = now - self.shared.origin.load(Ordering::Acquire);
-                (since.max(0) as f64 * rate).round() as u64
+                let origin = self.shared.origin.load(Ordering::Acquire);
+                let upto = ((now - origin).max(0) as f64 * rate).round() as u64;
+                self.heard = self.heard.max(upto);
+                self.heard
             }
             _ => u64::MAX,
         };
@@ -935,12 +979,21 @@ impl<R: AudioRenderer> AudioOutput<R> {
         let sounding = self.replaced.as_ref().unwrap_or(&self.meters).sounding();
         // Before the tick ([`CallbackState::render`]).
         let taken = self.shared.taken.load(Ordering::Acquire);
+        let transport_tick = self.shared.tick.load(Ordering::Acquire);
+        let ticks: Vec<_> = (self.shared.ticks.iter())
+            .filter_map(|v| v.read(|v| v.tick.load(Ordering::Relaxed)))
+            .collect();
+        // The sub-block heard last, else the oldest kept (as the meters).
+        let heard = ticks.iter().filter(|(end, _)| *end <= upto).max();
         OutputSnapshot {
-            transport_tick: self.shared.tick.load(Ordering::Acquire),
+            transport_tick,
+            heard_tick: heard
+                .or(ticks.iter().min())
+                .map_or(transport_tick, |&(_, t)| t),
             cpu_load: f32::from_bits(self.shared.cpu.load(Ordering::Acquire)),
             underruns: self.shared.underruns.load(Ordering::Acquire),
             stream_failed: self.shared.failed.load(Ordering::Acquire),
-            module_meters: self.meters.take(upto),
+            module_meters: self.meters.take(upto, self.sample_rate),
             modulated: (self.meters.3.iter())
                 .map(|(m, cell)| Modulated {
                     value: f32::from_bits(cell.load(Ordering::Acquire)),
@@ -957,14 +1010,17 @@ impl<R: AudioRenderer> AudioOutput<R> {
 
 /// Keeps the device's default format, rate and channel count, changing only the buffer size when the device exposes a
 /// supported range for that exact format. `Unknown` deliberately keeps `Default`: some backends cannot validate a
-/// requested fixed size until stream creation.
+/// requested fixed size until stream creation. Android's AAudio says `Unknown` (its burst is known once a stream is
+/// open) and fits a fixed size to the device itself: there a [`BufferMode::Fixed`] size goes as asked.
 fn output_config(
     device: &cpal::Device,
     default: &SupportedStreamConfig,
     mode: BufferMode,
 ) -> StreamConfig {
     let mut config = default.config();
-    if mode == BufferMode::Native {
+    // iOS keeps its audio session's buffer (`ios::start`): cpal's iOS host sets the session's own for a fixed size, and
+    // it would stay after a later stream at the default.
+    if mode == BufferMode::Native || cfg!(target_os = "ios") {
         return config;
     }
     let Some((min, max)) = device
@@ -978,13 +1034,15 @@ fn output_config(
                 && range.min_sample_rate() <= default.sample_rate()
                 && default.sample_rate() <= range.max_sample_rate()
         })
-        // cpal's iOS host says `0..=0` (no fixed size: the audio session's buffer applies) and rejects a fixed one.
         .filter_map(|range| match *range.buffer_size() {
-            SupportedBufferSize::Range { min, max } if max > 0 => Some((min, max)),
-            _ => None,
+            SupportedBufferSize::Range { min, max } => Some((min, max)),
+            SupportedBufferSize::Unknown => None,
         })
         .min_by_key(|(min, _)| *min)
     else {
+        if let (true, BufferMode::Fixed(frames)) = (cfg!(target_os = "android"), mode) {
+            config.buffer_size = BufferSize::Fixed(frames);
+        }
         return config;
     };
     let frames = match mode {
@@ -996,6 +1054,19 @@ fn output_config(
     };
     config.buffer_size = BufferSize::Fixed(frames);
     config
+}
+
+/// Whether a stream's error stops it. Since cpal 0.18 an xrun, a refused low-latency mode or real-time priority, and a
+/// default device's stream following a new default come as errors too, and the stream plays on. On iOS so does a route
+/// change cpal calls invalidating: the session's own category changes (the input's open and close) make them, and the
+/// app reopens for the routes that matter itself (`ios::take_reopen`), as with cpal 0.16, which reported none.
+pub(crate) fn stops(error: &cpal::Error) -> bool {
+    use cpal::ErrorKind::{DeviceChanged, RealtimeDenied, StreamInvalidated, Xrun};
+    match error.kind() {
+        Xrun | RealtimeDenied | DeviceChanged => false,
+        StreamInvalidated => cfg!(not(target_os = "ios")),
+        _ => true,
+    }
 }
 
 struct CallbackState<R: AudioRenderer> {
@@ -1011,9 +1082,14 @@ struct CallbackState<R: AudioRenderer> {
     frames: u64,
     /// The sub-blocks published so far: the next one's visuals go to slot `visuals % SLOTS`.
     visuals: usize,
+    /// The output clock's origin ([`Shared::origin`]) and the callback that last set it, ns on [`clock`].
+    clock: Option<(i64, i64)>,
     /// The load the snapshot reads, averaged (none on the web, which has no clock here).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     load: f32,
+    /// The last transport command was Play: the Displayer's sound plays on even through a block too short to move the
+    /// tick ([`crate::listen`]).
+    playing: bool,
 }
 
 /// A stream's callback with no device ([`AudioOutput::offline`]).
@@ -1040,10 +1116,16 @@ impl<R: AudioRenderer> OfflineCallback<R> {
 const LOAD_AVERAGE_S: f32 = 0.5;
 
 impl<R: AudioRenderer> CallbackState<R> {
-    /// One device callback of `frames` frames, started at `now` (ns on [`clock`]; `None` without one): rendered into
-    /// `scratch` a sub-block at a time ([`SUB_BLOCK`] frames of `channels`; `scratch` holds one), each handed to `out`
-    /// with its first frame. Every sub-block publishes its visuals; `now` sets the output clock they play back on. The
-    /// CPU load is the callback's time over its buffer's, averaged ([`LOAD_AVERAGE_S`]).
+    /// One device callback of `frames` frames, whose first frame is heard at `now` (ns on [`clock`]: the callback's
+    /// start and the latency the host reports; `None` without a clock): rendered into `scratch` a sub-block at a time
+    /// ([`SUB_BLOCK`] frames of `channels`; `scratch` holds one), each handed to `out` with its first frame. Every
+    /// sub-block publishes its visuals; `now` sets the output clock they play back on. The CPU load is the callback's
+    /// time over its buffer's, averaged ([`LOAD_AVERAGE_S`]).
+    ///
+    /// #95: the clock follows the callback latest for its frames, the one nearest its deadline. Callbacks that come in
+    /// bursts (a Bluetooth output's) run early by up to a burst and set it no earlier: the visuals then move on at the
+    /// audio's pace between bursts instead of jumping with each. It falls back only at [`DRIFT`], for a device clock
+    /// that runs fast.
     fn callback(
         &mut self,
         frames: usize,
@@ -1057,15 +1139,23 @@ impl<R: AudioRenderer> CallbackState<R> {
         let start = Instant::now();
         if let Some(now) = now {
             let ahead = self.frames as f64 * 1e9 / f64::from(sample_rate);
-            self.shared
-                .origin
-                .store(now - ahead as i64, Ordering::Release);
+            let mut origin = now - ahead as i64;
+            if let Some((last, at)) = self.clock {
+                origin = origin.max(last - ((now - at).max(0) as f64 * DRIFT) as i64);
+            }
+            self.clock = Some((origin, now));
+            self.shared.origin.store(origin, Ordering::Release);
             self.shared.clocked.store(true, Ordering::Release);
         }
         let mut at = 0;
         while at < frames {
             let length = (frames - at).min(SUB_BLOCK) * channels;
+            let before = self.renderer.transport_tick();
             self.render(&mut scratch[..length], channels);
+            // The Displayer's video sound, after the whole mix: heard, never rendered (`listen`).
+            let moving = self.renderer.transport_tick() != before
+                || (self.playing && !self.renderer.counting_in());
+            crate::listen::FEED.mix(&mut scratch[..length], channels, sample_rate, moving);
             out(at, &scratch[..length]);
             at += SUB_BLOCK;
         }
@@ -1077,9 +1167,10 @@ impl<R: AudioRenderer> CallbackState<R> {
             self.shared
                 .cpu
                 .store(self.load.to_bits(), Ordering::Release);
-            // ponytail: a callback slower than its buffer counts as the underrun it makes; the backends report no
-            // xruns of their own to count instead.
-            if load > 1.0 {
+            // ponytail: a callback slower than its buffer counts as the underrun it makes, on Windows only: WASAPI's
+            // output reports no xruns, while the other backends' reports count ([`Shared::report`]) and a slow
+            // callback's xrun would count twice. Count both everywhere if the reports ever miss some.
+            if load > 1.0 && cfg!(target_os = "windows") {
                 self.shared.underruns.fetch_add(1, Ordering::Release);
             }
         }
@@ -1101,7 +1192,10 @@ impl<R: AudioRenderer> CallbackState<R> {
         let frames = output.len() / channels.max(1);
         if frames > 0 {
             self.frames += frames as u64;
-            (self.meters).publish(&*self.renderer, self.visuals % SLOTS, self.frames);
+            let (slot, tick) = (self.visuals % SLOTS, self.renderer.transport_tick());
+            (self.meters).publish(&*self.renderer, slot, self.frames);
+            let rest = MeterSnapshot::default();
+            self.shared.ticks[slot].write(self.frames, tick, rest, &[]);
             self.visuals = self.visuals.wrapping_add(1);
         }
         self.meters.publish_sounding(&*self.renderer);
@@ -1132,8 +1226,14 @@ impl<R: AudioRenderer> CallbackState<R> {
                         index,
                         value,
                     } => self.renderer.set_param(channel, instance_id, index, value),
-                    AudioCommand::Play => self.renderer.play(),
-                    AudioCommand::Stop => self.renderer.stop(),
+                    AudioCommand::Play => {
+                        self.playing = true;
+                        self.renderer.play()
+                    }
+                    AudioCommand::Stop => {
+                        self.playing = false;
+                        self.renderer.stop()
+                    }
                     AudioCommand::Seek(tick) => self.renderer.seek(tick),
                     AudioCommand::NoteOn {
                         channel,
@@ -1184,21 +1284,21 @@ impl<R: AudioRenderer> CallbackState<R> {
 
 fn build_stream<T, R, E>(
     device: &cpal::Device,
-    config: &cpal::StreamConfig,
+    config: cpal::StreamConfig,
     channels: usize,
     mut state: CallbackState<R>,
     error: E,
-) -> Result<cpal::Stream, cpal::BuildStreamError>
+) -> Result<cpal::Stream, cpal::Error>
 where
     T: cpal::SizedSample + cpal::FromSample<f32> + 'static,
     R: AudioRenderer,
-    E: FnMut(cpal::StreamError) + Send + 'static,
+    E: FnMut(cpal::Error) + Send + 'static,
 {
-    let sample_rate = config.sample_rate.0;
+    let sample_rate = config.sample_rate;
     let mut scratch = vec![0.0_f32; SUB_BLOCK * channels];
     device.build_output_stream(
         config,
-        move |data: &mut [T], _| {
+        move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
             // The first callback's size is the stream's buffer size.
             let frames = data.len() / channels.max(1);
             let _ = (state.shared.buffer_frames).compare_exchange(
@@ -1216,7 +1316,13 @@ where
                     });
                 }
             };
-            state.callback(frames, channels, sample_rate, clock(), &mut scratch, out);
+            // When its first frame is heard: the latency the host reports, up to a second (#92: a Bluetooth headset's
+            // is in it; AAudio's both times are on CLOCK_MONOTONIC since cpal 0.18).
+            let stamp = info.timestamp();
+            let latency =
+                Some(stamp.playback.duration_since(stamp.callback)).filter(|l| l.as_secs() < 1);
+            let heard = clock().map(|now| now + latency.map_or(0, |l| l.as_nanos() as i64));
+            state.callback(frames, channels, sample_rate, heard, &mut scratch, out);
         },
         error,
         None,
@@ -1424,6 +1530,73 @@ mod tests {
         }
     }
 
+    /// #95: a Bluetooth output asks for its callbacks in bursts, now one, now several at once, at uneven times. The
+    /// visuals still move on at every frame of a 60 Hz UI, by about a frame's worth of audio and never back, and the
+    /// heard tick with them.
+    #[test]
+    fn callbacks_in_uneven_bursts_still_reach_the_ui_evenly() {
+        let (mut output, mut state) = output();
+        (state.renderer.stamp, state.renderer.playing) = (true, true);
+        let (block, rate) = (960_u64, 48_000.0);
+        let ns = |frames: u64| (frames as f64 / rate * 1e9) as i64;
+        let mut buffer = vec![0.0; 2 * block as usize];
+        // The device wakes after 1 to 5 blocks' time and asks for every block its buffer lacks: it holds 6.
+        let wakes = [3, 1, 5, 2, 4, 1, 1, 5, 3, 2];
+        let (mut due, mut wake, mut woke, mut last) = (0, 0, 0, 0.0);
+        for frame in 0..180 {
+            let clock = (frame as f64 * rate / 60.0) as u64;
+            while woke <= clock {
+                while due <= woke + 5 * block {
+                    state.run(&mut buffer, Some(ns(woke)));
+                    due += block;
+                }
+                woke += wakes[wake % wakes.len()] * block;
+                wake += 1;
+            }
+            let snapshot = output.snapshot_at(Some(ns(clock)));
+            let shown = snapshot.module_meters[0].analysis[0];
+            // Playing from 0, the tick counts the frames.
+            assert_eq!(snapshot.heard_tick as f32, shown, "UI frame {frame}");
+            if frame >= 30 {
+                let step = shown - last;
+                assert!(
+                    step > 0.0 && step <= 2.0 * SUB_BLOCK as f32,
+                    "UI frame {frame} at {clock}: shows {shown}, after {last}"
+                );
+            }
+            last = shown;
+        }
+    }
+
+    /// cpal 0.18 reports an xrun, a refused low-latency mode and a default output followed to a new device as errors:
+    /// the stream plays on, so none fails it; a device gone does.
+    #[test]
+    fn only_an_error_that_stops_the_stream_fails_it() {
+        use cpal::ErrorKind::{
+            BackendError, DeviceChanged, DeviceNotAvailable, RealtimeDenied, Xrun,
+        };
+        for kind in [Xrun, RealtimeDenied, DeviceChanged] {
+            assert!(!stops(&cpal::Error::new(kind)), "{kind:?}");
+        }
+        for kind in [DeviceNotAvailable, BackendError] {
+            assert!(stops(&cpal::Error::new(kind)), "{kind:?}");
+        }
+    }
+
+    /// The xruns cpal reports count as underruns (#123: the Performance counter shows them); they leave the stream
+    /// running. A device gone fails it.
+    #[test]
+    fn a_reported_xrun_counts_as_an_underrun_and_a_device_gone_fails_the_stream() {
+        let shared = Shared::default();
+        shared.report(&cpal::Error::new(cpal::ErrorKind::Xrun));
+        shared.report(&cpal::Error::new(cpal::ErrorKind::Xrun));
+        assert_eq!(shared.underruns.load(Ordering::Acquire), 2);
+        assert!(!shared.failed.load(Ordering::Acquire));
+        shared.report(&cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable));
+        assert!(shared.failed.load(Ordering::Acquire));
+        assert_eq!(shared.underruns.load(Ordering::Acquire), 2);
+    }
+
     /// Every render call first gives the renderer the stream's buffer size, as its first callback set it.
     #[test]
     fn each_render_gives_the_renderer_the_streams_buffer_size() {
@@ -1573,22 +1746,20 @@ mod tests {
                 .is_ok()
         );
         state.render(&mut output, 2);
-        let read = meters.take(u64::MAX);
+        let read = meters.take(u64::MAX, 48_000);
         assert_eq!(read.len(), 1);
         assert_eq!(read[0].key.instance_id, 2);
-        // The spike, a frame older than the read, has fallen a frame's release.
+        // The spike, a frame older than the read, has fallen a frame's release: 40 dB/s at 48 kHz.
         let held = read[0].value;
-        let fallen = |frames: f32| 0.9 * 0.95f32.powf(frames / 1024.0);
-        assert_eq!(
-            (held.peak_left, held.peak_right),
-            (fallen(1.0), fallen(1.0))
-        );
+        let fallen = |frames: f32| 0.9 * 10f32.powf(-2.0 * frames / 48_000.0);
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-6;
+        assert!(near(held.peak_left, fallen(1.0)) && near(held.peak_right, fallen(1.0)));
         assert!((held.gain_reduction_db - 10.8).abs() < 1e-5, "{held:?}");
         // The next read without a callback between reads it again; after the next callback the spike, still louder
         // than its 0.1, goes on falling at the release.
-        assert_eq!(meters.take(u64::MAX)[0].value, held);
+        assert_eq!(meters.take(u64::MAX, 48_000)[0].value, held);
         state.render(&mut output, 2);
-        let next = meters.take(u64::MAX)[0].value.peak_left;
+        let next = meters.take(u64::MAX, 48_000)[0].value.peak_left;
         assert!((next - fallen(2.0)).abs() < 1e-6, "{next}");
     }
 
@@ -1609,11 +1780,12 @@ mod tests {
                 .is_ok()
         );
         state.render(&mut output, 2);
-        let fallen = |frames: f32| 0.8 * 0.95f32.powf(frames / 1024.0);
-        assert_eq!(meters.take(u64::MAX)[0].value.input_peak, fallen(1.0));
-        assert_eq!(meters.take(u64::MAX)[0].value.input_peak, fallen(1.0));
+        let fallen = |frames: f32| 0.8 * 10f32.powf(-2.0 * frames / 48_000.0);
+        let first = meters.take(u64::MAX, 48_000)[0].value.input_peak;
+        assert!((first - fallen(1.0)).abs() < 1e-6, "{first}");
+        assert_eq!(meters.take(u64::MAX, 48_000)[0].value.input_peak, first);
         state.render(&mut output, 2);
-        let next = meters.take(u64::MAX)[0].value.input_peak;
+        let next = meters.take(u64::MAX, 48_000)[0].value.input_peak;
         assert!((next - fallen(2.0)).abs() < 1e-6, "{next}");
     }
 
@@ -1639,7 +1811,10 @@ mod tests {
         assert_eq!((seeded.peak_left, seeded.input_peak), (0.5, 1.0));
         state.render(&mut [0.0; 2], 2);
         let next = output.snapshot().module_meters[0].value.peak_left;
-        assert_eq!(next, 0.5 * 0.95f32.powf(1.0 / 1024.0));
+        assert!(
+            (next - 0.5 * 10f32.powf(-2.0 / 48_000.0)).abs() < 1e-6,
+            "{next}"
+        );
     }
 
     /// A steady tone's meters must not flicker. The UI takes one snapshot a frame at its own rate and
@@ -1672,28 +1847,35 @@ mod tests {
         }
     }
 
-    /// The level meters fall at one release whatever the buffer size and the UI's frame rate (#41): ×0.95 per 1024
-    /// frames from each peak's sub-block on. A full-scale burst over the first 2048 frames reads 0.95^(24064/1024),
-    /// −10.5 dB, at frame 26112, half a second after it ends.
+    /// The level meters fall at one release whatever the sample rate, the buffer size and the UI's frame rate (#41):
+    /// 40 dB/s from each peak's sub-block on (Honeydew change, #135: the earlier ×0.95 per 1024 frames was about 20).
+    /// A full-scale burst over the first 2048 frames reads −20.1 dB at frame 26112, half a second after it ends at
+    /// 48 kHz, and −21.8 dB at 44.1 kHz, 0.55 s after.
     #[test]
-    fn a_peak_falls_at_the_meter_release_whatever_the_buffer_and_frame_rate() {
-        let ns = |frames: u64| (frames as f64 / 48_000.0 * 1e9) as i64;
+    fn a_peak_falls_at_the_meter_release_whatever_the_rate_buffer_and_frame_rate() {
         let (burst, at) = (2048, 26_112);
-        let expected = 20.0 * 0.95f32.log10() * (at - burst) as f32 / 1024.0;
-        for (block, hz) in [(256, 60), (2048, 60), (256, 144), (2048, 24)] {
-            let (mut output, mut state) = output();
-            state.renderer.gain = 1.0;
+        let runs = [(256, 60), (2048, 60), (256, 144), (2048, 24)].map(|(b, hz)| (48_000, b, hz));
+        for (rate, block, hz) in runs
+            .into_iter()
+            .chain([(44_100, 256, 60), (44_100, 2048, 24)])
+        {
+            let ns = |frames: u64| (frames as f64 / f64::from(rate) * 1e9) as i64;
+            let expected = -40.0 * (at - burst) as f32 / rate as f32;
+            let (mut output, mut device) = AudioOutput::offline(renderer(), rate);
+            device.state.renderer.gain = 1.0;
             let mut buffer = vec![0.0; 2 * block as usize];
             let mut due = 0;
             // The UI's frames, then one at `at`; every callback due by each first, the burst's at full scale.
-            let frames = (0..).map(|k| k * 48_000 / hz).take_while(|&c| c < at);
+            let frames = (0..)
+                .map(|k| k * u64::from(rate) / hz)
+                .take_while(|&c| c < at);
             let mut shown = 0.0;
             for clock in frames.chain([at]) {
                 while due <= clock {
-                    state.run(&mut buffer, Some(ns(due)));
+                    device.run(&mut buffer, Some(ns(due)));
                     due += block;
                     if due >= burst {
-                        state.renderer.gain = 0.0;
+                        device.state.renderer.gain = 0.0;
                     }
                 }
                 shown = output.snapshot_at(Some(ns(clock))).module_meters[0]
@@ -1703,7 +1885,7 @@ mod tests {
             let db = 20.0 * shown.log10();
             assert!(
                 (db - expected).abs() < 0.01,
-                "{block}-frame blocks, {hz} Hz frames: {db} dB, not {expected}"
+                "{rate} Hz, {block}-frame blocks, {hz} Hz frames: {db} dB, not {expected}"
             );
         }
     }
@@ -1712,20 +1894,23 @@ mod tests {
     fn an_analysis_rests_until_the_first_render_then_reads_as_last_published() {
         let (mut state, _, meters) = callback();
         // Before any render: the renderer's own rest values.
-        assert_eq!(meters.take(u64::MAX)[0].analysis, [-60.0, 0.5, 7.0]);
+        assert_eq!(meters.take(u64::MAX, 48_000)[0].analysis, [-60.0, 0.5, 7.0]);
         let mut output = [0.0; 2];
         state.renderer.analysis = vec![-12.0, 0.25, 3.0];
         state.render(&mut output, 2);
         // Not taken by a read: the next one sees it too.
         for _ in 0..2 {
-            assert_eq!(meters.take(u64::MAX)[0].analysis, [-12.0, 0.25, 3.0]);
+            assert_eq!(
+                meters.take(u64::MAX, 48_000)[0].analysis,
+                [-12.0, 0.25, 3.0]
+            );
         }
         // Each publish is whole: the version is even again and moved by 2.
         assert_eq!(meters.0[0].frames[0].version.load(Ordering::Acquire), 2);
         // A renderer with more values than the slots it was sized for writes what fits.
         state.renderer.analysis = vec![1.0, 2.0, 3.0, 4.0];
         state.render(&mut output, 2);
-        assert_eq!(meters.take(u64::MAX)[0].analysis, [1.0, 2.0, 3.0]);
+        assert_eq!(meters.take(u64::MAX, 48_000)[0].analysis, [1.0, 2.0, 3.0]);
     }
 
     /// Each channel's sounding keys reach the snapshot as the last render left them; a read takes nothing.
@@ -1756,19 +1941,19 @@ mod tests {
             std::thread::spawn(move || {
                 for n in 0..2_000 {
                     let frame = &bank.0[0].frames[n % SLOTS];
-                    frame.write(n as u64 + 1, MeterSnapshot::default(), &[n as f32; 512]);
+                    frame.write(n as u64 + 1, 0, MeterSnapshot::default(), &[n as f32; 512]);
                     std::thread::sleep(std::time::Duration::from_micros(20));
                 }
             })
         };
         let mut reads = 0;
         while !writer.is_finished() || reads == 0 {
-            let read = bank.take(u64::MAX).remove(0).analysis;
+            let read = bank.take(u64::MAX, 48_000).remove(0).analysis;
             assert!(read.iter().all(|v| *v == read[0]), "torn at {}", read[0]);
             reads += 1;
         }
         writer.join().unwrap();
-        assert_eq!(bank.take(u64::MAX)[0].analysis, [1_999.0; 512]);
+        assert_eq!(bank.take(u64::MAX, 48_000)[0].analysis, [1_999.0; 512]);
     }
 
     #[test]
@@ -1777,7 +1962,10 @@ mod tests {
         let (retired_sender, retired) = bounded(8);
         let initial = renderer();
         let meters = Arc::new(MeterBank::new(&initial));
-        let shared = Arc::new(Shared::default());
+        let shared = Arc::new(Shared {
+            ticks: (0..SLOTS).map(|_| Visual::new(0)).collect(),
+            ..Shared::default()
+        });
         let mut state = CallbackState {
             renderer: Box::new(initial),
             meters: meters.clone(),
@@ -1788,7 +1976,9 @@ mod tests {
             taken: 0,
             frames: 0,
             visuals: 0,
+            clock: None,
             load: 0.0,
+            playing: false,
         };
         assert!(
             sender
@@ -1818,7 +2008,7 @@ mod tests {
         state.render(&mut output, 2);
         assert_eq!(output, [0.8; 16]);
         assert_eq!(shared.tick.load(Ordering::Acquire), 8);
-        assert_eq!(meters.take(u64::MAX)[0].value.peak_left, 0.8);
+        assert_eq!(meters.take(u64::MAX, 48_000)[0].value.peak_left, 0.8);
 
         assert!(
             sender

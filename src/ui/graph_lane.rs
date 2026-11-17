@@ -8,10 +8,10 @@
 //!
 //! - The tab sits with its bottom 2 px below the lane's top, or below the editor's bottom while the lane is closed. It
 //!   is clipped to the editor, so it never covers the transport bar, and its visible part takes the touches.
-//! - A sideways drag moves the tab along the editor, which is how it is kept off what it covers (the step sequencer's
+//! - PR #87: a sideways drag moves the tab along the editor, which is how it is kept off what it covers (the step sequencer's
 //!   row headers, the piano roll's keys); the offset is in U from where the editor opens it and the host keeps it
-//!   (`Settings::graph_tab_shift`, so it is remembered). The tab never leaves the editor's band, and a drag down or up
-//!   still sizes the lane.
+//!   (`Settings::graph_tab_shift`, so it is remembered). The tab never leaves the editor's band, nor goes under the
+//!   floating buttons on the screen's right edge (#114), and a drag down or up still sizes the lane.
 //! - The tab's touches win wherever it overlaps what lies under it (a row header cut off at the rows' bottom, whose
 //!   visible part may be a sliver). It holds because the editor interacts the tab last and the tab senses drags: egui
 //!   then gives it every press in its rect, even over a click-only widget thinner than its thin-target rule.
@@ -33,8 +33,8 @@
 use std::f64::consts::TAU;
 
 use eframe::egui::{
-    Color32, CornerRadius, Id, Mesh, Painter, Rangef, Rect, Sense, Stroke, StrokeKind, Ui, pos2,
-    vec2,
+    Color32, CornerRadius, Id, Mesh, Painter, Pos2, Rangef, Rect, Sense, Stroke, StrokeKind, Ui,
+    pos2, vec2,
 };
 
 use crate::icons::{IconId, draw_icon};
@@ -46,6 +46,7 @@ use crate::ui::anim;
 use crate::ui::audio_editor::{Wave, add_column, columns, pixel_columns, wave_rows};
 use crate::ui::automation::value::{Land, ValueSnap};
 use crate::ui::clips::{mix, sample, tint_stops};
+use crate::ui::main_screen::{CLEAR_U, CORNER_W};
 use crate::ui::piano_roll::notes::note;
 use crate::ui::widgets::{Bar, ItemList, item_list_index};
 use crate::ui::{UiCtx, gesture, primary_down_live};
@@ -231,6 +232,20 @@ pub fn v_centred(content: Rect, y: f32, m: &Metrics) -> f32 {
     0.5 + d.signum() * 0.5 * (d.abs() - dz) / (half - dz)
 }
 
+/// Honeydew change (GitHub #127): the x a drum graph lane's drag paints at, the pointer at `p`. It keeps to the
+/// touch-down's column (`lock`, the touch-down) until the finger is past the 0.5 U calm distance sideways and more
+/// across than up or down from it; from then on (`lock` cleared) it follows the finger, painting step by step as before.
+pub fn drum_paint_x(lock: &mut Option<Pos2>, p: Pos2, m: &Metrics) -> f32 {
+    if let Some(from) = *lock {
+        let d = p - from;
+        if d.x.abs() <= m.u(gesture::CALM_U) || d.x.abs() <= d.y.abs() {
+            return from.x;
+        }
+        *lock = None;
+    }
+    p.x
+}
+
 /// The note tint's stops for `content` (see the module doc), the bottom one pulled `pull` of the way toward the
 /// middle one.
 pub fn tint(colors: &ThemeColors, content: Rgba, pull: f32) -> [Rgba; 3] {
@@ -349,11 +364,11 @@ impl GraphLane {
 
     /// The pull-up tab of the lane [`Self::split_below`] places in the `editor` below its top margin (H, and the
     /// drag's measure), on the part below `y`; centred at `x`, where the editor opens it, plus the sideways offset
-    /// `shift` (in U, kept inside the editor and remembered by the host), its icon in the channel colour `ink`. A tap (released within 0.3 s) opens
-    /// the lane to f or closes it, animated; a drag that leaves the calm zone sideways moves the tab along the editor
-    /// and leaves the split (and the lane) as it was; a drag that leaves it down or up sets f = (editor bottom − finger
-    /// y)/H at once, clamped to 0…0.7, closing the lane below min(2.5 U/H, 0.5) and otherwise remembering it. Draw it
-    /// after the grid and the lane.
+    /// `shift` (in U, kept inside the editor and out of the floating buttons' column, and remembered by the host), its
+    /// icon in the channel colour `ink`. A tap (released within 0.3 s) opens the lane to f or closes it, animated; a
+    /// drag that leaves the calm zone sideways moves the tab along the editor and leaves the split (and the lane) as it
+    /// was; a drag that leaves it down or up sets f = (editor bottom − finger y)/H at once, clamped to 0…0.7, closing
+    /// the lane below min(2.5 U/H, 0.5) and otherwise remembering it. Draw it after the grid and the lane.
     pub fn tab_below(
         &mut self,
         ui: &mut Ui,
@@ -369,17 +384,20 @@ impl GraphLane {
         let (_, strip) = self.split_below(editor, y, m);
         let bottom = strip.map_or(area.bottom(), |s| s.top()) + TAB_DROP_PX * px;
         let half = m.u(TAB_W) / 2.0;
-        // How far a drag may take the tab: its half plus a hairline in from the editor's edges, in U from where the
-        // editor opens it. An editor narrower than the tab keeps the tab at its left edge.
+        // How far a drag may take the tab: its half plus a hairline in from the editor's edges, and clear of the
+        // floating buttons' column on the screen's right edge (the rack tab, the `↖`, #114), in U from where the editor
+        // opens it. An editor narrower than the tab keeps the tab at its left edge.
+        let column = ui.ctx().content_rect().right() - m.u(CORNER_W + CLEAR_U);
         let (lo, hi) = (
             (editor.left() + half + px - x) / m.u(1.0),
-            (editor.right() - half - px - x) / m.u(1.0),
+            (editor.right().min(column) - half - px - x) / m.u(1.0),
         );
         // `max` then `min` rather than `clamp`: a degenerate editor (no room) must not panic, and a NaN in it must not
-        // take the tab with it.
+        // take the tab with it. Only a drag writes the place: an editor that shows it clamped (another editor's home,
+        // a narrow window, a rotation) keeps it.
         let hi = hi.max(lo);
-        *shift = shift.max(lo).min(hi);
-        let x = x + m.u(*shift);
+        let shown = shift.max(lo).min(hi);
+        let x = x + m.u(shown);
         let tab = Rect::from_x_y_ranges(
             m.round_px(x - half)..=m.round_px(x + half),
             m.round_px(bottom - m.u(TAB_H))..=bottom,
@@ -400,7 +418,7 @@ impl GraphLane {
         }
         if response.drag_started() {
             self.drag = Some(TabDrag {
-                shift: *shift,
+                shift: shown,
                 moved: false,
                 sideways: false,
             });
@@ -409,7 +427,7 @@ impl GraphLane {
             let total = response.total_drag_delta().unwrap_or_default();
             let calm = m.u(gesture::CALM_U);
             let drag = self.drag.get_or_insert(TabDrag {
-                shift: *shift,
+                shift: shown,
                 moved: false,
                 sideways: false,
             });

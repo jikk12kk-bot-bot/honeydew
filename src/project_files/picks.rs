@@ -124,6 +124,10 @@ fn is(name: &Path, ext: &str) -> bool {
 /// its types). A preset is read (`read`) for the module it names ([`crate::flm::preset_fits`]); a file the module's
 /// loader takes ([`named_file`]) is not, nor a `.fst`, which names no module (only 3x Osc lists them).
 pub fn fits(name: &Path, type_id: Option<u16>, read: impl FnOnce() -> Option<Vec<u8>>) -> bool {
+    // A plugin preset names its plugin, which only its load checks ([`crate::plugins::presets::is_for`]).
+    if is(name, crate::plugins::presets::EXT) {
+        return true;
+    }
     match type_id {
         Some(t) if !named_file(name, t) && !is(name, FST_EXT) => {
             read().is_some_and(|b| crate::flm::preset_fits(&b, t))

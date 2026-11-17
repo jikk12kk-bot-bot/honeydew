@@ -1930,8 +1930,8 @@ fn one_finger_scrolls_the_rows_from_the_headers_and_both_ways_on_the_grid_and_tw
     let mut rig = Rig::new(notes_lane(&[drum(0, 0, 32.0)]));
     rig.song.channels[CH].lanes[0].clips[0].loop_len_beats = 64.0;
     let view = |rig: &Rig| *rig.view.views.values().next().unwrap();
-    // Rows 100/24 U tall (the wheel over the headers): the 4 pads and 1.5 rows of room outgrow the rows' area.
-    for _ in 0..4 {
+    // Rows 12 U tall (the wheel over the headers): the 4 pads and 1.5 rows of room outgrow the rows' area.
+    for _ in 0..10 {
         rig.frame(vec![
             egui::Event::PointerMoved(pos2(48.0, 100.0)),
             egui::Event::MouseWheel {
@@ -1942,7 +1942,7 @@ fn one_finger_scrolls_the_rows_from_the_headers_and_both_ways_on_the_grid_and_tw
         ]);
     }
     let v = view(&rig);
-    assert!((v.rows.pitch - 100.0 / 24.0).abs() < 1e-5, "{v:?}");
+    assert!((v.rows.pitch - 12.0).abs() < 1e-5, "{v:?}");
     // On the header column, 60 points up and 60 sideways: the rows follow, the time does not.
     rig.touch(Start, pos2(48.0, 300.0));
     rig.touch(Move, pos2(108.0, 240.0));

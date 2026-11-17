@@ -12,7 +12,7 @@ class McpTests(unittest.TestCase):
     def test_initialize_and_tools(self):
         initialized = server.handle({"method": "initialize", "params": {"protocolVersion": "2025-03-26"}})
         self.assertEqual(initialized["serverInfo"]["name"], "honeydew")
-        self.assertEqual(len(server.handle({"method": "tools/list"})["tools"]), 5)
+        self.assertEqual(len(server.handle({"method": "tools/list"})["tools"]), 10)
 
     def test_get_song_forwards_to_loopback_with_token(self):
         listener = socket.socket()

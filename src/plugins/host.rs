@@ -1015,6 +1015,102 @@ pub fn lemon_open(channel_id: i32, instance_id: i32) -> Option<u32> {
     })
 }
 
+/// The running plugin of module `instance_id` on the channel with id `channel_id`: its state now, for a `Save
+/// preset`. `None` while it is not running.
+pub fn live_state(channel_id: i32, instance_id: i32) -> Option<Vec<u8>> {
+    with(|host| {
+        let hosted = host.live.get(&(channel_id, instance_id))?;
+        let p = hosted.plugin.lock().ok()?;
+        p.save_state()
+    })
+}
+
+/// Loads Lemon preset `preset` ([`super::presets`]) into plugin module `module` on the channel with id `channel_id`,
+/// its plugin running: a parameter list puts every settable parameter at its default and then sets the listed ones,
+/// a state is restored. The module's params take the plugin's values after it (an undo puts them back on the plugin,
+/// as any param edit of the song), and a restored state becomes the module's. Whether it loaded.
+pub fn load_preset(
+    channel_id: i32,
+    module: &mut ModuleInstance,
+    preset: &super::presets::Preset,
+) -> bool {
+    use super::presets::Body;
+    with(|host| {
+        let Some(hosted) = host.live.get_mut(&(channel_id, module.instance_id)) else {
+            return false;
+        };
+        let (values, state) = {
+            let Ok(mut p) = hosted.plugin.lock() else {
+                return false;
+            };
+            let state = match &preset.body {
+                Body::State(state) => {
+                    if !p.load_state(state) {
+                        return false;
+                    }
+                    p.save_state()
+                }
+                Body::Params(list) => {
+                    for i in 0..p.param_count() {
+                        let Some(info) = p.param_info(i) else {
+                            continue;
+                        };
+                        if info.read_only || info.bypass {
+                            continue;
+                        }
+                        let listed = (list.iter())
+                            .find(|(name, _)| name.eq_ignore_ascii_case(&info.name))
+                            .map(|&(_, v)| v);
+                        let v = match (listed, info.steps) {
+                            (Some(v), 0) => v,
+                            (Some(v), steps) => v / f64::from(steps),
+                            (None, _) => info.default,
+                        };
+                        p.set_param(info.id, v.clamp(0.0, 1.0));
+                    }
+                    None
+                }
+            };
+            let values: Vec<f32> = (hosted.ids.iter())
+                .map(|&id| p.param_value(id).unwrap_or(0.0) as f32)
+                .collect();
+            (values, state)
+        };
+        for (i, &v) in values.iter().enumerate() {
+            hosted.params.known(i, v);
+        }
+        if !song_values(module, &hosted.ids).is_empty() {
+            module.params.truncate(1);
+            module.params.extend(&values);
+            hosted.song_values = values;
+        }
+        if let (Some(state), Some(plugin_ref)) = (state, module.file.plugin.as_deref_mut()) {
+            let state: Arc<[u8]> = state.into();
+            plugin_ref.state = state.clone();
+            hosted.origin = state;
+        }
+        true
+    })
+}
+
+/// Issue #113: the params whose "Create automation clip" a built-in plugin's editor offered and the user picked since
+/// the last call, as (channel id, instance id, module param ≥ 1): `Add automation track` for each.
+pub fn take_automate() -> Vec<(i32, i32, i32)> {
+    let asked = os_plugkit::embed::take_automate();
+    with(|host| {
+        let editor = |id| {
+            let mut live = host.live.iter();
+            live.find(|(_, h)| h.embedded.is_some_and(|(e, _)| u64::from(e) == id as u64))
+        };
+        (asked.into_iter())
+            .filter_map(|(id, index)| {
+                let (&(channel_id, instance_id), hosted) = editor(id)?;
+                (index < hosted.ids.len()).then_some((channel_id, instance_id, index as i32 + 1))
+            })
+            .collect()
+    })
+}
+
 /// While `f` runs, the engines built get fresh instances of their plugins (an export renders on its own, twice): each
 /// with the live instance's state now, else the module's, at the build's rate, rendering offline.
 pub fn rendering<T>(f: impl FnOnce() -> T) -> T {

@@ -120,7 +120,7 @@ pub struct Transport {
     pub tick: u64,
     /// How far past `tick` the playhead is drawn ([`crate::audio_link::AudioLink::playhead_lead`]): the line and the
     /// disc only, never an edit.
-    pub lead: u64,
+    pub lead: i64,
     pub playing: bool,
     /// REC is armed: the playhead disc shows the record icon.
     pub armed: bool,
@@ -855,7 +855,7 @@ impl AudioEditor {
         // Clipped at the value column's right edge: at beat 0 the line's left half shows in the t gap. While the knob
         // is dragged, the line and the disc follow the finger.
         let line = ui.painter_at(f.grid.with_min_x(f.column.right()));
-        let drawn = region::playhead_tick(Some(clip), t.tick + t.lead)
+        let drawn = region::playhead_tick(Some(clip), t.tick.saturating_add_signed(t.lead))
             .map(|p| geom::playhead(p, loop_ticks));
         let x = (self.knob).line_x(
             ui,
@@ -1308,9 +1308,9 @@ impl AudioEditor {
         }
     }
 
-    /// `Copy`, `Delete` and `Duplicate` over the point selection in a [`FloatingRow`] (waiting for a marquee). `Copy`
-    /// fills the clipboard; returns the points `Delete` leaves, or `Duplicate`'s, its copies a `grid` step on at least
-    /// ([`points::duplicate_selected`]).
+    /// `Copy`, `Delete` and `Duplicate` (last) over the point selection in a [`FloatingRow`] (waiting for a marquee).
+    /// `Copy` fills the clipboard; returns the points `Delete` leaves, or `Duplicate`'s, its copies a `grid` step on at
+    /// least ([`points::duplicate_selected`]).
     #[allow(clippy::too_many_arguments)]
     fn floating_row(
         &mut self,

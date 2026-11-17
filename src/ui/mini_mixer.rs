@@ -21,10 +21,12 @@
 //! cell); the sub-tracks triangle and the current sub-track's triangle show collapsed too (they are neither controls
 //! nor labels); the expanded meters are drawn under the level slider, the left peak on the lower bar.
 
-use eframe::egui::{Align2, Color32, Id, Rect, Shape, Stroke, Ui, UiBuilder, pos2, vec2};
+use eframe::egui::{
+    Align2, Color32, Id, Painter, Rect, Shape, Stroke, Ui, UiBuilder, pos2, vec2,
+};
 use honeydew_audio::device::ModuleMeter;
 
-use crate::icons::draw_icon;
+use crate::icons::{draw_icon, icon_edge};
 use crate::metrics::{FontSize, Metrics};
 use crate::midi::links;
 use crate::song::{AutomationTarget, ChannelKind, LaneKind, Song};
@@ -64,6 +66,11 @@ const END_MARGIN: f32 = 0.25;
 const LABEL_INSET: f32 = 0.5;
 /// The current sub-track's triangle: its height's half and its depth.
 const CURRENT_TRIANGLE: f32 = 0.4;
+/// A track folder's bar down the left edge of its members' headers, and of the folder's own row (U); the bar's
+/// alpha on `text`.
+const FOLDER_BAR_W: f32 = 0.1;
+const CLOSED_FOLDER_BAR_W: f32 = 0.25;
+const FOLDER_BAR_ALPHA: f32 = 0.6;
 /// The disc behind the mute pill and the `Solo` text: its radius as a share of min(w, h), and its growth when pressed.
 const DISC_SHARE: f32 = 0.4;
 const PRESSED_GROWTH: f32 = 1.05;
@@ -81,10 +88,15 @@ pub enum RowKind {
     Master,
     /// Any later track of a channel.
     Sub,
+    /// A track folder's row: its header the whole row.
+    Folder,
 }
 
 impl RowKind {
     pub fn of(song: &Song, row: &TrackRow) -> Self {
+        if row.folder_row.is_some() {
+            return Self::Folder;
+        }
         match (row.lane, song.channels[row.channel].kind) {
             (0, ChannelKind::Master) => Self::Master,
             (0, _) => Self::Primary,
@@ -99,6 +111,11 @@ impl RowKind {
 pub fn parts(kind: RowKind, row: Rect, expanded: bool, m: &Metrics) -> Vec<(NodeId, Rect)> {
     let fixed = |id, w| Node::leaf(id).w(Size::U(w)).visible(expanded);
     let tree = match kind {
+        RowKind::Folder => Node::hstack([
+            Node::leaf(HEADER),
+            fixed(MUTE, MUTE_W),
+            fixed(SOLO, SOLO_W).mr(END_MARGIN),
+        ]),
         RowKind::Sub => Node::hstack([
             Node::leaf(HEADER),
             fixed(SLIDER, SUB_SLIDER_W).mr(END_MARGIN),
@@ -194,6 +211,10 @@ pub fn show(
             col.left..=col.left + col.width,
             top..=top + row_h - 1.0 / m.ppp(),
         );
+        if let Some(folder) = row.folder_row {
+            folder_row(&mut ui, cx, song, folder, rect, col.expanded, &mut out);
+            continue;
+        }
         let kind = RowKind::of(song, &row);
         let ink = channel_color(song.channels[row.channel].hue, cx.theme).to_color32();
         let painter = ui.painter().clone();
@@ -202,6 +223,15 @@ pub fn show(
             _ => c.module_fill,
         };
         painter.rect_filled(rect, 0.0, fill.to_color32());
+        // A track folder's bar down its members' rows.
+        if let Some(place) = row.folder {
+            let w = m.round_px(m.u(FOLDER_BAR_W));
+            let bar = rect.with_max_x(rect.left() + w.max(1.0 / m.ppp()));
+            let hue = song.file.folders.get(place.folder).map(|f| f.hue);
+            let ink = hue.map_or(c.text, |h| channel_color(h, cx.theme)).to_color32();
+            let ink = ink.gamma_multiply(FOLDER_BAR_ALPHA);
+            painter.rect_filled(bar, 0.0, ink);
+        }
         let is_current = row.channel == current;
         let peaks = meter_peaks(col.meters, row.channel);
         if kind == RowKind::Sub {
@@ -220,7 +250,8 @@ pub fn show(
             } else {
                 ink
             };
-            draw_icon(&painter, cell, row.icon, icon_ink, 1.0, m);
+            let scale = (cell.height() / icon_edge(1.0, m)).min(1.0);
+            draw_icon(&painter, cell, row.icon, icon_ink, scale, m);
             if col.multitrack && row.armed {
                 let (center, radius) = armed_dot(cell, m);
                 painter.circle_filled(center, radius, icon_ink);
@@ -245,21 +276,12 @@ pub fn show(
         };
         let label = rect.shrink2(vec2(m.u(LABEL_INSET), m.t()));
         let font = m.font_id(FontSize::Pt8);
-        widgets::truncated(&painter, label, Align2::RIGHT_TOP, name, font, ink, 5);
         let placed = parts(kind, rect, true, m);
+        widgets::truncated(&painter, label, Align2::RIGHT_TOP, name, font, ink, 5);
         if kind == RowKind::Sub {
             sub_slider(&mut ui, cx, song, row, &placed, ink, &mut out);
         } else {
-            strip(
-                &mut ui,
-                cx,
-                song,
-                row.channel,
-                &placed,
-                ink,
-                peaks,
-                &mut out,
-            );
+            strip(&mut ui, cx, song, row, &placed, ink, peaks, &mut out);
         }
         if let Some(&(_, r)) = placed.iter().find(|p| p.0 == UNSOLO) {
             let r =
@@ -286,6 +308,129 @@ pub fn show(
         out.changes.extend(cleared.map(|c| (c, target, 0.0)));
     }
     out
+}
+
+/// Draws folder `folder`'s row in `rect` and runs its controls: the `moduleFill` row with the wide folder bar in the
+/// folder's colour at its left edge, then in the 1.5 U cell the folder glyph in that colour with the disclosure triangle
+/// under it (pointing down while open, right while closed); at c = 1 (`expanded`) the folder's name at the top right
+/// of its header part and its track count under it, then the folder's Mute pill and `Solo` button, drawn as a
+/// primary row's, lit while every member has it ([`folder_switch`]); a tap switches every member's.
+fn folder_row(
+    ui: &mut Ui,
+    cx: &UiCtx,
+    song: &mut Song,
+    folder: usize,
+    rect: Rect,
+    expanded: bool,
+    out: &mut Output,
+) {
+    let (m, c) = (cx.m, &cx.theme.colors);
+    let Some(f) = song.file.folders.get(folder) else {
+        return;
+    };
+    let painter = ui.painter().clone();
+    let ink = channel_color(f.hue, cx.theme).to_color32();
+    painter.rect_filled(rect, 0.0, c.module_fill.to_color32());
+    let w = m.round_px(m.u(CLOSED_FOLDER_BAR_W)).max(1.0 / m.ppp());
+    painter.rect_filled(rect.with_max_x(rect.left() + w), 0.0, ink);
+    // The glyph: a tab and a body, in the cell's upper part.
+    let cell = rect.with_max_x(rect.left() + m.u(CELL_W)).with_min_x(rect.left() + w);
+    let t = m.t();
+    let body = Rect::from_center_size(
+        cell.center() - vec2(0.0, cell.height() * 0.12),
+        vec2(cell.width() * 0.5, cell.height() * 0.32),
+    );
+    let tab = Rect::from_min_size(
+        body.left_top() - vec2(0.0, 2.0 * t),
+        vec2(body.width() * 0.45, 2.0 * t + 1.0),
+    );
+    painter.rect_filled(tab, t * 0.5, ink);
+    painter.rect_filled(body, t * 0.5, ink);
+    // The disclosure triangle.
+    let (x, y, d) = (cell.center().x, body.bottom() + 5.0 * t, 2.0 * t);
+    let points = match f.open {
+        true => vec![pos2(x - d, y - d * 0.5), pos2(x + d, y - d * 0.5), pos2(x, y + d)],
+        false => vec![pos2(x - d * 0.5, y - d), pos2(x + d, y), pos2(x - d * 0.5, y + d)],
+    };
+    painter.add(Shape::convex_polygon(points, ink, Stroke::NONE));
+    if !expanded {
+        return;
+    }
+    let placed = parts(RowKind::Folder, rect, true, m);
+    let part = |id: NodeId| placed.iter().find(|p| p.0 == id).map(|p| p.1);
+    let header = part(HEADER).unwrap_or(rect);
+    let members = song.folder_members(folder).len();
+    let label = (header.with_min_x(cell.right())).shrink2(vec2(m.u(LABEL_INSET), m.t()));
+    let font = m.font_id(FontSize::Pt8);
+    widgets::truncated(&painter, label, Align2::RIGHT_TOP, &f.name, font.clone(), ink, 5);
+    let count = match members {
+        1 => "1 track".to_owned(),
+        n => format!("{n} tracks"),
+    };
+    let dim = c.text.to_color32().gamma_multiply(0.6);
+    widgets::truncated(&painter, label, Align2::RIGHT_BOTTOM, &count, font, dim, 5);
+    if members == 0 {
+        return;
+    }
+    let id = |leaf: NodeId| Id::new("mini_mixer_folder").with((folder, leaf));
+    if let Some(r) = part(MUTE) {
+        let grow = if held(ui, r) { PRESSED_GROWTH } else { 1.0 };
+        let disc = DISC_SHARE * r.width().min(r.height()) * grow;
+        let fill = c.module_fill.to_color32();
+        let fill = if grow > 1.0 { widgets::pressed(fill) } else { fill };
+        painter.circle_filled(r.center(), disc, fill);
+        let mut on = if song.folder_muted(folder) { 1.0 } else { 0.0 };
+        let control = Control {
+            menu: ParamMenu::Off,
+            ..Control::new(id(MUTE), r, "", ink, 0.0)
+        };
+        let inverted = Pill {
+            inverted: true,
+            ..Pill::default()
+        };
+        if widgets::pill_toggle(ui, cx, &control, inverted, &mut on, |_| String::new()).changed() {
+            out.changes.extend(folder_switch(song, folder, false));
+        }
+    }
+    if let Some(r) = part(SOLO) {
+        let grow = if held(ui, r) { PRESSED_GROWTH } else { 1.0 };
+        let b = Button {
+            font: FontSize::Pt8,
+            shape: 2.0 * DISC_SHARE * grow,
+            fill_off: c.module_fill.to_color32(),
+            text_on: c.module_fill.to_color32(),
+            menu: ParamMenu::Off,
+            ..Button::new(id(SOLO), r, "Solo", true, c)
+        };
+        // The column's smart solo takes each member's solo as its own tap.
+        if widgets::button(ui, cx, &b, song.folder_soloed(folder)).clicked() {
+            out.changes.extend(folder_switch(song, folder, true));
+        }
+    }
+}
+
+/// Folder `folder`'s Mute (`solo` false: channel strip param 2) or `Solo` (param 3): on for every member unless every
+/// one has it already, then off for all. Returns the params it changed, already written to `song`: (channel, target,
+/// value). A solo's smart solo ([`mixer::smart_solo`]) is the caller's.
+pub fn folder_switch(song: &mut Song, folder: usize, solo: bool) -> Vec<(usize, AutomationTarget, f32)> {
+    let (param, all) = match solo {
+        true => (3, song.folder_soloed(folder)),
+        false => (2, song.folder_muted(folder)),
+    };
+    let to = if all { 0.0 } else { 1.0 };
+    let target = AutomationTarget {
+        instance_id: 0,
+        param,
+    };
+    let mut changes = Vec::new();
+    for c in song.folder_members(folder) {
+        let v = &mut song.channels[c].params.0[param as usize];
+        if *v != to {
+            *v = to;
+            changes.push((c, target, to));
+        }
+    }
+    changes
 }
 
 /// The row's name at c = 1: the channel's name, or its kind's default (`MASTER`, `AUX` for a send, else `CHANNEL`).
@@ -372,19 +517,21 @@ fn control_id(channel: usize, leaf: NodeId) -> Id {
     Id::new("mini_mixer").with((channel, leaf))
 }
 
-/// Mute, `Solo`, pan, level and the level meters of a primary or master row, bound to `channel`'s strip params.
+/// Mute, `Solo`, pan, level and the level meters of a primary or master row, bound to its channel's strip params; a
+/// collapsed row's mute is the flat pill.
 #[allow(clippy::too_many_arguments)]
 fn strip(
     ui: &mut Ui,
     cx: &UiCtx,
     song: &mut Song,
-    channel: usize,
+    row: TrackRow,
     placed: &[(NodeId, Rect)],
     ink: Color32,
     peaks: [f32; 2],
     out: &mut Output,
 ) {
     let (m, c) = (cx.m, &cx.theme.colors);
+    let channel = row.channel;
     let ch = &mut song.channels[channel];
     let linked = links::links(&ch.file.cc_links);
     let params = &mut ch.params.0;

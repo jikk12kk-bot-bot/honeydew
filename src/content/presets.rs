@@ -120,13 +120,21 @@ pub fn find(type_id: u16, name: &str) -> Option<ModuleInstance> {
 
 pub(super) fn entries() -> Vec<Entry> {
     let presets = banks().flat_map(|(t, bank)| bank.iter().map(move |p| (t, p)));
-    presets
-        .filter_map(|(t, preset)| {
-            let bytes =
-                move || flm::write_preset(&module(t, preset)).expect("a bank preset writes");
-            Some(Entry::new(rel(t, preset)?, bytes))
-        })
-        .collect()
+    let ours = presets.filter_map(|(t, preset)| {
+        let bytes = move || flm::write_preset(&module(t, preset)).expect("a bank preset writes");
+        Some(Entry::new(rel(t, preset)?, bytes))
+    });
+    // The built-in Lemon plugins' presets (`.ospreset`), each in its plugin's folder: a plugin module's picker lists
+    // them ([`crate::plugins::presets`]), and Lemon Reverb's and Lemon Limiter's (their folders are their names).
+    // A plugin's `Default` is the picker's own `Default` row.
+    let lemon = (crate::plugins::presets::FILES.iter())
+        .filter(|(rel, _)| !rel.ends_with("/Default.ospreset") || rel.matches('/').count() > 1)
+        .map(|&(rel, bytes)| Entry::new(format!("{PRESETS}/{rel}"), move || bytes.to_vec()));
+    // Citrus's, made in code: a file is made when it is read.
+    let citrus = (crate::plugins::citrus_presets::PATCHES.iter())
+        .filter(|p| !p.is_default())
+        .map(|p| Entry::new(format!("{PRESETS}/{}", p.rel()), move || p.file()));
+    ours.chain(lemon).chain(citrus).collect()
 }
 
 /// A preset without `CSTM` settings.

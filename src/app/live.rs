@@ -642,14 +642,14 @@ fn pace(ui: &egui::Ui, grid: Rect) -> (f32, f64) {
 }
 
 /// The playlist's presence, after its clips: this person's pointer over its `grid` (on `rows`, as drawn on `axis`), and
-/// the others' pointers, selected clips and drags, on the rows Settings `Show hidden tracks` (`show_hidden`) leaves.
+/// the others' pointers, selected clips and drags, on its rows.
 /// Nothing while not connected.
 pub(crate) fn playlist(
     ui: &egui::Ui,
     cx: &UiCtx,
     song: &Song,
     (grid, rows, axis): (Rect, &[(usize, usize, Rect)], TimeAxis),
-    (covered, show_hidden): (bool, bool),
+    covered: bool,
 ) {
     LIVE.with_borrow_mut(|live| {
         if !live.connected {
@@ -663,7 +663,7 @@ pub(crate) fn playlist(
         if live.others.is_empty() {
             return;
         }
-        let tracks: Vec<_> = (track_rows(song, show_hidden).iter())
+        let tracks: Vec<_> = (track_rows(song).iter())
             .map(|t| (t.channel, t.lane))
             .collect();
         // Row `v` (a track's index plus the fraction down it), moved down that fraction, while its track shows.
@@ -1365,7 +1365,6 @@ impl HoneydewApp {
         let editor = !matches!(view, View::Playlist | View::Mixer);
         let audio = matches!(view, View::AudioEditor(_));
         let screen = &self.main_screen.clips;
-        let show = self.settings.show_hidden_tracks;
         let selected = match screen.group.is_empty() {
             true => screen.selected.into_iter().collect(),
             false => screen.group.clone(),
@@ -1388,7 +1387,7 @@ impl HoneydewApp {
                 View::AudioEditor(_) => "audio",
             }
             .into(),
-            clip: (editor.then(|| screen.clip_for(&self.song, self.selected_channel, show)))
+            clip: (editor.then(|| screen.clip_for(&self.song, self.selected_channel)))
                 .flatten()
                 .and_then(clip),
             pointer: live.mine.pointer,

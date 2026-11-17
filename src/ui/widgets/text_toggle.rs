@@ -9,7 +9,7 @@
 //!
 //! The drum strips' `Solo`, `REV` and `Poly` are not these but filled discs ([`disc_toggle`]).
 
-use eframe::egui::{Align2, Response, Sense, Ui, WidgetInfo, WidgetType};
+use eframe::egui::{Align2, Rect, Response, Sense, Ui, WidgetInfo, WidgetType, vec2};
 
 use super::toggle::flip;
 use super::{Control, hovered, pressed, primary_down_on, toggle_on};
@@ -50,6 +50,48 @@ pub fn text_button(ui: &mut Ui, cx: &UiCtx, c: &Control) -> Response {
     let response = focus::interact(ui, c.rect, c.id, sense);
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, !c.disabled, c.label));
     draw(ui, cx, c, primary_down_on(ui, &response));
+    response
+}
+
+/// [`text_button`] showing a choice it holds (a drum slot's `AUX` routed to a send): `text` in `moduleFill` on a
+/// rounded `text` bar over the rect (inset 0.1 U), as a lit disc toggle is drawn; the bar darkens while the primary
+/// button holds it. A `text` wider than the bar is cut short with an ellipsis.
+pub fn value_button(ui: &mut Ui, cx: &UiCtx, c: &Control, text: &str) -> Response {
+    let sense = if c.disabled {
+        Sense::hover()
+    } else {
+        Sense::click()
+    };
+    let response = focus::interact(ui, c.rect, c.id, sense);
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, !c.disabled, text));
+    let colors = &cx.theme.colors;
+    let (fill, ink) = (colors.text.to_color32(), colors.module_fill.to_color32());
+    let fill = if primary_down_on(ui, &response) || hovered(ui, &response) {
+        pressed(fill)
+    } else {
+        fill
+    };
+    let m = cx.m;
+    let font = m.font_id(c.label_font);
+    let h = (ui.ctx().fonts_mut(|f| f.row_height(&font)) + m.u(0.2)).min(c.rect.height());
+    let bar = Rect::from_center_size(c.rect.center(), vec2(c.rect.width() - m.u(0.2), h));
+    let painter = ui.painter();
+    painter.rect_filled(bar, h / 2.0, fill);
+    // Cut short to fit, a character at a time.
+    let room = (bar.width() - m.u(0.2)).max(0.0);
+    let width = |s: &str| painter.layout_no_wrap(s.to_owned(), font.clone(), ink).size().x;
+    let mut shown = text.to_owned();
+    if width(&shown) > room {
+        let mut chars: Vec<char> = text.chars().collect();
+        while !chars.is_empty() {
+            chars.pop();
+            shown = chars.iter().collect::<String>().trim_end().to_owned() + "…";
+            if width(&shown) <= room {
+                break;
+            }
+        }
+    }
+    painter.text(bar.center(), Align2::CENTER_CENTER, shown, font, ink);
     response
 }
 

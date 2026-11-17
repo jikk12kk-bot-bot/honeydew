@@ -1,0 +1,8 @@
+OSPRESET 1
+plugin=Lemon Fast Distortion	id=clap:org.openstudio.lemon-fast-distortion	format=clap	body=params
+# Honeydew's own preset (tools/lemon_presets.py).
+Pre amp = 80
+Threshold = 8
+Type = 1
+Mix = 90
+Post gain = 115

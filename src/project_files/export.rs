@@ -15,7 +15,11 @@
 //!   ([`Render::finish`]), then `Encoding "<file>"` (pass 2, [`Stream::step`]: the same audio rendered again and
 //!   processed), 1024 frames per push into a streaming encoder: 16-bit
 //!   [`WavWriter`] or 32-bit float WAV, 16- or 24-bit [`FlacEncoder`], 192 or 320 kbps [`Mp3Encoder`], Vorbis quality
-//!   0.4 or 1.0 [`OggEncoder`], per `High quality`. Once written, `Render complete\nSaved to: <path>` flashes.
+//!   0.4 or 1.0 [`OggEncoder`], per `High quality`. Once written, the message `Render complete` / `Saved to: <path
+//!   below the user folder>` shows, with `Open My Tracks` (SONGS on the render) and `OK` (#72: a flash
+//!   was gone before Android users found the file). The web, which downloads, flashes the two lines.
+//! - **Tags** (#139). With PROJECT's `Write tags on export` on (the default), each file carries [`tags`]: Vorbis
+//!   comments in FLAC and Ogg, ID3v2.4 in MP3, a `LIST` `INFO` chunk in WAV. An FLP's stems never do.
 //! - **Errors.** No audible frame: `The song has no sound`. A render that cannot be built, is too long or cannot be
 //!   written: `An error occurred while rendering`. MIDI with no lane to write: `Error: no data to save`. ZIP: the
 //!   export messages (`Failed to save project` for the song, `Failed to compress files`, `Failed to export
@@ -44,12 +48,14 @@ use std::path::{Path, PathBuf};
 use honeydew_audio::flac_writer::FlacEncoder;
 use honeydew_audio::mp3_writer::Mp3Encoder;
 use honeydew_audio::ogg_writer::OggEncoder;
-use honeydew_audio::wav_writer::{HEADER_LEN, WavWriter, float32_wav};
+use honeydew_audio::wav_writer::{HEADER_LEN, WavWriter, float32_wav, header, info_chunk};
 
 use super::{
     FileEvent, MAX_FILE_BYTES, OVERWRITE, ProjectFiles, SAVE_FAILED, SAVE_FILE_FAILED, SAVED,
     in_user_folder, stamped, stem, too_large,
 };
+use crate::APP_NAME;
+use crate::displayer::mp4::Video;
 use crate::flm::chunk::ContentPath;
 use crate::render::{Render, RenderError, RenderSpec, Stream};
 use crate::sample_cache::{self, SampleCache};
@@ -67,6 +73,10 @@ pub const ARCHIVE_FAILED: &str = "Failed to export archive";
 pub const COMPRESS_FAILED: &str = "Failed to compress files";
 /// The message after an FLP export that did not carry everything over exactly; a line for each follows.
 pub const FLP_NOTICES: &str = "Saved. These parts differ in the .flp:";
+/// The message after an audio export, its tag and its button that shows the render in SONGS (#72).
+pub const RENDER_COMPLETE: &str = "Render complete";
+pub const RENDERED_TAG: &str = "project_files_rendered";
+pub const OPEN_TRACKS: &str = "Open My Tracks";
 /// The render rate when no audio output runs.
 pub const NO_AUDIO_RATE: u32 = 44_100;
 /// Frames a slice renders at least: the render's block.
@@ -86,6 +96,8 @@ pub struct Export {
     /// The file, or with [`Split::Folder`] the stems' folder.
     pub path: PathBuf,
     pub split: Split,
+    /// `Send` (#72): the file, or the stems, are shared once written ([`super::FileProvider::share`]).
+    pub send: bool,
 }
 
 /// `Split mixer tracks`: where the stems go.
@@ -102,11 +114,14 @@ pub enum Split {
     Flp,
 }
 
-/// A split export's stems being written ([`ProjectFiles::write_stem`]): their folder, the files whose writes have not
-/// finished, whether every stem is rendered, and whether a write failed. `Render complete` flashes once all are done.
+/// A split export's stems being written ([`ProjectFiles::write_stem`]): their folder, every stem file (for `Send`), the
+/// files whose writes have not finished, whether every stem is rendered, and whether a write failed. `Render complete`
+/// flashes once all are done.
 #[derive(Default)]
 pub(super) struct StemWrites {
     folder: PathBuf,
+    files: Vec<PathBuf>,
+    send: bool,
     writing: Vec<PathBuf>,
     rendered: bool,
     failed: bool,
@@ -124,6 +139,30 @@ pub fn quick_render_format(id: u8) -> ExportFormat {
     ExportFormat::from_id(id)
         .filter(|f| f.is_audio() && f.available())
         .unwrap_or(ExportFormat::Wav)
+}
+
+/// The tags a render of `song` writes (#139), by their Vorbis comment fields: PROJECT's title (else the song's file
+/// name), author, album, genre, year and comment, each when it has more than spaces, and the app as the encoder.
+pub fn tags(song: &Song) -> Vec<(&'static str, String)> {
+    let meta = &song.file.meta;
+    let title = match meta.display_title.trim() {
+        "" => &song.title,
+        _ => &meta.display_title,
+    };
+    let encoder = format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION"));
+    let fields = [
+        ("TITLE", title),
+        ("ARTIST", &meta.author),
+        ("ALBUM", &meta.album),
+        ("GENRE", &meta.genre),
+        ("DATE", &meta.year),
+        ("COMMENT", &meta.comment),
+        ("ENCODER", &encoder),
+    ];
+    (fields.into_iter())
+        .filter(|(_, value)| !value.trim().is_empty())
+        .map(|(field, value)| (field, value.trim().to_owned()))
+        .collect()
 }
 
 /// `Saved!`, and a line for the imported content files a project archive left out (`left_out`), in the import's
@@ -171,6 +210,7 @@ impl ProjectFiles {
         split: bool,
         only: Option<usize>,
     ) {
+        let send = std::mem::take(&mut self.send);
         if format == ExportFormat::Flm || !format.available() {
             return;
         }
@@ -218,6 +258,7 @@ impl ProjectFiles {
             format,
             path,
             split,
+            send,
         };
         if self.provider.exists(&export.path) {
             self.message = Some(vec![OVERWRITE.into(), file]);
@@ -287,6 +328,8 @@ impl ProjectFiles {
     pub fn write_stem(&mut self, export: &Export, name: &str, bytes: Vec<u8>) {
         let path = export.path.join(name);
         self.stem_writes.folder.clone_from(&export.path);
+        self.stem_writes.send = export.send;
+        self.stem_writes.files.push(path.clone());
         self.stem_writes.writing.push(path.clone());
         self.provider.save(&path, false, bytes);
     }
@@ -308,14 +351,53 @@ impl ProjectFiles {
         if writes.rendered && writes.writing.is_empty() {
             writes.rendered = false;
             if !std::mem::take(&mut writes.failed) {
-                let folder = writes.folder.display();
-                self.flash = Some(format!("Render complete\nSaved to: {folder}"));
+                let folder = writes.folder.clone();
+                let stems = writes.send.then(|| std::mem::take(&mut writes.files));
+                self.render_complete(folder);
+                if let Some(stems) = stems {
+                    self.share(&stems);
+                }
             }
         }
     }
 
+    /// `Render complete` and where `path` (the file, or the stems' folder) is, below the user folder. Where saves keep
+    /// their folders it is a message whose `Open My Tracks` shows the render in SONGS ([`Self::take_open_tracks`], #72),
+    /// else (the web's download) the flash.
+    fn render_complete(&mut self, path: PathBuf) {
+        let user = self.user.as_deref().unwrap_or(Path::new(""));
+        let shown = path
+            .strip_prefix(user)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        let lines = vec![RENDER_COMPLETE.to_owned(), format!("Saved to: {shown}")];
+        if self.provider.folders() {
+            self.message = Some(lines);
+            self.rendered = Some(path);
+        } else {
+            self.flash = Some(lines.join("\n"));
+        }
+    }
+
+    /// An MP4 is written (straight to its path, [`Done::Written`]): `Render complete`, and the share sheet with `Send`.
+    pub fn video_written(&mut self, export: &Export) {
+        self.render_complete(export.path.clone());
+        if export.send {
+            self.share(std::slice::from_ref(&export.path));
+        }
+    }
+
+    /// The render the user asked to see with the render message's `Open My Tracks`, once: the app shows it in SONGS.
+    pub fn take_open_tracks(&mut self) -> Option<PathBuf> {
+        self.open_tracks.take()
+    }
+
     /// A render failed: `The song has no sound` with no audible frame, else `An error occurred while rendering`.
     pub fn render_failed(&mut self, error: &RenderError) {
+        if let RenderError::Video(detail) = error {
+            return self.fail(RENDER_FAILED, detail.clone());
+        }
         let line = match error {
             RenderError::Silent => NO_SOUND,
             _ => RENDER_FAILED,
@@ -344,10 +426,11 @@ impl ProjectFiles {
         let Some(export) = self.export_saving.take() else {
             return;
         };
+        if let (FileEvent::Saved(path), true) = (&event, export.send) {
+            self.share(std::slice::from_ref(path));
+        }
         match event {
-            FileEvent::Saved(path) if export.format.is_audio() => {
-                self.flash = Some(format!("Render complete\nSaved to: {}", path.display()));
-            }
+            FileEvent::Saved(path) if export.format.is_audio() => self.render_complete(path),
             FileEvent::Saved(_) => {
                 self.flash = Some(saved(std::mem::take(&mut self.export_left_out)));
                 // What the FLP had no counterpart for.
@@ -364,6 +447,7 @@ impl ProjectFiles {
             }
             FileEvent::Failed(_, detail) => self.fail(failure(export.format), detail),
             FileEvent::Opened(..)
+            | FileEvent::Picked(_)
             | FileEvent::Located(_)
             | FileEvent::Folder(_)
             | FileEvent::Copied(_)
@@ -421,6 +505,10 @@ pub struct Job {
     stage: Stage,
     /// A split export's stems.
     split: Option<Box<Stems>>,
+    /// What each file is tagged with ([`Self::with_tags`]).
+    tags: Vec<(&'static str, String)>,
+    /// An MP4 ([`Self::with_video`]): the video the sound goes into, until encoding starts.
+    video: Option<Box<Video>>,
 }
 
 /// What a [`Job::step`] ended with.
@@ -432,6 +520,8 @@ pub enum Done {
     Stem(String, Vec<u8>),
     /// Every stem is rendered, at least one handed over. The job is over.
     Stems,
+    /// An MP4, written straight to the export's path. The job is over.
+    Written,
     /// An FLP's stems ([`Split::Flp`]): the song they are of, and each a WAV file by its channel there, for
     /// [`ProjectFiles::flp_rendered`]. The job is over.
     Rendered(Box<Song>, Vec<(usize, Vec<u8>)>),
@@ -513,7 +603,36 @@ impl Job {
             high_quality: page.high_quality,
             stage: Stage::Rendering(Box::new(render)),
             split,
+            tags: Vec::new(),
+            video: None,
         })
+    }
+
+    /// The job writes `video` ([`ExportFormat::Mp4`]): the sound into it, with its pictures, and no other file.
+    pub fn with_video(mut self, video: Video) -> Self {
+        self.video = Some(Box::new(video));
+        self
+    }
+
+    /// An MP4: the busy screen offers Cancel, which drops the job (and its unfinished file).
+    pub fn is_video(&self) -> bool {
+        self.video.is_some()
+            || matches!(
+                self.stage,
+                Stage::Encoding {
+                    encoder: Encoder::Video(_),
+                    ..
+                }
+            )
+    }
+
+    /// The job tags each file it writes with `tags` ([`tags`]), but an FLP's stems: `flp::export` reads their plain
+    /// 46-byte WAV header.
+    pub fn with_tags(mut self, tags: Vec<(&'static str, String)>) -> Self {
+        if self.export.split != Split::Flp {
+            self.tags = tags;
+        }
+        self
     }
 
     pub fn export(&self) -> &Export {
@@ -541,6 +660,16 @@ impl Job {
         format!("Exporting channel {}: {name}\n{stage} \"{file}\"", at + 1)
     }
 
+    /// How far the stage under way is, 0 to 1, for the busy screen's bar: the render's pass 1 (`Rendering`), then pass
+    /// 2 into the encoder (`Encoding`). `None` between stages (`Processing`, a stem starting, the archive).
+    pub fn progress(&self) -> Option<f32> {
+        match &self.stage {
+            Stage::Rendering(render) => Some(render.progress()),
+            Stage::Encoding { stream, .. } => Some(stream.progress()),
+            Stage::Processing(_) | Stage::Done => None,
+        }
+    }
+
     /// One slice of the stage under way, a block at a time until `over` says the slice is spent (at least one block).
     /// The end of a stage ends the slice, so the busy screen shows the next stage's title before it runs. Returns what
     /// the job ended with, or a stem to write.
@@ -563,8 +692,12 @@ impl Job {
                         Err(error) => return Some(Done::Failed(error)),
                     };
                     let frames = stream.frames();
-                    let encoder =
-                        Encoder::new(self.export.format, self.rate, self.high_quality, frames);
+                    let tags: Vec<_> = (self.tags.iter()).map(|(f, v)| (*f, v.as_str())).collect();
+                    let (format, rate, hq) = (self.export.format, self.rate, self.high_quality);
+                    let encoder = match self.video.take() {
+                        Some(video) => Encoder::Video(video),
+                        None => Encoder::new(format, rate, hq, frames, &tags),
+                    };
                     self.stage = Stage::Encoding {
                         stream: Box::new(stream),
                         encoder,
@@ -580,6 +713,12 @@ impl Job {
                         encoder.push(left, right);
                     }
                     if stream.done() {
+                        if let Encoder::Video(video) = encoder {
+                            return Some(match video.finish() {
+                                Ok(()) => Done::Written,
+                                Err(e) => Done::Failed(RenderError::Video(e)),
+                            });
+                        }
                         let bytes = encoder.finish();
                         return match self.split {
                             None => Some(Done::File(bytes)),
@@ -718,30 +857,35 @@ enum Encoder {
     Mp3(Box<Mp3Encoder>),
     /// Boxed: libvorbis's analysis state is kilobytes too.
     Ogg(Box<OggEncoder>),
+    /// An MP4 ([`Job::with_video`]): writes its own file.
+    Video(Box<Video>),
 }
 
 impl Encoder {
-    /// For `frames` frames of `format` at `rate` Hz. WAV is also the encoder of a format that has none yet (no such
-    /// format is available to export).
-    fn new(format: ExportFormat, rate: u32, high_quality: bool, frames: usize) -> Self {
+    /// For `frames` frames of `format` at `rate` Hz, tagged with `tags`. WAV is also the encoder of a format that has
+    /// none yet (no such format is available to export).
+    fn new(
+        format: ExportFormat,
+        rate: u32,
+        high_quality: bool,
+        frames: usize,
+        tags: &[(&str, &str)],
+    ) -> Self {
         match (format, high_quality) {
             (ExportFormat::Flac, hq) => {
-                Self::Flac(FlacEncoder::new(rate, if hq { 24 } else { 16 }, 2))
+                let bits = if hq { 24 } else { 16 };
+                Self::Flac(FlacEncoder::with_tags(rate, bits, 2, tags))
             }
-            (ExportFormat::Mp3, hq) => Self::Mp3(Box::new(Mp3Encoder::new(rate, hq))),
-            (ExportFormat::Ogg, hq) => Self::Ogg(Box::new(OggEncoder::new(rate, hq))),
+            (ExportFormat::Mp3, hq) => Self::Mp3(Box::new(Mp3Encoder::with_tags(rate, hq, tags))),
+            (ExportFormat::Ogg, hq) => Self::Ogg(Box::new(OggEncoder::with_tags(rate, hq, tags))),
             (_, false) => {
                 let out = Cursor::new(Vec::with_capacity(HEADER_LEN + frames * 4));
-                Self::Pcm16(WavWriter::new(out, rate, 2).expect("a Vec takes every write"))
+                let wav = WavWriter::with_tags(out, rate, 2, tags);
+                Self::Pcm16(wav.expect("a Vec takes every write"))
             }
             (_, true) => {
                 // `float32_wav`'s header, its sizes those of `frames` frames (capped as its own are).
-                let mut out = float32_wav(rate, &[[0f32; 0]; 2]);
-                let data = u32::try_from(frames * 8)
-                    .unwrap_or(u32::MAX)
-                    .min(u32::MAX - 38);
-                out[4..8].copy_from_slice(&(38 + data).to_le_bytes());
-                out[HEADER_LEN - 4..].copy_from_slice(&data.to_le_bytes());
+                let mut out = header(3, 2, rate, 32, frames as u64 * 8, &info_chunk(tags));
                 out.reserve(frames * 8);
                 Self::Float(out)
             }
@@ -762,6 +906,7 @@ impl Encoder {
             Self::Flac(flac) => flac.push(&[left, right]),
             Self::Mp3(mp3) => mp3.push(&[left, right]),
             Self::Ogg(ogg) => ogg.push(&[left, right]),
+            Self::Video(video) => video.push(left, right),
         }
     }
 
@@ -772,6 +917,8 @@ impl Encoder {
             Self::Flac(flac) => flac.finish(),
             Self::Mp3(mp3) => mp3.finish(),
             Self::Ogg(ogg) => ogg.finish(),
+            // Finished by the job, which has no bytes for it.
+            Self::Video(_) => Vec::new(),
         }
     }
 }

@@ -1,0 +1,20 @@
+OSPRESET 1
+plugin=Lemon Reverb	id=clap:org.openstudio.lemon-reverb	format=clap	body=params
+# Honeydew's own preset (tools/lemon_presets.py).
+Low cut = 56
+High cut = 35
+Predelay = 40
+Room size = 99
+Diffusion = 100
+Decay time = 119
+High damping = 35
+Bass multiplier = 80
+Crossover = 475
+Stereo separation = 64
+Dry level = 128
+Early reflection level = 128
+Wet level = 90
+Mod Speed = 600
+Mod Depth = 500
+Tempo-based predelay = 0
+Mid / side input = 0

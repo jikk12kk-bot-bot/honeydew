@@ -1,10 +1,26 @@
-//! Opt-in, loopback-only control for local music assistants. Socket work never touches the song:
-//! commands are validated and applied on the egui thread as one ordinary undoable edit.
+//! Opt-in control for music assistants (MCP). Socket work never touches the song: commands are validated and applied
+//! on the egui thread as one ordinary undoable edit.
+//!
+//! One listener speaks two protocols, told apart by the first byte:
+//! - **MCP over Streamable HTTP** (our own addition: the app is the MCP server itself, on the phones too): `POST /mcp`
+//!   with a JSON-RPC 2.0 message (or a batch), authenticated with `Authorization: Bearer <token>` (or `?token=`). The
+//!   answers are plain JSON (no event stream); `GET` is 405, as the spec allows.
+//! - **The raw JSON requests** of the desktop's Python MCP adapter (`tools/honeydew-mcp`): `{"token": …, "action": …}`,
+//!   the connection's write side closed, one JSON answer.
+//!
+//! It listens on 127.0.0.1 (this device), or with `Allow over Wi-Fi` on every network.
+//!
+//! A request waits for the next frame. No frame runs while the app is in the background (Android stops drawing it, an
+//! assistant in another app on the phone being the usual case), so a request still waiting after a moment is answered
+//! on the control thread itself ([`background`]), under the lock every frame holds ([`frame_lock`]): the app is used
+//! by one thread at a time.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError, TryLockError};
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use honeydew_audio::device::AudioCommand;
@@ -17,10 +33,69 @@ use crate::song::{ChannelKind, Event, LaneKind, PPQ, Song, SynthKind};
 use crate::ui::views::SongEdit;
 
 const MAX_REQUEST: u64 = 256 * 1024;
+/// An HTTP request's head, at most.
+const MAX_HEAD: usize = 16 * 1024;
+/// The MCP protocol versions answered as asked; any other gets the first.
+const PROTOCOLS: [&str; 3] = ["2025-03-26", "2025-06-18", "2024-11-05"];
+const INSTRUCTIONS: &str = "Use get_song before edits. Reuse existing configured VST channels by ID. apply_arrangement changes the open song and is one undo step. For built-in synth sound design, use get_instrument_params before set_instrument_params; these knob changes are not individually undoable. play, stop and seek drive the transport; get_mixer and set_mixer read and set the channels' level, pan, mute and solo. Do not claim to have auditioned the result; ask the user to listen and give feedback.";
 
 struct Request {
     value: Value,
     reply: Sender<Value>,
+}
+
+/// The app, for [`background`]: set by every frame while the bridge runs, cleared on exit. Every frame holds the lock
+/// for its whole length.
+static APP: Mutex<Option<AppPtr>> = Mutex::new(None);
+/// When the last frame ended, ms after [`START`].
+static LAST_FRAME: AtomicU64 = AtomicU64::new(0);
+static START: OnceLock<Instant> = OnceLock::new();
+/// A request unanswered this long with no frame since is answered in the background.
+const NO_FRAMES: Duration = Duration::from_millis(400);
+
+struct AppPtr(*mut HoneydewApp);
+
+// SAFETY: dereferenced only under `APP`'s lock, which a frame holds while it runs, and never after `forget_app` (on
+// exit): one thread at a time uses the app, as if it moved to it and back.
+unsafe impl Send for AppPtr {}
+
+fn now_ms() -> u64 {
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// Held for a frame's length ([`frame_lock`]); notes its end.
+pub(super) struct FrameGuard(MutexGuard<'static, Option<AppPtr>>);
+
+impl Drop for FrameGuard {
+    fn drop(&mut self) {
+        LAST_FRAME.store(now_ms(), Ordering::Release);
+    }
+}
+
+/// At a frame's start: holds the app away from [`background`] until the frame ends, and keeps where it is for it.
+pub(super) fn frame_lock(app: &mut HoneydewApp) -> FrameGuard {
+    let mut held = APP.lock().unwrap_or_else(PoisonError::into_inner);
+    *held = app.control.is_some().then(|| AppPtr(app));
+    FrameGuard(held)
+}
+
+/// On exit, before the app goes: [`background`] never reaches it again.
+pub(super) fn forget_app() {
+    *APP.lock().unwrap_or_else(PoisonError::into_inner) = None;
+}
+
+/// No frame runs: the requests waiting are answered here, on the control thread, unless a frame has started.
+fn background() {
+    let held = match APP.try_lock() {
+        Ok(held) => held,
+        Err(TryLockError::Poisoned(p)) => p.into_inner(),
+        Err(TryLockError::WouldBlock) => return,
+    };
+    if let Some(app) = held.as_ref() {
+        // SAFETY: under the lock no frame runs (each holds it), and the app is alive (`forget_app` clears it on exit,
+        // under the lock).
+        unsafe { (*app.0).control_background() };
+    }
 }
 
 pub(super) struct Bridge {
@@ -30,11 +105,13 @@ pub(super) struct Bridge {
 }
 
 impl Bridge {
-    pub(super) fn start(ctx: egui::Context, enabled: bool, port: u16) -> Option<Self> {
+    /// Listens on `port` (every network with `wifi`, else this device only) while `enabled`, with the token saved in
+    /// Settings (at least 24 characters). `None`: off, or it could not start.
+    pub(super) fn start(ctx: egui::Context, enabled: bool, port: u16, wifi: bool) -> Option<Self> {
         if !enabled {
             return None;
         }
-        // The desktop Settings token file is shared with the Python MCP adapter.
+        // The Settings token file is shared with the Python MCP adapter on the desktop.
         // Keep the environment fallback during the migration from the old startup flow.
         let token = crate::settings::load_mcp_token()
             .or_else(|| std::env::var("HONEYDEW_CONTROL_TOKEN").ok())?;
@@ -42,10 +119,11 @@ impl Bridge {
             eprintln!("Honeydew control disabled: the MCP token needs at least 24 characters");
             return None;
         }
-        let listener = match TcpListener::bind(("127.0.0.1", port)) {
+        let host = if wifi { "0.0.0.0" } else { "127.0.0.1" };
+        let listener = match TcpListener::bind((host, port)) {
             Ok(listener) => listener,
             Err(err) => {
-                eprintln!("Honeydew control disabled: cannot bind loopback port {port}: {err}");
+                eprintln!("Honeydew control disabled: cannot bind {host}:{port}: {err}");
                 return None;
             }
         };
@@ -65,8 +143,7 @@ impl Bridge {
                             let _ = stream.set_nonblocking(false);
                             let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
                             let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
-                            let answer = serve(&mut stream, &token, &tx, &ctx);
-                            let _ = serde_json::to_writer(&mut stream, &answer);
+                            connection(&mut stream, &token, &tx, &ctx);
                             let _ = stream.flush();
                         }
                         Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -77,7 +154,7 @@ impl Bridge {
                 }
             })
             .ok()?;
-        eprintln!("Honeydew control enabled on 127.0.0.1:{port}");
+        eprintln!("Honeydew control enabled on {host}:{port}");
         Some(Self {
             requests,
             shutdown,
@@ -99,14 +176,51 @@ impl Drop for Bridge {
     }
 }
 
-fn serve(stream: &mut TcpStream, token: &str, tx: &Sender<Request>, ctx: &egui::Context) -> Value {
+/// The address an MCP client connects to: `http://<this device's address on the network, or 127.0.0.1>:<port>/mcp`.
+pub fn mcp_url(port: u16, wifi: bool) -> String {
+    let host = wifi
+        .then(lan_address)
+        .flatten()
+        .unwrap_or_else(|| "127.0.0.1".to_owned());
+    format!("http://{host}:{port}/mcp")
+}
+
+/// This device's address on its network: the one a route out would leave from (a UDP "connect" sends nothing).
+pub fn lan_address() -> Option<String> {
+    let socket = std::net::UdpSocket::bind(("0.0.0.0", 0)).ok()?;
+    socket.connect(("8.8.8.8", 80)).ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    (!ip.is_unspecified() && !ip.is_loopback()).then(|| ip.to_string())
+}
+
+/// One connection: an HTTP request (MCP), or a raw JSON one (the Python adapter).
+fn connection(stream: &mut TcpStream, token: &str, tx: &Sender<Request>, ctx: &egui::Context) {
     let mut bytes = Vec::new();
-    if stream
-        .take(MAX_REQUEST + 1)
-        .read_to_end(&mut bytes)
-        .is_err()
-        || bytes.len() as u64 > MAX_REQUEST
-    {
+    let mut chunk = [0u8; 4096];
+    // The first bytes say which.
+    match stream.read(&mut chunk) {
+        Ok(n) if n > 0 => bytes.extend_from_slice(&chunk[..n]),
+        _ => return,
+    }
+    let first = bytes.iter().find(|b| !b.is_ascii_whitespace()).copied();
+    if first == Some(b'{') {
+        let answer = serve(stream, bytes, token, tx, ctx);
+        let _ = serde_json::to_writer(&mut *stream, &answer);
+        return;
+    }
+    http(stream, bytes, token, tx, ctx);
+}
+
+/// The raw JSON request whose first bytes are `bytes`: read to its end, authenticated, and answered.
+fn serve(
+    stream: &mut TcpStream,
+    mut bytes: Vec<u8>,
+    token: &str,
+    tx: &Sender<Request>,
+    ctx: &egui::Context,
+) -> Value {
+    let left = (MAX_REQUEST + 1).saturating_sub(bytes.len() as u64);
+    if stream.take(left).read_to_end(&mut bytes).is_err() || bytes.len() as u64 > MAX_REQUEST {
         return json!({"error": "request too large or incomplete"});
     }
     let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) else {
@@ -122,14 +236,570 @@ fn serve(stream: &mut TcpStream, token: &str, tx: &Sender<Request>, ctx: &egui::
         .as_object_mut()
         .expect("token was present")
         .remove("token");
+    ask(value, tx, ctx)
+}
+
+/// `value` (an action) handed to the app, and its answer.
+fn ask(value: Value, tx: &Sender<Request>, ctx: &egui::Context) -> Value {
     let (reply, receive) = mpsc::channel();
     if tx.send(Request { value, reply }).is_err() {
         return json!({"error": "Honeydew closed"});
     }
     ctx.request_repaint();
-    receive
-        .recv_timeout(Duration::from_secs(3))
-        .unwrap_or_else(|_| json!({"error": "Honeydew did not respond"}))
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match receive.recv_timeout(Duration::from_millis(100)) {
+            Ok(answer) => return answer,
+            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        let idle = now_ms().saturating_sub(LAST_FRAME.load(Ordering::Acquire));
+        if idle >= NO_FRAMES.as_millis() as u64 {
+            background();
+        }
+    }
+    json!({"error": "Honeydew did not respond"})
+}
+
+/// An HTTP request whose first bytes are `bytes`: MCP's Streamable HTTP, JSON answers only.
+fn http(
+    stream: &mut TcpStream,
+    mut bytes: Vec<u8>,
+    token: &str,
+    tx: &Sender<Request>,
+    ctx: &egui::Context,
+) {
+    let mut chunk = [0u8; 4096];
+    let head_end = loop {
+        if let Some(at) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+            break at + 4;
+        }
+        if bytes.len() > MAX_HEAD {
+            return respond(stream, 431, "Request Header Fields Too Large", None);
+        }
+        match stream.read(&mut chunk) {
+            Ok(n) if n > 0 => bytes.extend_from_slice(&chunk[..n]),
+            _ => return,
+        }
+    };
+    let head = String::from_utf8_lossy(&bytes[..head_end]).into_owned();
+    let mut start = head.split("\r\n").next().unwrap_or_default().split(' ');
+    let (method, target) = (
+        start.next().unwrap_or_default(),
+        start.next().unwrap_or_default(),
+    );
+    let header = |name: &str| {
+        head.split("\r\n").skip(1).find_map(|line| {
+            let (k, v) = line.split_once(':')?;
+            k.trim()
+                .eq_ignore_ascii_case(name)
+                .then(|| v.trim().to_owned())
+        })
+    };
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if path != "/mcp" && path != "/" {
+        return respond(stream, 404, "Not Found", None);
+    }
+    match method {
+        "OPTIONS" => return respond(stream, 204, "No Content", None),
+        "POST" => {}
+        _ => return respond(stream, 405, "Method Not Allowed", None),
+    }
+    let bearer = header("authorization").and_then(|v| {
+        v.strip_prefix("Bearer ")
+            .or_else(|| v.strip_prefix("bearer "))
+            .map(str::to_owned)
+    });
+    let in_query = query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("token=").map(str::to_owned));
+    if bearer.or(in_query).as_deref() != Some(token) {
+        return respond(
+            stream,
+            401,
+            "Unauthorized",
+            Some(&json!({"error": "authentication required"})),
+        );
+    }
+    let length: u64 = header("content-length")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if length > MAX_REQUEST {
+        return respond(stream, 413, "Payload Too Large", None);
+    }
+    let mut body = bytes[head_end..].to_vec();
+    while (body.len() as u64) < length {
+        match stream.read(&mut chunk) {
+            Ok(n) if n > 0 => body.extend_from_slice(&chunk[..n]),
+            _ => return,
+        }
+    }
+    body.truncate(length as usize);
+    let Ok(message) = serde_json::from_slice::<Value>(&body) else {
+        let error = json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": "Parse error"}});
+        return respond(stream, 400, "Bad Request", Some(&error));
+    };
+    let answer = match message {
+        Value::Array(batch) => {
+            let answers: Vec<Value> = batch.into_iter().filter_map(|m| rpc(m, tx, ctx)).collect();
+            (!answers.is_empty()).then_some(Value::Array(answers))
+        }
+        one => rpc(one, tx, ctx),
+    };
+    match answer {
+        Some(answer) => respond(stream, 200, "OK", Some(&answer)),
+        // Notifications and responses only.
+        None => respond(stream, 202, "Accepted", None),
+    }
+}
+
+fn respond(stream: &mut TcpStream, code: u16, reason: &str, body: Option<&Value>) {
+    let body = body.map(|b| b.to_string()).unwrap_or_default();
+    let kind = if body.is_empty() {
+        ""
+    } else {
+        "Content-Type: application/json\r\n"
+    };
+    let head = format!(
+        "HTTP/1.1 {code} {reason}\r\n{kind}Content-Length: {}\r\nConnection: close\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         Access-Control-Allow-Methods: POST, OPTIONS\r\n\
+         Access-Control-Allow-Headers: authorization, content-type, accept, mcp-session-id, mcp-protocol-version\r\n\
+         {}\r\n",
+        body.len(),
+        if code == 401 {
+            "WWW-Authenticate: Bearer\r\n"
+        } else if code == 405 {
+            "Allow: POST, OPTIONS\r\n"
+        } else {
+            ""
+        },
+    );
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body.as_bytes());
+}
+
+/// One JSON-RPC message: its response, or `None` for a notification (or a response the client sent).
+fn rpc(message: Value, tx: &Sender<Request>, ctx: &egui::Context) -> Option<Value> {
+    let id = message.get("id").cloned()?;
+    // A response the client sent: nothing to answer.
+    let method = Some(message.get("method")?.as_str()?);
+    let params = message.get("params").cloned().unwrap_or(Value::Null);
+    let result = match method {
+        Some("initialize") => {
+            let asked = params.get("protocolVersion").and_then(Value::as_str);
+            let version = asked
+                .filter(|v| PROTOCOLS.contains(v))
+                .unwrap_or(PROTOCOLS[0]);
+            json!({
+                "protocolVersion": version,
+                "capabilities": {"tools": {"listChanged": false}},
+                "serverInfo": {"name": "honeydew", "version": env!("CARGO_PKG_VERSION")},
+                "instructions": INSTRUCTIONS,
+            })
+        }
+        Some("ping") => json!({}),
+        Some("tools/list") => json!({"tools": tools()}),
+        Some("tools/call") => {
+            let name = params
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let args = params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            match tool_action(name, &args) {
+                None => {
+                    json!({"content": [{"type": "text", "text": format!("Unknown tool: {name}")}], "isError": true})
+                }
+                Some(action) => {
+                    let response = ask(action, tx, ctx);
+                    let error = response.get("error").cloned();
+                    let shown = match &error {
+                        Some(e) => json!({"error": e}),
+                        None => response.get("result").cloned().unwrap_or(Value::Null),
+                    };
+                    json!({"content": [{"type": "text", "text": shown.to_string()}], "isError": error.is_some()})
+                }
+            }
+        }
+        _ => {
+            return Some(json!({"jsonrpc": "2.0", "id": id,
+                "error": {"code": -32601, "message": "Method not found"}}));
+        }
+    };
+    Some(json!({"jsonrpc": "2.0", "id": id, "result": result}))
+}
+
+/// The app action an MCP tool call is (the Python adapter sends the same ones).
+fn tool_action(name: &str, args: &Value) -> Option<Value> {
+    Some(match name {
+        "get_song" => json!({"action": "song"}),
+        "list_instruments" => json!({"action": "instruments"}),
+        "get_instrument_params" => {
+            json!({"action": "instrument_params", "channel_id": args.get("channel_id")})
+        }
+        "set_instrument_params" => json!({"action": "set_instrument_params", "edit": args}),
+        "apply_arrangement" => json!({"action": "arrange", "arrangement": args}),
+        "play" => json!({"action": "play"}),
+        "stop" => json!({"action": "stop"}),
+        "seek" => json!({"action": "seek", "bar": args.get("bar")}),
+        "get_mixer" => json!({"action": "mixer"}),
+        "set_mixer" => json!({"action": "set_mixer", "changes": args.get("changes")}),
+        _ => return None,
+    })
+}
+
+/// The tools, as MCP lists them (tools/honeydew-mcp/server.py lists the same).
+fn tools() -> Value {
+    serde_json::from_str(TOOLS).expect("the tools are JSON")
+}
+
+/// The tools' list ([`tools`]).
+const TOOLS: &str = r#"[
+ {
+  "name": "get_song",
+  "description": "Inspect Honeydew's currently open song, channel IDs, configured instruments/VSTs, drum pad indices, and clip IDs. Read this before composing or replacing a clip.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {},
+   "additionalProperties": false
+  }
+ },
+ {
+  "name": "list_instruments",
+  "description": "List Honeydew's built-in synths and installed instrument plugins. Existing configured plugin tracks should be reused by channel ID; creating new external plugin instances is not supported yet.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {},
+   "additionalProperties": false
+  }
+ },
+ {
+  "name": "get_instrument_params",
+  "description": "Read built-in synth modules and their parameter IDs, names, normalized values (0-1), defaults and display text on an existing channel. Call get_song first. External plugin state is not exposed.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "channel_id": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "channel_id"
+   ],
+   "additionalProperties": false
+  }
+ },
+ {
+  "name": "set_instrument_params",
+  "description": "Adjust 1-32 normalized parameters of one existing built-in synth module. Call get_instrument_params first for its module_id and indexes. Values must be 0-1. All changes validate before applying; they update live audio and song state. Honeydew's existing synth knob edits are not individually undoable. Does not edit external VST/CLAP presets.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "channel_id": {
+     "type": "integer"
+    },
+    "module_id": {
+     "type": "integer"
+    },
+    "changes": {
+     "type": "array",
+     "minItems": 1,
+     "maxItems": 32,
+     "items": {
+      "type": "object",
+      "properties": {
+       "index": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "value": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+       }
+      },
+      "required": [
+       "index",
+       "value"
+      ],
+      "additionalProperties": false
+     }
+    }
+   },
+   "required": [
+    "channel_id",
+    "module_id",
+    "changes"
+   ],
+   "additionalProperties": false
+  }
+ },
+ {
+  "name": "apply_arrangement",
+  "description": "Add or replace 1-16 note/drum clips and optionally set tempo in Honeydew's open song as one undoable edit. Use an existing channel ID to preserve its configured VST sound; use a new built-in synth or Drums for a new channel. Call get_song first. Bars are zero-based; note beats are quarter-note positions relative to each clip. For drums, key is the pad index returned by get_song. To revise a clip, pass replace_clip_id and the existing start_bar/bars. Does not change plugin presets or render audio.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "tempo_bpm": {
+     "type": "number",
+     "minimum": 1,
+     "maximum": 999
+    },
+    "tracks": {
+     "type": "array",
+     "minItems": 1,
+     "maxItems": 16,
+     "items": {
+      "type": "object",
+      "properties": {
+       "target": {
+        "oneOf": [
+         {
+          "type": "object",
+          "properties": {
+           "kind": {
+            "const": "existing"
+           },
+           "channel_id": {
+            "type": "integer"
+           },
+           "replace_clip_id": {
+            "type": "integer",
+            "minimum": 1
+           }
+          },
+          "required": [
+           "kind",
+           "channel_id"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "kind": {
+            "const": "new"
+           },
+           "instrument": {
+            "type": "string"
+           },
+           "name": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "kind",
+           "instrument"
+          ],
+          "additionalProperties": false
+         }
+        ]
+       },
+       "start_bar": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4095
+       },
+       "bars": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 16
+       },
+       "notes": {
+        "type": "array",
+        "maxItems": 512,
+        "items": {
+         "type": "object",
+         "properties": {
+          "beat": {
+           "type": "number",
+           "minimum": 0
+          },
+          "length_beats": {
+           "type": "number",
+           "exclusiveMinimum": 0
+          },
+          "key": {
+           "type": "integer",
+           "minimum": 0,
+           "maximum": 127
+          },
+          "velocity": {
+           "type": "integer",
+           "minimum": 1,
+           "maximum": 255
+          }
+         },
+         "required": [
+          "beat",
+          "length_beats",
+          "key",
+          "velocity"
+         ],
+         "additionalProperties": false
+        }
+       }
+      },
+      "required": [
+       "target",
+       "start_bar",
+       "bars",
+       "notes"
+      ],
+      "additionalProperties": false
+     }
+    }
+   },
+   "required": [
+    "tracks"
+   ],
+   "additionalProperties": false
+  }
+ },
+ {
+  "name": "play",
+  "description": "Start Honeydew's playback from the current song position (as the Play button does).",
+  "inputSchema": {
+   "type": "object",
+   "properties": {},
+   "additionalProperties": false
+  }
+ },
+ {
+  "name": "stop",
+  "description": "Stop Honeydew's playback (as the Stop button does); the position stays where it is.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {},
+   "additionalProperties": false
+  }
+ },
+ {
+  "name": "seek",
+  "description": "Move the song position to a zero-based bar (fractions allowed: 1.5 is half way through the second bar). Playback continues from there if it is playing.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "bar": {
+     "type": "number",
+     "minimum": 0,
+     "maximum": 4096
+    }
+   },
+   "required": [
+    "bar"
+   ],
+   "additionalProperties": false
+  }
+ },
+ {
+  "name": "get_mixer",
+  "description": "Read the mixer: each channel's ID (0 is the master), name, level and pan (normalized 0-1, with their display text), mute and solo.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {},
+   "additionalProperties": false
+  }
+ },
+ {
+  "name": "set_mixer",
+  "description": "Set 1-32 mixer changes: per channel ID (0 is the master), any of level (0-1, the default 0.8531 is 0 dB), pan (0-1, 0.5 centred), mute and solo. All changes validate before applying. Not individually undoable, as mixer moves are not.",
+  "inputSchema": {
+   "type": "object",
+   "properties": {
+    "changes": {
+     "type": "array",
+     "minItems": 1,
+     "maxItems": 32,
+     "items": {
+      "type": "object",
+      "properties": {
+       "channel_id": {
+        "type": "integer"
+       },
+       "level": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+       },
+       "pan": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+       },
+       "mute": {
+        "type": "boolean"
+       },
+       "solo": {
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "channel_id"
+      ],
+      "additionalProperties": false
+     }
+    }
+   },
+   "required": [
+    "changes"
+   ],
+   "additionalProperties": false
+  }
+ }
+]"#;
+
+/// One `set_mixer` change.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MixerChange {
+    channel_id: i32,
+    level: Option<f64>,
+    pan: Option<f64>,
+    mute: Option<bool>,
+    solo: Option<bool>,
+}
+
+/// Validates every change before touching the song; returns each (channel index, param index, value) set.
+fn set_mixer(
+    song: &mut Song,
+    changes: Vec<MixerChange>,
+) -> Result<Vec<(usize, usize, f32)>, String> {
+    if changes.is_empty() || changes.len() > 32 {
+        return Err("provide 1–32 mixer changes".into());
+    }
+    let mut set = Vec::new();
+    for change in &changes {
+        let channel = (song.channels.iter())
+            .position(|ch| ch.id == change.channel_id)
+            .ok_or_else(|| format!("channel {} is not in the open song", change.channel_id))?;
+        for (index, value) in [(0, change.level), (1, change.pan)] {
+            if let Some(v) = value {
+                if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+                    return Err("level and pan must be from 0 to 1".into());
+                }
+                set.push((channel, index, v as f32));
+            }
+        }
+        for (index, on) in [(2, change.mute), (3, change.solo)] {
+            if let Some(on) = on {
+                set.push((channel, index, if on { 1.0 } else { 0.0 }));
+            }
+        }
+    }
+    if set.is_empty() {
+        return Err("each change needs level, pan, mute or solo".into());
+    }
+    for &(channel, index, value) in &set {
+        song.channels[channel].params.0[index] = value;
+    }
+    Ok(set)
 }
 
 #[derive(Deserialize)]
@@ -419,12 +1089,72 @@ fn arrange(song: &Song, request: Arrangement) -> Result<(Song, Vec<Value>), Stri
 }
 
 impl HoneydewApp {
-    pub(super) fn control_frame(&mut self, tick: u64) {
+    /// The requests that came in, answered. Returns a `seek`'s tick, for the transport to go to this frame.
+    pub(super) fn control_frame(&mut self, tick: u64) -> Option<u64> {
         let requests = self.control.as_ref().map(Bridge::drain).unwrap_or_default();
+        let mut seek = None;
         for request in requests {
+            let seeking = request.value.get("action").and_then(Value::as_str) == Some("seek");
+            if seeking && let Ok(at) = self.control_seek(&request.value) {
+                seek = Some(at);
+            }
             let response = self.control_call(request.value, tick);
             let _ = request.reply.send(response);
         }
+        seek
+    }
+
+    /// The requests answered while no frame runs ([`background`]), and the transport moved as a frame would: Play,
+    /// Stop and a seek go to the engine at once.
+    fn control_background(&mut self) {
+        let tick = self.audio.poll().map_or(0, |s| s.transport_tick);
+        let was_playing = self.main_screen.playing;
+        let seek = self.control_frame(tick);
+        let playing = self.main_screen.playing;
+        if playing != was_playing {
+            if playing {
+                self.main_screen.play_start = tick;
+            }
+            self.audio.send(if playing {
+                AudioCommand::Play
+            } else {
+                AudioCommand::Stop
+            });
+        }
+        if let Some(at) = seek {
+            self.audio.send(AudioCommand::Seek(at));
+            self.main_screen.play_start = at;
+            // As a frame's seek: one while playing turns recording off.
+            self.main_screen.armed &= !playing;
+        }
+    }
+
+    /// A `seek`'s tick: `bar` (zero-based, fractions allowed) in the song's bars.
+    fn control_seek(&self, value: &Value) -> Result<u64, String> {
+        let bar = value
+            .get("bar")
+            .and_then(Value::as_f64)
+            .ok_or("bar must be a number")?;
+        if !bar.is_finite() || !(0.0..=4096.0).contains(&bar) {
+            return Err("bar must be 0–4096".into());
+        }
+        let beats = bar * f64::from(self.song.time_sig.bar_beats());
+        Ok((beats * f64::from(PPQ)).round() as u64)
+    }
+
+    fn control_mixer(&self) -> Value {
+        let spec = crate::params::CHANNEL_PARAMS;
+        json!({"channels": self.song.channels.iter().map(|ch| {
+            let p = &ch.params.0;
+            let name = if ch.id == 0 { "Master" } else { ch.name.as_str() };
+            json!({
+                "id": ch.id,
+                "name": name,
+                "level": p[0], "level_text": spec[0].display_text(p[0]),
+                "pan": p[1], "pan_text": spec[1].display_text(p[1]),
+                "mute": p[2] >= 0.5, "solo": p[3] >= 0.5,
+            })
+        }).collect::<Vec<_>>()})
     }
 
     fn control_call(&mut self, value: Value, tick: u64) -> Value {
@@ -473,6 +1203,36 @@ impl HoneydewApp {
                     Ok(json!({"created": made, "undo_steps": 1}))
                 })
             }
+            Some("play") => {
+                self.main_screen.playing = true;
+                Ok(json!({"playing": true}))
+            }
+            Some("stop") => {
+                self.main_screen.playing = false;
+                Ok(json!({"playing": false}))
+            }
+            // The transport goes there this frame ([`Self::control_frame`]).
+            Some("seek") => self
+                .control_seek(&value)
+                .map(|tick| json!({"bar": value.get("bar"), "tick": tick})),
+            Some("mixer") => Ok(self.control_mixer()),
+            Some("set_mixer") => serde_json::from_value::<Vec<MixerChange>>(
+                value.get("changes").cloned().unwrap_or(Value::Null),
+            )
+            .map_err(|e| e.to_string())
+            .and_then(|changes| {
+                let set = set_mixer(&mut self.song, changes)?;
+                for &(channel, index, value) in &set {
+                    self.audio.send(AudioCommand::SetParam {
+                        channel,
+                        instance_id: 0,
+                        index: index as i32,
+                        value,
+                    });
+                }
+                self.song_edited(SongEdit::ChannelParam, tick);
+                Ok(json!({"changed": set.len(), "undoable": false}))
+            }),
             _ => Err("unknown action".into()),
         };
         match answer {
@@ -538,6 +1298,61 @@ impl HoneydewApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_mcp_tools_parse_and_each_maps_to_an_action() {
+        let tools = tools();
+        let names: Vec<&str> = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "get_song",
+                "list_instruments",
+                "get_instrument_params",
+                "set_instrument_params",
+                "apply_arrangement",
+                "play",
+                "stop",
+                "seek",
+                "get_mixer",
+                "set_mixer"
+            ]
+        );
+        for name in names {
+            assert!(tool_action(name, &json!({})).is_some(), "{name}");
+        }
+        assert!(tool_action("render", &json!({})).is_none());
+    }
+
+    #[test]
+    fn transport_and_mixer_actions() {
+        let mut app = HoneydewApp::default();
+        app.control_call(json!({"action": "play"}), 0);
+        assert!(app.main_screen.playing);
+        app.control_call(json!({"action": "stop"}), 0);
+        assert!(!app.main_screen.playing);
+        let bar_ticks = u64::from(app.song.time_sig.bar_beats()) * u64::from(PPQ);
+        assert_eq!(app.control_seek(&json!({"bar": 2.0})), Ok(2 * bar_ticks));
+        assert!(app.control_seek(&json!({"bar": -1.0})).is_err());
+        let bad = app.control_call(
+            json!({"action": "set_mixer", "changes": [{"channel_id": 0, "level": 2.0}]}),
+            0,
+        );
+        assert!(bad.get("error").is_some(), "{bad}");
+        let ok = app.control_call(
+            json!({"action": "set_mixer", "changes": [{"channel_id": 0, "level": 0.5, "mute": true}]}),
+            0,
+        );
+        assert_eq!(ok["result"]["changed"], 2, "{ok}");
+        assert_eq!(app.song.channels[0].params.0[0], 0.5);
+        let mixer = app.control_call(json!({"action": "mixer"}), 0);
+        assert_eq!(mixer["result"]["channels"][0]["mute"], true);
+    }
 
     #[test]
     fn arrangement_is_one_valid_song_with_builtin_drum_and_synth() {

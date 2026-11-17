@@ -1,0 +1,21 @@
+OSPRESET 1
+plugin=Lemon Limiter	id=clap:org.openstudio.lemon-limiter	format=clap	body=params
+# Honeydew's own preset (tools/lemon_presets.py).
+Gain = 1450
+Soft saturation threshold = 1000
+Limiter ceiling = 1000
+Limiter attack time = 1115
+Limiter attack curve = 2
+Limiter release time = 5000
+Limiter release curve = 2
+Limiter peak window = 2882
+Comp threshold = 250
+Comp ratio = 1500
+Comp knee = 1500
+Comp attack time = 4500
+Comp release time = 6800
+Comp curve = 1
+Comp RMS window = 650
+Noise gain = 1000
+Noise threshold = 0
+Noise release time = 4187

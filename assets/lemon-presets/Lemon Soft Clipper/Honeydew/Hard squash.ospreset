@@ -1,0 +1,5 @@
+OSPRESET 1
+plugin=Lemon Soft Clipper	id=clap:org.openstudio.lemon-soft-clipper	format=clap	body=params
+# Honeydew's own preset (tools/lemon_presets.py).
+Threshold = 30
+Post gain = 120

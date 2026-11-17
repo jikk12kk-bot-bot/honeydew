@@ -312,6 +312,18 @@ fn slides_add_pitch_and_clear_when_a_free_voice_starts() {
 }
 
 #[test]
+fn a_reused_voice_starts_without_the_last_slide() {
+    // MONO reuses voice 1 while it still rings: the next note plays on its own key (upstream #143).
+    let mut synth = fresh();
+    synth.set_parameter(1, 0.5).unwrap();
+    synth.note_on(60, 1.0);
+    synth.slide(12.0, 0.0, 0.0);
+    synth.note_off(60);
+    synth.note_on(62, 1.0);
+    assert_eq!(synth.voices[0].slide, [0.0; 3]);
+}
+
+#[test]
 fn a_released_voice_frees_once_both_smoothed_gains_fall_below_1e_5() {
     let mut synth = fresh();
     synth.set_parameter(25, 0.0).unwrap();
