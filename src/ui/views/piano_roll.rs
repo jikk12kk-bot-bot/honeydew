@@ -9,7 +9,7 @@ use honeydew_audio::device::AudioCommand;
 use super::{AppCtx, Nav, View};
 use crate::song::Song;
 use crate::ui::clips::LiveTake;
-use crate::ui::piano_roll::{PianoRoll, PianoRollAction, RollOptions};
+use crate::ui::piano_roll::{PianoRoll, PianoRollAction, RollOptions, generate};
 
 /// What the piano roll keeps between frames: each channel's roll, by channel index (the app re-keys them when
 /// channels move, `app/tracks.rs`).
@@ -26,12 +26,20 @@ pub struct State {
 
 impl State {
     /// Opens the `Generate` panel of `channel`'s roll from the transport bar's GENERATE button, where the note menu's
-    /// entry needs a note selected first. A channel with no roll yet gets one; a second tap writes another progression.
-    pub(crate) fn open_generate(&mut self, ctx: &egui::Context, song: &Song, channel: usize) {
+    /// entry needs a note selected first. A channel with no roll yet gets one. It opens as the settings' `memory`
+    /// (`pianoRollGenerate`) left it, when they keep one.
+    pub(crate) fn open_generate(
+        &mut self,
+        ctx: &egui::Context,
+        song: &Song,
+        channel: usize,
+        memory: &[u32],
+    ) {
         let roll = self
             .rolls
             .entry(channel)
             .or_insert_with(|| PianoRoll::for_channel(song, channel));
+        roll.generate_memory = generate::Panel::from_prefs(memory).or(roll.generate_memory);
         roll.open_generate(ctx);
     }
 }
@@ -47,9 +55,9 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, app: &mut AppCtx, channel: usi
         .entry(channel)
         .or_insert_with(|| PianoRoll::for_channel(app.song, channel));
     let opts = RollOptions {
-        key_names: app.settings.key_names,
         ghost_notes: app.ghost_notes,
         middle_c_is_c4: app.middle_c_is_c4,
+        key_names: app.settings.key_names,
         playhead: app.snapshot.map_or(0, |s| s.transport_tick),
         lead: app.audio.playhead_lead(),
         playing: app.playing,
@@ -66,21 +74,22 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, app: &mut AppCtx, channel: usi
     roll.value_snap = [app.settings.velocity_snap, app.settings.pan_snap];
     // So is the grid size (#53).
     roll.snap.size = app.settings.grid_size;
-    let actions = roll.show(
-        ui,
-        app.regions.editor,
-        &app.cx,
-        app.song,
-        &opts,
-        &mut app.settings.graph_tab_shift,
-    );
+    // And the graph lane tab's place (PR #87), and the Generate panel as it was last left.
+    roll.graph_tab_shift = app.settings.graph_tab_shift;
+    roll.generate_memory = generate::Panel::from_prefs(&app.settings.generate_panel);
+    let actions = roll.show(ui, app.regions.editor, &app.cx, app.song, &opts);
     [app.settings.velocity_snap, app.settings.pan_snap] = roll.value_snap;
     app.settings.grid_size = roll.snap.size;
+    app.settings.graph_tab_shift = roll.graph_tab_shift;
+    if let Some(panel) = roll.generate_memory {
+        app.settings.generate_panel = panel.to_prefs();
+    }
     for action in actions {
         match action {
             PianoRollAction::SongEdited { final_edit } => app.song_edited(final_edit),
             PianoRollAction::QuietEdit => app.quiet_edited(),
             PianoRollAction::Resync => app.resync_edited(),
+            PianoRollAction::Audition => app.edit = app.edit.max(Some(super::SongEdit::Audition)),
             PianoRollAction::SetPlayhead(tick) => app.set_playhead(tick),
             PianoRollAction::Play => app.play(),
             PianoRollAction::Seek(tick) => app.seek = Some(tick),

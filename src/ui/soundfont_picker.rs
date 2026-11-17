@@ -4,8 +4,9 @@
 //!   name, the patch names in file order (`Sort` `Default`), or by name (`A-Z`, [`PatchOrdering`]), which `Search`
 //!   filters. The current patch is the current row, scrolled into view as it opens. A patch is the pick, and the
 //!   picker stays in the patches, the pick now current. Back goes to the files.
-//! - **The files**, where it opens without a SoundFont: a [`PresetPicker`]'s root and folders over `My SoundFonts`,
-//!   titled [`TITLE`]: `My Files`, then the folders and the `.sf2` and `.sfz` files by name. No `Default`. No factory
+//! - **The files**, where it opens without a SoundFont: a [`PresetPicker`]'s root and folders over the user folder,
+//!   titled [`TITLE`]: `My Files`, then its shortcuts (`My SoundFonts` by default, [`SoundFontPicker::with_shortcuts`]),
+//!   and in a folder its folders and the `.sf2` and `.sfz` files by name. No `Default`. No factory
 //!   SoundFonts are shipped; with imported content in the content folder the root then lists its `SoundFonts`, read-only
 //!   ([`SoundFontPicker::with_factory`]). A SoundFont opens in its patches. An SFZ is one patch, named after its file:
 //!   it opens in it, and is the pick at once. One that cannot be read is the pick, with its error: the caller loads it,
@@ -24,6 +25,7 @@ use crate::ui::main_menu::SongLibrary;
 use crate::ui::modules_browser::{
     Chrome, PanelClick, PanelRow, RowKind, SideButton, SidePanel, crumb_text, layout, sort_menu,
 };
+use crate::ui::picker_preview::Sound;
 use crate::ui::preset_picker::{PickerAction, PresetPicker, natural};
 
 /// The root's title: the factory folder's name.
@@ -103,6 +105,8 @@ pub struct SoundFontPicker {
     pub sort_picked: Option<PatchOrdering>,
     /// `Sort`'s menu, open, centred on its button.
     sort_menu: Option<Pos2>,
+    /// The keys' notes let go as the patches closed, until taken.
+    sounds: Vec<Sound>,
 }
 
 impl SoundFontPicker {
@@ -117,7 +121,31 @@ impl SoundFontPicker {
             sort: PatchOrdering::Default,
             sort_picked: None,
             sort_menu: None,
+            sounds: Vec::new(),
         }
+    }
+
+    /// Issue #131: its files keep where they are left ([`PresetPicker::keep_place`]).
+    pub fn keep_place(&mut self, ctx: &Context, library: &dyn SongLibrary, id: Id) {
+        self.files.keep_place(ctx, library, id);
+    }
+
+    /// The notes since the last call, for the channel.
+    pub fn take_sounds(&mut self) -> Vec<Sound> {
+        std::mem::take(&mut self.sounds)
+    }
+
+    /// Every note held goes off (take the notes after): the keyboard's are the app's own.
+    pub fn release(&mut self) {}
+
+    /// Its root's shortcuts by default, after `My Files` ([`PresetPicker::with_shortcuts`]): the app's is
+    /// `My SoundFonts`, its `My Files` being the whole user folder.
+    pub fn with_shortcuts<S: Into<String>>(
+        mut self,
+        defaults: impl IntoIterator<Item = S>,
+    ) -> Self {
+        self.files = self.files.with_shortcuts(defaults);
+        self
     }
 
     /// Lists the SoundFonts in `folder` (the content folder's `SoundFonts`) at the root, after `My Files`.
@@ -202,6 +230,7 @@ impl SoundFontPicker {
                 sub: None,
                 kind: RowKind::Enabled(i),
                 picked: current == Some(i),
+                mark: None,
             })
             .collect()
         });
@@ -213,6 +242,9 @@ impl SoundFontPicker {
                 None
             }
             PanelClick::Back => {
+                // The keys go with the patches.
+                self.release();
+                self.sounds = self.take_sounds();
                 self.open = None;
                 None
             }

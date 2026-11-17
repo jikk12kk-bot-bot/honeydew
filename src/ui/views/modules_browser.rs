@@ -11,7 +11,8 @@ use crate::ui::rack::{Held, Outcome, PresetTarget, hold_removal, paste, takes};
 /// The flash of a `Paste` with nothing on the clipboard that the channel takes.
 pub const CANNOT_PASTE: &str = "Cannot paste module";
 
-/// The open browser. It starts afresh on each opening, however it was last closed: the slide-in, an empty search.
+/// The open browser. It starts afresh on each opening, however it was last closed: the slide-in, an empty search; but
+/// its list opens scrolled where the last browse left it, on any channel ([`State::scroll`]).
 #[derive(Default)]
 pub struct State {
     browser: ModulesBrowser,
@@ -20,15 +21,20 @@ pub struct State {
     /// A `Replace` of a module automation lanes target, held back ([`hold_removal`]): the app asks `Delete automation?`
     /// first.
     pub(crate) ask_remove: Option<Held>,
-    /// The module this session's last pick added, by instance id: the next pick replaces it, in its slot.
-    added: Option<i32>,
+    /// How far the list was scrolled when last drawn without a search, in points: the next opening (from any channel's
+    /// rack, or back from `Rack Preset` / `Instrument`) starts there.
+    scroll: f32,
+    /// This opening's scroll as first drawn (the stored one, kept within this channel's list), and whether it moved
+    /// since: only a move is stored, so a shorter list (a drum channel's) does not pull a longer one's place up.
+    first: Option<(f32, bool)>,
 }
 
 /// Draws the browser, modal, over the left of the screen. A pick adds the module to `channel`'s rack at `at` (an
 /// instrument only where the channel takes one: the instruments are not listed elsewhere) with no undo step, and the
 /// browser stays open: each later pick of the session (an opening starts one) replaces the module the last one added,
-/// in its slot, so the whole browse adds one module. `Paste` (always enabled) copies the `clipboard` modules that fit
-/// the channel ([`paste`]), a final song edit, and closes it; a `Paste` of nothing that fits flashes [`CANNOT_PASTE`]
+/// in its slot, so the whole browse adds one module, its lists in its place included (issue #123: through `picker`'s
+/// `added`, which their Back keeps). `Paste` (always enabled) copies the `clipboard` modules that fit the channel
+/// ([`paste`]), a final song edit, and closes it; a `Paste` of nothing that fits flashes [`CANNOT_PASTE`]
 /// instead. A `Replace` of a module automation lanes target is held back for the app's question
 /// ([`State::ask_remove`]), and closes it. `Rack Preset` and `Instrument` give way to their lists in the same panel
 /// (`PresetTarget::ModulesRack`, `PresetTarget::ModulesInstrument`), whose Back at their root brings the browser back
@@ -48,17 +54,31 @@ pub fn show(
     let pass = ui.ctx().cumulative_pass_nr();
     if state.pass + 1 != pass {
         // Its ordering is the stored one, applied at each opening. Back from a list in its place: no slide-in.
-        state.browser = match std::mem::take(&mut picker.back_to_modules) {
+        let back = std::mem::take(&mut picker.back_to_modules);
+        state.browser = match back {
             true => ModulesBrowser::in_place(),
             false => ModulesBrowser::default(),
         };
         state.browser.sort = app.settings.module_ordering();
-        state.added = None;
+        state.browser.set_scroll(state.scroll);
+        state.first = None;
+        // An opening starts a browse; Back from a list goes on with it.
+        if !back {
+            picker.added = None;
+        }
     }
     state.pass = pass;
     let action = match app.song.channels.get(channel) {
         Some(ch) => {
             let action = state.browser.show(ui.ctx(), &app.cx, takes(ch));
+            // Where it is scrolled, for the next opening: kept as it draws, so any close keeps it.
+            if let Some(scroll) = state.browser.scroll() {
+                let (first, moved) = state.first.get_or_insert((scroll, false));
+                *moved |= scroll != *first;
+                if *moved {
+                    state.scroll = scroll;
+                }
+            }
             // A pick from `Sort`'s menu is saved as `ModuleBrowserOrdering`, the active one too; an opening saves
             // nothing.
             if let Some(sort) = state.browser.sort_picked.take() {
@@ -71,18 +91,18 @@ pub fn show(
     let before = app.song.channels.get(channel).cloned();
     let edited = match (action, app.song.channels.get_mut(channel)) {
         (BrowserAction::Pick(type_id), Some(ch)) => {
-            let at = state.added.map_or(at, InsertAt::Replace);
+            let at = picker.added.map_or(at, InsertAt::Replace);
             let id = add_module(&mut ch.rack, type_id, at);
-            state.added = Some(id);
+            picker.added = Some(id);
             // Every new DW Sampler loads Close Grand.
             preset_picker::load_close_grand(picker, app.files, ch.id, id, type_id);
             true
         }
         (BrowserAction::Plugin(uid), Some(ch)) => {
-            let at = state.added.map_or(at, InsertAt::Replace);
+            let at = picker.added.map_or(at, InsertAt::Replace);
             match add_plugin(&mut ch.rack, ch.id, uid, at) {
                 Ok(id) => {
-                    state.added = Some(id);
+                    picker.added = Some(id);
                     // Its own editor opens at once if it has one; a failure shows on its card.
                     if let Some(plugins::State::Live(info)) = plugins::state(ch.id, id)
                         && info.has_editor

@@ -1369,7 +1369,7 @@ fn the_header_row_follows_section_3_3() {
     let r = |x0, y0, x1, y1| Rect::from_min_max(pos2(x0, y0), pos2(x1, y1));
     // Toggle, icon, preset and ≡: 8 px top and bottom; the name 4 px and 0.25 U left; the name takes what is left.
     assert_eq!(
-        header_row(card, 100.0, 2.0, false)[..5],
+        header_row(card, 100.0, 2.0, false, false)[..5],
         [
             r(150.0, 88.0, 300.0, 222.0),
             r(300.0, 88.0, 450.0, 222.0),
@@ -1378,18 +1378,42 @@ fn the_header_row_follows_section_3_3() {
             r(1700.0, 88.0, 1850.0, 222.0),
         ]
     );
-    // The preset button is the name's 10 pt width + 1 U, at most 5 U.
-    assert_eq!(preset_width(150.0, 100.0), 2.5);
-    assert_eq!(preset_width(400.0, 100.0), 5.0);
-    assert_eq!(preset_width(900.0, 100.0), 5.0);
-    // ▶: (R − 0.35 U, cy ∓ 0.175 U), (R − 0.175 U, cy).
-    let preset = r(1500.0, 88.0, 1700.0, 222.0);
+    // #98: a 1 U ◀ and ▶ either side of the preset button, out of the name's room.
+    let [.., previous, next] = header_row(card, 100.0, 2.0, true, false);
     assert_eq!(
-        play_triangle(preset, 100.0),
+        header_row(card, 100.0, 2.0, true, false)[2..5],
         [
-            pos2(1665.0, 137.5),
-            pos2(1665.0, 172.5),
-            pos2(1682.5, 155.0)
+            r(475.0, 84.0, 1300.0, 226.0),
+            r(1400.0, 88.0, 1600.0, 222.0),
+            r(1700.0, 88.0, 1850.0, 222.0),
+        ]
+    );
+    assert_eq!(
+        [previous, next],
+        [
+            r(1300.0, 88.0, 1400.0, 222.0),
+            r(1600.0, 88.0, 1700.0, 222.0)
+        ]
+    );
+    // The preset button is the name's 10 pt width + 0.4 U, at most 4.5 U.
+    assert_eq!(preset_width(150.0, 100.0), 1.9);
+    assert_eq!(preset_width(400.0, 100.0), 4.4);
+    assert_eq!(preset_width(900.0, 100.0), 4.5);
+    // The ▶ (0.175 U wide, 0.35 U tall), 0.175 U past the button's edge: ▶ in its cell, ◀ mirrored.
+    assert_eq!(
+        step_triangle(next, 100.0, true),
+        [
+            pos2(1617.5, 137.5),
+            pos2(1617.5, 172.5),
+            pos2(1635.0, 155.0)
+        ]
+    );
+    assert_eq!(
+        step_triangle(previous, 100.0, false),
+        [
+            pos2(1382.5, 172.5),
+            pos2(1382.5, 137.5),
+            pos2(1365.0, 155.0)
         ]
     );
 }
@@ -1497,6 +1521,10 @@ fn instrument_card_menus_add_set_range_or_set_first_note() {
     }
     // An instrument's preset saves like an effect's.
     assert!(!disabled(0, CardAction::SavePreset) && !disabled(33, CardAction::SavePreset));
+    // A plugin's saves its plugin's state ([`crate::plugins::presets`]).
+    use crate::song::plugin::{PLUGIN_EFFECT, PLUGIN_INSTRUMENT};
+    assert!(!disabled(PLUGIN_INSTRUMENT, CardAction::SavePreset));
+    assert!(!disabled(PLUGIN_EFFECT, CardAction::SavePreset));
 }
 
 impl Rig {
@@ -1583,20 +1611,20 @@ fn a_new_synth_channel_shows_its_instrument_card() {
         (name.left() - (card.left() + 3.25 * U)).abs() <= 1.0,
         "{name:?}"
     );
-    // The preset button left of the ≡: `Default` 10 pt, 0.2 U in, then the ▶ at its right edge.
+    // The preset button left of the ▶ cell (#98) and the ≡: `Default` 10 pt, 0.2 U in; the ▶ 0.175 U past it.
     let preset = rig.text("Default");
     assert_eq!(rig.font_size("Default"), m.font_id(FontSize::Pt10).size);
-    let right = card.right() - 1.5 * U;
-    let left = right - (preset.width() + U);
+    let right = card.right() - 2.5 * U;
+    let left = right - (preset.width() + 0.4 * U);
     assert!(
         (preset.left() - (left + 0.2 * U)).abs() <= 1.0,
         "{preset:?}"
     );
     let cy = card.top() + 0.75 * U;
     assert!(rig.triangle_drawn([
-        pos2(right - 0.35 * U, cy - 0.175 * U),
-        pos2(right - 0.35 * U, cy + 0.175 * U),
-        pos2(right - 0.175 * U, cy),
+        pos2(right + 0.175 * U, cy - 0.175 * U),
+        pos2(right + 0.175 * U, cy + 0.175 * U),
+        pos2(right + 0.35 * U, cy),
     ]));
     // The body is the DW Sampler panel in the module area, its own tab strip on top; the card draws no strip and no
     // placeholder.
@@ -1719,7 +1747,8 @@ fn inserting_a_picked_module_always_changes_the_chain_and_its_edits_are_sent() {
 fn the_collapse_tab_and_the_left_margin_close_the_rack_and_the_header_does_not() {
     let mut rig = Rig::new(&[6]);
     let c = Chrome::new(rack_rect(SCREEN), U);
-    rig.click(c.collapse.unwrap().center());
+    rig.rack.tab_y = 400.0;
+    rig.click(collapse_tab(rack_rect(SCREEN), U, 400.0).center());
     assert!(rig.actions.close);
     // Anywhere in the 1.5 U margin under the header.
     rig.click(pos2(c.bar.left() - 0.1 * U, c.header_bottom + 2.0 * U));
@@ -2164,13 +2193,13 @@ fn ellipsis<'a>(shown: &'a str, full: &str) -> (&'a str, &'a str) {
 
 #[test]
 fn a_card_name_wider_than_its_label_is_truncated_keeping_5_tail_characters() {
-    // A 14 U (full-screen) rack: 0.5 U margins and 13 U cards, whose name label (3.25 U in) is narrower than
-    // `SoundFont Player` at 12 pt.
+    // A 15.5 U (full-screen) rack: 0.5 U margins and 14.5 U cards, whose name label (3.25 U in, up to the ◀ of the
+    // preset button) is narrower than `SoundFont Player` at 12 pt.
     let mut song = crate::song::Song::default();
     song.add_channel(ChannelKind::Synth(SynthKind::SoundFontPlayer));
     let mut channel = song.channels.pop().unwrap();
     let mut rack = RackPanel::default();
-    let view = Rect::from_min_size(pos2(0.0, 0.0), vec2(14.0 * U, 800.0));
+    let view = Rect::from_min_size(pos2(0.0, 0.0), vec2(15.5 * U, 800.0));
     let texts = one_frame(|ui, cx| {
         rack.show(ui, cx, view, CHANNEL, &mut channel);
     });
@@ -2208,12 +2237,12 @@ fn the_preset_name_is_truncated_with_an_end_ellipsis() {
     let (head, tail) = ellipsis(&shown, full);
     assert!(head.len() > 3 && tail.is_empty(), "{shown}");
     assert_eq!(size, 20.0);
-    // Left-aligned in the button inset 0.2 U, and clear of the ▶ (its left edge 0.35 U in).
+    // Left-aligned in the button inset 0.2 U, and ending 0.2 U in (its ▶ is the ▶ cell's, #98).
     assert!(
         (rect.left() - (button.left() + 0.2 * U)).abs() < 1e-3,
         "{rect:?}"
     );
-    assert!(rect.right() <= button.right() - 0.5 * U, "{rect:?}");
+    assert!(rect.right() <= button.right() - 0.2 * U, "{rect:?}");
     assert!(rect.right() > button.right() - 1.5 * U, "{rect:?}");
 }
 
@@ -2464,12 +2493,13 @@ fn the_preset_button_shows_the_modules_preset_name_and_is_as_wide_as_it() {
     channel.rack.modules[1].file.preset_name = long.into();
     let rig = Rig::with(channel);
     let cards = rig.cards();
-    // The name and its 1 U of room, left of the ≡; the name starts 0.2 U in. The layout snaps to pixels.
+    // The name and its 0.4 U of room, left of the ▶ cell and the ≡; the name starts 0.2 U in. The layout snaps to
+    // pixels.
     let crunch = rig.text("Crunch");
     let width = preset_width(crunch.width(), U);
-    let left = cards[0].right() - (1.5 + width) * U + 0.2 * U;
+    let left = cards[0].right() - (1.5 + 1.0 + width) * U + 0.2 * U;
     assert!((crunch.left() - left).abs() < 1.0, "{crunch:?} {left}");
-    // At most 5 U, the name cut short.
+    // At most 4.5 U, the name cut short.
     let (shown, rect) = (rig.shapes.iter())
         .find_map(|c| match &c.shape {
             egui::Shape::Text(t) if t.galley.text().starts_with("A preset") => Some((
@@ -2480,14 +2510,14 @@ fn the_preset_button_shows_the_modules_preset_name_and_is_as_wide_as_it() {
         })
         .expect("drawn");
     ellipsis(&shown, long);
-    let left = cards[1].right() - (1.5 + 5.0) * U + 0.2 * U;
+    let left = cards[1].right() - (1.5 + 1.0 + 4.5) * U + 0.2 * U;
     assert!((rect.left() - left).abs() < 1.0, "{rect:?} {left}");
 }
 
 #[test]
 fn the_preset_button_and_load_rack_preset_ask_for_the_preset_picker() {
     let mut rig = Rig::new(&[6, 11]);
-    rig.click(rig.header(1, -2.0));
+    rig.click(rig.header(1, -3.0));
     assert_eq!(rig.actions.picker, Some(PresetTarget::Module(3)));
     let before = rig.channel.clone();
     rig.open(rack_menu_at());
@@ -3545,7 +3575,7 @@ fn the_preset_button_of_a_soundfont_player_opens_the_preset_picker_like_every_mo
     // the `Patch` spinner's, when there are no patches to list.
     for read in [Some(5), None] {
         let mut rig = soundfont_rig(1, read);
-        rig.click(rig.header(0, -2.0));
+        rig.click(rig.header(0, -3.0));
         assert_eq!(rig.actions.picker, Some(PresetTarget::Module(2)));
         assert_eq!(rig.actions.soundfont, None);
     }
@@ -3607,7 +3637,7 @@ fn a_portrait_window_over_20_u_wide_gets_the_full_screen_rack_and_full_width_men
         .rack;
     assert_eq!(rack.x_range(), screen.x_range());
     let c = Chrome::new(rack, m.u_px());
-    assert!(c.full && c.close.is_some() && c.collapse.is_none());
+    assert!(c.full && c.close.is_some());
     assert_eq!(crate::ui::main_menu::shell_layout(screen, &m).panel, screen);
     let picker = crate::ui::modules_browser::layout(screen, 1.0, &m).panel;
     assert_eq!(picker.x_range(), screen.x_range());
@@ -3645,20 +3675,25 @@ fn the_rack_slides_halfway_each_frame_and_snaps_within_a_pixel() {
 #[test]
 fn the_chrome_is_full_screen_below_20_u_with_margins_from_1_5_down_to_0_5_u() {
     let u = 32.0;
-    // A 20 U side rack: 1.5 U margins, a 1.3 U header (its bar 2 px less), the collapse tab and no X.
-    let side = Chrome::new(Rect::from_min_size(pos2(530.0, 0.0), vec2(640.0, 540.0)), u);
+    // A 20 U side rack: 1.5 U margins, a 1.3 U header (its bar 2 px less), the collapse tab (at the rack tab's height)
+    // and no X.
+    let rack = Rect::from_min_size(pos2(530.0, 0.0), vec2(640.0, 540.0));
+    let side = Chrome::new(rack, u);
     assert!(!side.full && side.close.is_none());
     assert_eq!((side.margin, side.header_bottom), (48.0, 41.0));
     assert_eq!(side.bar, Rect::from_x_y_ranges(578.0..=1122.0, 0.0..=39.0));
-    let tab = side.collapse.unwrap();
-    assert_eq!((tab.left(), tab.width()), (538.0, 32.0));
+    let tab = collapse_tab(rack, u, 270.0);
+    assert_eq!(
+        (tab.left(), tab.width(), tab.center().y),
+        (538.0, 32.0, 270.0)
+    );
     assert!((tab.height() - 1.6 * u).abs() < 1e-3);
     // 19 U: full screen already (narrower than 20 U), with 1 U margins.
     let narrower = Chrome::new(Rect::from_min_size(Pos2::ZERO, vec2(608.0, 540.0)), u);
     assert_eq!((narrower.full, narrower.margin), (true, 32.0));
     // Full screen on a 16.9 U phone: 0.5 U margins, a 1.75 U header with the X at its right end, no collapse tab.
     let full = Chrome::new(Rect::from_min_size(Pos2::ZERO, vec2(540.0, 900.0)), u);
-    assert!(full.full && full.collapse.is_none());
+    assert!(full.full);
     assert_eq!((full.margin, full.header_bottom), (16.0, 56.0));
     assert_eq!(
         full.close,
@@ -4688,28 +4723,104 @@ fn add_midi_send_offers_the_note_channels_no_midi_send_leads_back_from() {
     assert_eq!(offered(4), [2, 3]);
 }
 
-/// GitHub #57: the rack tab rides above the keyboard panel. Centred on a tall area; on a short one it moves up to stay
-/// 0.25 U above the area's bottom (it never lies on the transport bar); with no room its top passes 2.75 U and it
-/// slides right by the difference, a sliver left at the screen's edge.
+/// GitHub #57 and 0.5.3: the rack tab rides above the keyboard panel, centred in the space left, from
+/// 0.25 U under the logo (1.7 U down) to 0.25 U above the area's bottom. With no room for it the bottom wins (it never
+/// lies on the transport bar), its top passes 2.75 U and it slides right by the difference, a sliver left at the
+/// screen's edge.
 #[test]
 fn the_rack_tab_moves_up_with_the_keyboard_panel_and_slides_off_the_right_edge() {
     let u = 32.0;
     let screen = Rect::from_min_size(Pos2::ZERO, vec2(1170.0, 900.0));
-    let tab = |bottom: f32| rack_tab(screen, screen.with_max_y(bottom), u);
+    let tab = |bottom: f32| rack_tab(screen, screen.with_max_y(bottom), bottom, u, 0.5);
     let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
     let x = 1170.0 - 2.1 * u;
-    // Tall: centred on 0 … 600 + 2 U.
-    let tall = tab(600.0);
-    assert!(near(tall.center().y, (600.0 + 2.0 * u) / 2.0) && near(tall.left(), x));
-    assert!(near(tall.width(), 1.5 * u) && near(tall.height(), 2.43 * u));
-    // Short: up off the 5 U floor, 0.25 U above the bottom; still 2.75 U clear of the top, so in place.
-    let short = tab(200.0);
-    assert!(
-        near(short.bottom(), 200.0 - 0.25 * u) && near(short.left(), x),
-        "{short:?}"
-    );
+    for bottom in [600.0, 260.0] {
+        let t = tab(bottom);
+        let middle = (1.95 * u + bottom - 0.25 * u) / 2.0;
+        assert!(near(t.center().y, middle) && near(t.left(), x), "{t:?}");
+        assert!(near(t.width(), 1.5 * u) && near(t.height(), 2.43 * u));
+    }
     // No room (ruler + one row, the panel at its cap): right by 2.75 U − top, a sliver still on screen.
     let full = tab((1.65 + 2.0) * u);
     assert!(near(full.bottom(), 3.4 * u), "{full:?}");
     assert!(near(full.left(), x + 2.75 * u - full.top()) && full.left() < 1170.0);
+}
+
+/// PR #87 and 0.5.3: a drag's place runs from the top of the rack tab's space (0: 0.25 U under the logo)
+/// to its bottom (1: 0.25 U above the area's bottom, or above a higher `floor`, #114); on an area too short for the
+/// pill the bottom still wins (#57), whatever the place.
+#[test]
+fn a_moved_rack_tab_keeps_to_its_bounds() {
+    let u = 32.0;
+    let screen = Rect::from_min_size(Pos2::ZERO, vec2(1170.0, 900.0));
+    let area = screen.with_max_y(600.0);
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    // At the top of its room (inside 2.75 U) it stays whole: it slides right only when forced above it.
+    let top = rack_tab(screen, area, 600.0, u, 0.0);
+    assert!(
+        near(top.top(), 1.95 * u) && near(top.left(), 1170.0 - 2.1 * u),
+        "{top:?}"
+    );
+    assert!(near(
+        rack_tab(screen, area, 600.0, u, 1.0).bottom(),
+        600.0 - 0.25 * u
+    ));
+    assert!(near(
+        rack_tab(screen, area, 500.0, u, 1.0).bottom(),
+        500.0 - 0.25 * u
+    ));
+    let short = screen.with_max_y(100.0);
+    for place in [0.0, 0.5, 1.0] {
+        let tab = rack_tab(screen, short, 100.0, u, place);
+        assert!(near(tab.bottom(), 100.0 - 0.25 * u), "{place}: {tab:?}");
+    }
+}
+
+/// #118: a slider's menu in the Mix / Post Gain / Wet Pan dialog lies above the dialog, a tap on the dialog beside it
+/// closes the menu (one level: the dialog stays), and the menus opened after it dim the screen once.
+#[test]
+fn a_level_dialog_sliders_menu_is_above_the_dialog_and_a_tap_on_the_dialog_closes_it() {
+    let mut rig = Rig::new(&[6]);
+    let icon = rig.header(0, 2.25);
+    rig.open(icon);
+    let m = Metrics::from_pixels_per_point(1.0, DEFAULT_UI_SCALE);
+    let dialog = level_popup_rect(icon, SCREEN, &m);
+    // In the dialog's padding, left of the sliders, far from a menu centred on a slider's right end.
+    let beside = pos2(dialog.left() + 4.0, dialog.center().y);
+    let long_press = |rig: &mut Rig, label: &str| {
+        let at = pos2(dialog.right() - U, rig.text(label).center().y);
+        rig.frame(vec![Event::PointerMoved(at)]);
+        rig.button(at, true);
+        rig.after(0.35, vec![]);
+        rig.button(at, false);
+        rig.frame(vec![]);
+    };
+    let dim = crate::ui::anim::dim(
+        theme_by_id(0).colors.background.to_color32(),
+        crate::ui::anim::DIM_ALPHA,
+    );
+    let dims = |rig: &Rig| {
+        (rig.shapes.iter())
+            .filter(
+                |c| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == dim && r.rect == SCREEN),
+            )
+            .count()
+    };
+    let index = |rig: &Rig, text: &str| {
+        (rig.shapes.iter())
+            .position(|c| matches!(&c.shape, egui::Shape::Text(t) if t.galley.text() == text))
+            .unwrap_or_else(|| panic!("{text:?} not drawn"))
+    };
+    for label in ["Mix", "Mix", "Post Gain"] {
+        long_press(&mut rig, label);
+        assert!(
+            index(&rig, "Reset") > index(&rig, "Wet Pan"),
+            "{label}: the menu is above the dialog"
+        );
+        assert_eq!(dims(&rig), 1, "{label}: one dim");
+        rig.click(beside);
+        rig.frame(vec![]);
+        assert!(!rig.drawn("Reset"), "{label}: the tap closed the menu");
+        assert!(rig.drawn("Wet Pan"), "{label}: and left the dialog open");
+    }
 }

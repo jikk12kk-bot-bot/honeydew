@@ -1,7 +1,7 @@
 //! Playlist clips. Each track row shows its lane's clips as [`paint_clip`] draws them, rounded boxes: the current clip
 //! has the light outline. The selection (one clip, or a marquee's group) is one pulsing `text` box with its capsule
 //! handles (start, end, and a bar under an audio clip that does not loop, [`paint_handle`]) and the floating `Copy`,
-//! `Duplicate`, `Snap`, `Edit`, `Delete`, `More...` above it: `Copy` fills the clipboard, `Duplicate` (#68)
+//! `Delete`, `Snap`, `Edit`, `Duplicate`, `More...` above it: `Copy` fills the clipboard, `Duplicate` (#68)
 //! puts a copy right after the selection. Dragging a clip moves it, dragging a handle resizes it (each clip of a
 //! group). Positions snap to the ruler's Snap unit (its mode, Auto by the zoom); with Snap off, drags go to whole ticks
 //! while the insert menu, `Duplicate` and `Snap` keep the mode's unit. Clips drag between tracks of any channel by lane
@@ -33,6 +33,8 @@ use eframe::egui::{
     pos2, vec2,
 };
 use honeydew_audio::drums::SPEED;
+use honeydew_audio::sample_edit::speed_ratio;
+use honeydew_audio::slicer;
 
 use crate::app::note_record;
 use crate::metrics::{FontSize, Metrics};
@@ -56,6 +58,7 @@ use crate::ui::piano_roll::notes::{Snap, auto_grid};
 use crate::ui::popup::{self, PopupItem};
 use crate::ui::preview::ClipKey;
 use crate::ui::step_seq::pop_in;
+use crate::ui::tempo::{step_bpm, transport_bpm_text};
 use crate::ui::views::{AppCtx, Nav, Overlay, message};
 use crate::ui::widgets::truncated;
 use crate::ui::{UiCtx, gesture, primary_down_live};
@@ -68,9 +71,6 @@ const MARQUEE_U: f32 = 3.0;
 const MARQUEE_ALPHA: f32 = 0.2;
 /// The floating row's pop-in: a ← 0.6·a per frame.
 const ROW_POP: f32 = 0.6;
-/// A hidden track's row, which Settings `Show hidden tracks` shows: `background` at this alpha over its header and clips,
-/// under the playhead and the selection.
-pub(crate) const HIDDEN_VEIL: f32 = 0.6;
 
 /// The side of the square a touch held on empty grid grows, `elapsed` seconds after its touch-down: 3 U·k,
 /// k = clamp(4.4333·elapsed − 0.33, 0, 1). It shows from about 74 ms and is 3 U at 300 ms.
@@ -312,6 +312,8 @@ pub struct Clips {
     drag: Option<Drag>,
     /// The `More...` dropdown is open, centred here.
     more: Option<Pos2>,
+    /// The page it shows: `Chop...` and `Match tempo...` turn it into theirs.
+    page: MorePage,
     /// The floating buttons over the selected clip.
     pub(crate) row: FloatingRow,
     /// The selection fill's phase p, a drawn frame's step on per frame the selection shows.
@@ -450,10 +452,10 @@ impl Drag {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ClipOp {
     Copy,
+    Duplicate,
     Delete,
     Snap,
     Edit,
-    Duplicate,
     More,
 }
 
@@ -492,35 +494,12 @@ impl Clips {
         let auto = grid_ticks(axis, sig, m);
         let (snap, drag_unit) = (snap.grid(auto, sig), snap.active(auto, sig).unwrap_or(1.0));
         let bar = app.song.time_sig.bar_beats();
-        // A clip that went away (undo, another song), or whose track no longer shows (`Hide track`), takes its selection
-        // and gesture with it.
-        let show = app.settings.show_hidden_tracks;
-        let kept = |r: ClipRef| {
-            find(app.song, r).is_some()
-                && (show || !app.song.channels[r.channel].lanes[r.lane].hidden)
-        };
+        // A clip that went away (undo, another song) takes its selection and gesture with it.
+        let kept = |r: ClipRef| find(app.song, r).is_some();
         if self.selected.is_some_and(|r| !kept(r)) {
             self.deselect();
         }
         self.group.retain(|&r| kept(r));
-        // A current track or grid cursor whose track no longer shows moves to the nearest track that does (the one below
-        // on a tie): `paste` and `Add clip` go there.
-        if !show {
-            let all = track_rows(app.song, true);
-            let hidden = |t: (usize, usize)| {
-                (all.iter().position(|r| (r.channel, r.lane) == t)).filter(|&p| all[p].hidden)
-            };
-            if let Some(p) = hidden(self.track_for(*app.selected)) {
-                let near = (all.iter().enumerate().filter(|(_, r)| !r.hidden))
-                    .min_by_key(|&(i, _)| (i.abs_diff(p), i < p));
-                if let Some((_, r)) = near {
-                    self.set_track(app.selected, r.channel, r.lane);
-                }
-            }
-            if self.cursor.is_some_and(|(_, t)| hidden(t).is_some()) {
-                self.cursor = None;
-            }
-        }
         if self.group.len() == 1 {
             self.selected = self.group.pop();
         }
@@ -675,18 +654,6 @@ impl Clips {
             }
         }
 
-        // A hidden track's clips (Settings `Show hidden tracks`), dimmed under the playhead and the selection.
-        let veil = (app.cx.theme.colors.background.to_color32()).gamma_multiply(HIDDEN_VEIL);
-        for &(channel, lane, row) in rows {
-            let track = app
-                .song
-                .channels
-                .get(channel)
-                .and_then(|c| c.lanes.get(lane));
-            if track.is_some_and(|l| l.hidden) {
-                painter.rect_filled(row, 0.0, veil);
-            }
-        }
         if let Some((b, dimmed)) = outline {
             paint_outline(&painter, &app.cx, b, dimmed);
         }
@@ -694,7 +661,7 @@ impl Clips {
         // The selection overlay: one pulsing `text` box over every selected clip, gaps included, no outline. While a
         // marquee is live it is the only box drawn: the selection shows on its release; its frame still takes touches
         // and places the floating row.
-        let selection = selection_box(app.song, &self.targets(), rows, axis, 1.0 / m.ppp(), show);
+        let selection = selection_box(app.song, &self.targets(), rows, axis, 1.0 / m.ppp());
         let sbox = selection.filter(|_| self.marquee.is_none());
         paint_pulse(&painter, &app.cx, sbox, m.u(CORNER), &mut self.pulse);
         // A touch-down in the group's frame acts on the group whole; in a quiet group's, only one on its clips.
@@ -873,7 +840,7 @@ impl Clips {
             grid,
             map: [
                 axis.origin,
-                list_top(app.song, rows, 1.0 / m.ppp(), show),
+                list_top(app.song, rows, 1.0 / m.ppp()),
                 axis.beat_w,
                 row.height(),
             ],
@@ -924,22 +891,17 @@ impl Clips {
         (self.track.filter(|t| t.0 == keys || t.0 == 0)).unwrap_or((keys, 0))
     }
 
-    /// The current clip: the current track's own (each track keeps one, its lane's DESc@24), while it exists and its
-    /// track shows. It is drawn as current, and the bottom editor shows it (the app; it collapses whenever the current
-    /// track has none, so a track hidden under it closes it).
+    /// The current clip: the current track's own (each track keeps one, its lane's DESc@24), while it exists. It is
+    /// drawn as current, and the bottom editor shows it (the app; it collapses whenever the current track has none).
     pub(crate) fn current_clip(&self, app: &AppCtx) -> Option<ClipRef> {
-        self.clip_for(app.song, *app.selected, app.settings.show_hidden_tracks)
+        self.clip_for(app.song, *app.selected)
     }
 
-    /// [`Self::current_clip`] in `song` with channel `keys` on the keyboard; a hidden track has one only with
-    /// `show_hidden` (Settings `Show hidden tracks`).
-    pub(crate) fn clip_for(&self, song: &Song, keys: usize, show_hidden: bool) -> Option<ClipRef> {
+    /// [`Self::current_clip`] in `song` with channel `keys` on the keyboard.
+    pub(crate) fn clip_for(&self, song: &Song, keys: usize) -> Option<ClipRef> {
         let (channel, lane) = self.track_for(keys);
         let track = song.channels.get(channel)?.lanes.get(lane)?;
         let id = track.file.current_clip_id;
-        if track.hidden && !show_hidden {
-            return None;
-        }
         let r = ClipRef { channel, lane, id };
         find(song, r).map(|_| r)
     }
@@ -1020,7 +982,7 @@ impl Clips {
     /// The keymap's editing actions while the playlist holds the keyboard (`ui/edit_keys.rs`), on the selected clip or
     /// the group as the floating row's: `copy` puts them on the clip clipboard, `cut` too, `cut` and `delete` remove
     /// them, `paste` adds the clipboard at the grid cursor ([`paste_clips`]), `open` selects the clip at the cursor
-    /// (`Select clip`, no edit) or else is `Add clip` there (`New Clip`'s rule, note and drum tracks only),
+    /// (`Select clip`, no edit) or else is `Add clip` there (`New Clip`'s rule, note, drum and automation tracks),
     /// `close` deselects; `selectAll` is the piano roll's only. Each edit is one final edit; each action hides the
     /// floating row and the insert menu. Called after the playlist's popups, which take Escape first; nothing during a
     /// touch. `snap` is the grid in ticks.
@@ -1053,9 +1015,7 @@ impl Clips {
             }
             EditKey::Cut | EditKey::Delete => {}
             EditKey::Paste => {
-                let show = app.settings.show_hidden_tracks;
-                let pasted =
-                    paste_clips(app.song, &self.clipboard, tick, (channel, lane), snap, show);
+                let pasted = paste_clips(app.song, &self.clipboard, tick, (channel, lane), snap);
                 if !pasted.is_empty() {
                     self.set_selection(pasted);
                     app.song_edited(true);
@@ -1063,7 +1023,7 @@ impl Clips {
             }
             EditKey::Open => {
                 let bar = app.song.time_sig.bar_beats();
-                let takes = |l: &Lane| matches!(l.kind, LaneKind::Notes | LaneKind::Drums);
+                let takes = |l: &Lane| l.kind != LaneKind::Audio;
                 // `Select clip` on a clip at the cursor, else `Add clip`.
                 let spans = |c: &&Clip| f64::from(c.start_tick) <= tick && tick < end_tick(c);
                 let on = (app.song.channels.get(channel))
@@ -1211,7 +1171,9 @@ impl Clips {
     /// The insert menu while it shows ([`insert::show`]): `New Clip` and `Paste` over its track's row at its snapped
     /// tick, the insert cursor across the row. `New Clip` adds a one-bar clip there on a note or drum track
     /// ([`add_clip`]), the current, selected clip; on an audio track it opens the sample picker, whose first pick makes
-    /// the clip there (an automation track's too). `Paste` pastes the clip clipboard
+    /// the clip there. Honeydew change (GitHub #124): an automation track, as an effect track's or the
+    /// master's, takes one too, an empty one-bar clip driving the track's target (there the channel's Level), where the
+    /// original dims `New Clip`. `Paste` pastes the clip clipboard
     /// there ([`paste_clips`]), selecting the copies; it is dimmed while the clipboard is empty. Any other press hides
     /// the menu, as does a track that went. Returns whether this frame's press is on it, and the picker to open.
     #[allow(clippy::too_many_arguments)]
@@ -1235,11 +1197,7 @@ impl Clips {
         let kind = (app.song.channels.get(channel))
             .and_then(|c| c.lanes.get(lane))
             .map(|l| l.kind);
-        let new = matches!(
-            kind,
-            Some(LaneKind::Notes | LaneKind::Drums | LaneKind::Audio | LaneKind::Automation)
-        );
-        let items = [("New Clip", new), ("Paste", !self.clipboard.is_empty())];
+        let items = [("New Clip", true), ("Paste", !self.clipboard.is_empty())];
         let at = (axis.x(tick), row.y_range(), row.y_range());
         let tap = insert::show(ui, &app.cx, Id::new("clip_insert"), grid, at, &items);
         let mut nav = None;
@@ -1265,9 +1223,7 @@ impl Clips {
                 }
             }
             Some(Tap::Button(_)) => {
-                let show = app.settings.show_hidden_tracks;
-                let pasted =
-                    paste_clips(app.song, &self.clipboard, tick, (channel, lane), snap, show);
+                let pasted = paste_clips(app.song, &self.clipboard, tick, (channel, lane), snap);
                 if !pasted.is_empty() {
                     self.set_selection(pasted);
                     app.song_edited(true);
@@ -1356,7 +1312,7 @@ impl Clips {
         // The rows first: the spans below go to the clips where they are now.
         let mut moved = false;
         if let (Part::Body, Some(pos)) = (drag.part, pos) {
-            let tracks = track_rows(app.song, app.settings.show_hidden_tracks);
+            let tracks = track_rows(app.song);
             let index = |y: f32| {
                 let row = rows.iter().min_by(|a, b| {
                     let d = |r: &&(usize, usize, Rect)| (r.2.center().y - y).abs();
@@ -1429,7 +1385,7 @@ impl Clips {
     /// moved.
     // ponytail: the lone clip's nearest track may be scrolled out; restrict it to the shown rows if that shows.
     fn drag_rows(&mut self, app: &mut AppCtx, drag: &mut Drag, want: isize) -> bool {
-        let tracks = track_rows(app.song, app.settings.show_hidden_tracks);
+        let tracks = track_rows(app.song);
         let index =
             |r: ClipRef| (tracks.iter()).position(|t| (t.channel, t.lane) == (r.channel, r.lane));
         let homes: Option<Vec<(ClipRef, usize, usize)>> = (drag.clips.iter())
@@ -1572,9 +1528,7 @@ impl Clips {
         let targets = self.targets();
         let &first = targets.first()?;
         match OPS[i].0 {
-            // Copy only puts the clips on the clipboard (`paste` adds them where the cursor is).
             ClipOp::Copy => self.copy_selection(app.song),
-            // Duplicate adds a copy of each clip right after it, and selects the copies.
             ClipOp::Duplicate => {
                 let copies = copy_clips(app.song, &targets, snap);
                 self.set_selection(copies);
@@ -1596,7 +1550,7 @@ impl Clips {
             }
             // The group's `Edit` opens its first clip's editor.
             ClipOp::Edit => return Some(first.edit()),
-            ClipOp::More => self.more = Some(center),
+            ClipOp::More => (self.more, self.page) = (Some(center), MorePage::Main),
         }
         None
     }
@@ -1611,10 +1565,17 @@ impl Clips {
         };
         let playhead = app.snapshot.map_or(0, |s| s.transport_tick);
         let clips: Vec<&Clip> = targets.iter().filter_map(|&r| find(app.song, r)).collect();
-        let items = more_items(&clips, playhead, can_combine(app.song, &targets));
+        let (name, items) = match self.page {
+            MorePage::Main => (
+                "clip_more",
+                more_items(&clips, playhead, can_combine(app.song, &targets)),
+            ),
+            MorePage::Chop => ("clip_chop", chop_items()),
+            MorePage::Tempo(bpm) => ("clip_tempo", tempo_items(bpm, app.song.tempo_bpm)),
+        };
         let result = popup::show(
             ui.ctx(),
-            Id::new("clip_more"),
+            Id::new(name),
             center,
             app.regions.screen,
             &items,
@@ -1650,35 +1611,102 @@ impl Clips {
                 self.set_selection(combined);
             }
         }
+        edited |= self.audio_page(app, first, center, result.selected);
         if edited {
             app.song_edited(true);
         }
         (result.selected == Some(MoreOp::ReplaceSample))
             .then(|| Nav::Open(Overlay::ReplaceSamplePicker(first.into())))
     }
+
+    /// The audio clip `r`'s `More...` picks (#91): `Chop...` and `Match tempo...` show their pages in
+    /// place of the menu at `center` (the sample's tempo detected, [`slicer::tempo`], else the song's); a step moves
+    /// that tempo; a chop or the match edits the clip, the chop's pieces then selected. Whether the song changed.
+    fn audio_page(
+        &mut self,
+        app: &mut AppCtx,
+        r: ClipRef,
+        center: Pos2,
+        op: Option<MoreOp>,
+    ) -> bool {
+        let (Some(op), Some(clip)) = (op, find(app.song, r)) else {
+            return false;
+        };
+        let tempo = app.song.tempo_bpm;
+        let mut sample = || audio_wave(&mut app.audio.samples, app.files, clip, tempo);
+        let bpm = match self.page {
+            MorePage::Tempo(bpm) => bpm,
+            _ => tempo,
+        };
+        // The tempo dial's range, as its steps keep to.
+        let (lo, hi) = crate::ui::main_menu::TEMPO_RANGE;
+        self.page = match op {
+            MoreOp::Chop => MorePage::Chop,
+            MoreOp::MatchTempo => MorePage::Tempo(
+                (sample())
+                    .and_then(|(s, _)| slicer::tempo(&s.data))
+                    .unwrap_or(tempo),
+            ),
+            MoreOp::TempoStep(step) => MorePage::Tempo(step_bpm(bpm, f64::from(step))),
+            MoreOp::TempoHalf => MorePage::Tempo((bpm / 2.0).max(lo)),
+            MoreOp::TempoDouble => MorePage::Tempo((bpm * 2.0).min(hi)),
+            MoreOp::TempoMatch => {
+                let Some((s, _)) = sample() else {
+                    return false;
+                };
+                return match_tempo(app.song, r, (s.data.frames(), s.data.sample_rate), bpm);
+            }
+            MoreOp::ChopEvery(_) | MoreOp::ChopTransients => {
+                let ticks = match op {
+                    MoreOp::ChopEvery(n) => every_ticks(clip, 1.0 / f64::from(n)),
+                    _ => {
+                        let Some((s, wave)) = sample() else {
+                            return false;
+                        };
+                        // A reversed sample's frames play mirrored.
+                        let at = |f: usize| if wave.reversed { wave.frames - f } else { f };
+                        let beats: Vec<f64> = (slicer::detect(&s.data, TRANSIENTS).iter())
+                            .map(|&f| at(f) as f64 / wave.per_beat)
+                            .collect();
+                        play_ticks(clip, &beats)
+                    }
+                };
+                let Some(lane) = lane_mut(app.song, r.channel, r.lane) else {
+                    return false;
+                };
+                let pieces = chop(lane, r.id, ticks);
+                let changed = pieces.len() > 1;
+                self.set_selection(pieces.into_iter().map(|id| ClipRef { id, ..r }).collect());
+                return changed;
+            }
+            _ => return false,
+        };
+        self.more = Some(center);
+        false
+    }
 }
 
 /// The track list's scroll, as the screen y where its first row (the master's, scrolled out or not) starts: the
-/// first of the visible `rows` less the rows above it. A scroll by whole rows moves it too, and a selection that
-/// moves between rows does not. `px` is the device pixel of gap that the rows' rects leave out under each row; with
-/// `show_hidden` the hidden tracks are rows ([`track_rows`]).
-fn list_top(song: &Song, rows: &[(usize, usize, Rect)], px: f32, show_hidden: bool) -> f32 {
+/// first of the visible `rows` less the rows above it ([`track_rows`]). A scroll by whole rows moves it too, and a
+/// selection that moves between rows does not. `px` is the device pixel of gap that the rows' rects leave out under
+/// each row.
+fn list_top(song: &Song, rows: &[(usize, usize, Rect)], px: f32) -> f32 {
     let Some(&(channel, lane, first)) = rows.first() else {
         return 0.0;
     };
-    let above = (track_rows(song, show_hidden).iter())
+    let above = (track_rows(song).iter())
         .take_while(|t| (t.channel, t.lane) != (channel, lane))
-        .count();
-    first.top() - above as f32 * pitch(rows, px)
+        .count() as f32;
+    first.top() - above * pitch(rows, px)
 }
 
-/// The rows' pitch: the lane rects leave out the device pixel `px` of gap under each row.
+/// A full row's pitch: the lane rects leave out the device pixel `px` of gap under each row. The first row's own
+/// height gives it, so a track folder's row (no lane rect) between rows does not matter.
 fn pitch(rows: &[(usize, usize, Rect)], px: f32) -> f32 {
-    match rows {
-        [a, b, ..] => b.2.top() - a.2.top(),
-        [a] => a.2.height() + px,
-        [] => 0.0,
-    }
+    let Some(&(_, _, rect)) = rows.first() else {
+        return 0.0;
+    };
+    rect.height() + px
 }
 
 /// The selection box of the clips `sel`: their earliest start to their latest end, from the top of the first selected
@@ -1690,10 +1718,9 @@ fn selection_box(
     rows: &[(usize, usize, Rect)],
     axis: TimeAxis,
     px: f32,
-    show_hidden: bool,
 ) -> Option<Rect> {
-    let tracks = track_rows(song, show_hidden);
-    let (top, pitch) = (list_top(song, rows, px, show_hidden), pitch(rows, px));
+    let tracks = track_rows(song);
+    let (top, pitch) = (list_top(song, rows, px), pitch(rows, px));
     (sel.iter())
         .filter_map(|&r| {
             let clip = find(song, r)?;
@@ -2076,7 +2103,6 @@ fn paint_clip(
             NAME_K,
         );
     }
-
     let seen = body.clip_rect();
     let px_ticks = f64::from(px / axis.beat_w) * f64::from(PPQ);
     let Some((base, lp, all)) = repeats(clip, axis.tick(seen.left()), axis.tick(seen.right()))
@@ -2291,15 +2317,30 @@ fn waveform(
         let x0 = (axis.x(a) / px).floor() * px;
         let width = ((axis.x(b) - x0) / px).ceil() as usize;
         let left = (axis.tick(x0) - at) / ppq;
-        let mut mesh = Mesh::default();
-        for ((samples, summary), &row) in source.channels().zip(&rows) {
-            let cols = columns(samples, summary, wave, left, beats_per_px, width);
-            for (i, peak) in cols.into_iter().enumerate() {
-                add_column(&mut mesh, x0 + i as f32 * px, peak, row, px, ink);
-            }
-        }
-        painter.add(mesh);
+        let span = ((left, beats_per_px), (x0, width));
+        painter.add(wave_mesh(source, wave, &rows, span, px, ink));
     }
+}
+
+/// The waveform's columns: `width` device-pixel columns (`px` wide) from `x0`, the first at content beat `left` and
+/// each `beats_per_px` on, of every channel ([`columns`]) about its row of `rows` ([`wave_rows`]), in `ink`. The sample
+/// strip draws its whole file with them too (Honeydew change, #124).
+pub(crate) fn wave_mesh(
+    source: &Waveform,
+    wave: Wave,
+    rows: &[(f32, f32)],
+    ((left, beats_per_px), (x0, width)): ((f64, f64), (f32, usize)),
+    px: f32,
+    ink: Color32,
+) -> Mesh {
+    let mut mesh = Mesh::default();
+    for ((samples, summary), &row) in source.channels().zip(rows) {
+        let cols = columns(samples, summary, wave, left, beats_per_px, width);
+        for (i, peak) in cols.into_iter().enumerate() {
+            add_column(&mut mesh, x0 + i as f32 * px, peak, row, px, ink);
+        }
+    }
+    mesh
 }
 
 /// `a` moved `t` of the way toward `b`, opaque.
@@ -2652,15 +2693,13 @@ pub fn copy_clip(lane: &mut Lane, id: u32, grid: f64) -> Option<u32> {
 
 /// `paste` (as the automation editor's Paste): the earliest of `clips` lands on the grid line nearest `tick`,
 /// the others keep their offsets from it. A lone clip goes on `track` when that is a track of its kind, else each goes
-/// back on its own track; a track that is gone or of another kind takes nothing, nor does a hidden one (`Hide track`)
-/// unless `show_hidden` (Settings `Show hidden tracks`). Returns the copies (new ids).
+/// back on its own track; a track that is gone or of another kind takes nothing. Returns the copies (new ids).
 pub fn paste_clips(
     song: &mut Song,
     clips: &[(ClipRef, LaneKind, Clip)],
     tick: f64,
     (channel, lane): (usize, usize),
     grid: f64,
-    show_hidden: bool,
 ) -> Vec<ClipRef> {
     let Some(first) = clips.iter().map(|c| c.2.start_tick).min() else {
         return Vec::new();
@@ -2673,7 +2712,7 @@ pub fn paste_clips(
             true => (channel, lane),
             false => (r.channel, r.lane),
         };
-        let fits = |t: &&mut Lane| t.kind == *k && (show_hidden || !t.hidden);
+        let fits = |t: &&mut Lane| t.kind == *k;
         let Some(target) = lane_mut(song, c, l).filter(fits) else {
             continue;
         };
@@ -2937,12 +2976,161 @@ pub enum MoreOp {
     Mute,
     Unmute,
     ReplaceSample,
+    /// #91: `Match tempo...` and `Chop...` open their pages.
+    MatchTempo,
+    Chop,
+    /// The chop page: every 1/n beat, or at the sample's transients.
+    ChopEvery(u8),
+    ChopTransients,
+    /// The sample-tempo page: a step of ±1 or ±10 BPM, half, double, and the match.
+    TempoStep(i8),
+    TempoHalf,
+    TempoDouble,
+    TempoMatch,
+}
+
+/// What the `More...` dropdown shows: its menu, or the page a menu item opened in its place.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum MorePage {
+    #[default]
+    Main,
+    Chop,
+    /// The sample-tempo page at this BPM.
+    Tempo(f64),
+}
+
+/// The chop page: `Every` 1/6 … 1 beat, `At` the sample's transients.
+fn chop_items() -> Vec<PopupItem<MoreOp>> {
+    let every = [6, 4, 3, 2, 1].into_iter().enumerate().map(|(i, n)| {
+        let label = if n == 1 {
+            "1 beat".into()
+        } else {
+            format!("1/{n} beat")
+        };
+        PopupItem::new(MoreOp::ChopEvery(n), 0, i + 1, label)
+    });
+    [
+        PopupItem::header(0, 0, "Every"),
+        PopupItem::header(1, 0, "At"),
+    ]
+    .into_iter()
+    .chain(every)
+    .chain([PopupItem::new(MoreOp::ChopTransients, 1, 1, "Transients")])
+    .collect()
+}
+
+/// The sample-tempo page at `bpm`: the tempo as its header, the steps (which keep the page open) and the match to the
+/// song's `tempo`.
+fn tempo_items(bpm: f64, tempo: f64) -> Vec<PopupItem<MoreOp>> {
+    let steps = [
+        (MoreOp::TempoStep(-1), "-1"),
+        (MoreOp::TempoStep(1), "+1"),
+        (MoreOp::TempoStep(-10), "-10"),
+        (MoreOp::TempoStep(10), "+10"),
+        (MoreOp::TempoHalf, "Half"),
+        (MoreOp::TempoDouble, "Double"),
+    ];
+    let steps = steps
+        .into_iter()
+        .enumerate()
+        .map(|(i, (op, label))| PopupItem {
+            keep_open: true,
+            ..PopupItem::new(op, i % 2, 1 + i / 2, label)
+        });
+    let header = format!("Sample: {} BPM", transport_bpm_text(bpm));
+    std::iter::once(PopupItem::header(0, 0, header))
+        .chain(steps)
+        .chain([PopupItem::new(
+            MoreOp::TempoMatch,
+            0,
+            4,
+            format!("Match to {} BPM", transport_bpm_text(tempo)),
+        )])
+        .collect()
+}
+
+/// `Chop...`'s Sensitivity for `Transients`: the Slicer panel's default.
+const TRANSIENTS: f32 = 0.25;
+/// The most pieces `Chop...` cuts a clip into.
+// ponytail: a fixed cap (each piece is a clip with its own sampler slot); raise it if long samples need finer chops.
+const MAX_CHOPS: usize = 256;
+
+/// `Chop...`'s cuts every `d` beats of clip's content (content beats 0, d, 2d …, the offset taken into account), as
+/// song ticks strictly inside it, rounded to whole ticks, at most [`MAX_CHOPS`].
+fn every_ticks(clip: &Clip, d: f64) -> Vec<u64> {
+    let (start, end, ppq) = (f64::from(clip.start_tick), end_tick(clip), f64::from(PPQ));
+    let first = start + (d - clip.offset_beats.rem_euclid(d)) * ppq;
+    (0..MAX_CHOPS)
+        .map(|k| first + k as f64 * d * ppq)
+        .take_while(|&t| t < end)
+        .map(|t| t.round() as u64)
+        .collect()
+}
+
+/// `Chop...`'s cuts at each play of content beats `beats` (positions in the clip's loop, each pass alike), as song
+/// ticks strictly inside it, rounded to whole ticks, at most [`MAX_CHOPS`] a position.
+fn play_ticks(clip: &Clip, beats: &[f64]) -> Vec<u64> {
+    let Some(lp) = clip.loop_ticks() else {
+        return Vec::new();
+    };
+    let (start, end, ppq) = (f64::from(clip.start_tick), end_tick(clip), f64::from(PPQ));
+    (beats.iter())
+        .flat_map(|&b| {
+            let first = start + ((b - clip.offset_beats) * ppq).rem_euclid(lp);
+            (0..MAX_CHOPS).map(move |k| first + k as f64 * lp)
+        })
+        .filter(|&t| t < end)
+        .map(|t| t.round() as u64)
+        .collect()
+}
+
+/// `Chop...` (#91): splits clip `id` at each of the song `ticks` strictly inside it, as `Slice`
+/// does, so the audio plays where it played; at most [`MAX_CHOPS`] pieces. Returns the pieces' ids left to right, the
+/// clip's own first (only it when nothing was cut).
+pub fn chop(lane: &mut Lane, id: u32, mut ticks: Vec<u64>) -> Vec<u32> {
+    ticks.sort_unstable();
+    ticks.dedup();
+    let mut pieces = vec![id];
+    for at in ticks {
+        if pieces.len() == MAX_CHOPS {
+            break;
+        }
+        let last = pieces[pieces.len() - 1];
+        pieces.extend(slice(lane, last, at));
+    }
+    pieces
+}
+
+/// `Match tempo...`'s match (#91): clip `r`, its sample `frames` long at `rate` and `bpm` at Speed 1
+/// unstretched, plays at the song tempo, its pitch kept: the third handle's stretch ([`stretch_clip`]) by
+/// bpm·speed/(tempo·stretch), so its STR1 ratio becomes bpm·speed/tempo and SYNC goes on. A set visible length and the
+/// content offset scale with the sample, so the clip shows the same audio. Whether the song changed.
+fn match_tempo(song: &mut Song, r: ClipRef, (frames, rate): (usize, u32), bpm: f64) -> bool {
+    let tempo = song.tempo_bpm;
+    let Some((slot, before)) =
+        find(song, r).and_then(|c| Some((c.file.sample.as_deref()?, c.file.source_len_beats)))
+    else {
+        return false;
+    };
+    let k = bpm * speed_ratio(slot.params[SPEED]) / (tempo * stretch_of(slot));
+    if !stretch_clip(song, r, (frames, rate), k) {
+        return false;
+    }
+    if let Some(clip) = find_mut(song, r)
+        && before > 0.0
+    {
+        let f = clip.file.source_len_beats / before;
+        clip.visible_len_beats *= f;
+        clip.offset_beats = wrap(clip.offset_beats * f, clip.loop_len_beats);
+    }
+    true
 }
 
 /// The `More...` dropdown for the selected clip, one column, with the playhead at song tick `playhead`; `combine`:
 /// `Combine` applies ([`can_combine`]). Issue #64: one audio clip with a sample also
 /// lists `Replace sample...` last, which opens the sample picker for every clip playing that sample
-/// ([`crate::ui::views::sample_picker::show_replace`]).
+/// ([`crate::ui::views::sample_picker::show_replace`]), then (#91) `Match tempo...` ([`match_tempo`]) and `Chop...`
+/// ([`chop`]).
 pub fn more_items(clips: &[&Clip], playhead: u64, combine: bool) -> Vec<PopupItem<MoreOp>> {
     let any = |f: &dyn Fn(&Clip) -> bool| clips.iter().any(|c| f(c));
     let one = (clips.len() == 1).then(|| clips[0]);
@@ -2961,7 +3149,14 @@ pub fn more_items(clips: &[&Clip], playhead: u64, combine: bool) -> Vec<PopupIte
     .chain(
         (one.and_then(|c| c.file.sample.as_deref()))
             .and_then(sample_cache::SampleKey::of_slot)
-            .map(|_| (MoreOp::ReplaceSample, "Replace sample...", true)),
+            .into_iter()
+            .flat_map(|_| {
+                [
+                    (MoreOp::ReplaceSample, "Replace sample...", true),
+                    (MoreOp::MatchTempo, "Match tempo...", true),
+                    (MoreOp::Chop, "Chop...", true),
+                ]
+            }),
     )
     .enumerate()
     .map(|(row, (op, label, enabled))| PopupItem {
@@ -3290,7 +3485,7 @@ mod tests {
         for _ in 0..4 {
             song.add_channel(ChannelKind::Synth(SynthKind::MiniSynth));
         }
-        let tracks = track_rows(&song, false);
+        let tracks = track_rows(&song);
         let (top, view_h, pitch) = (100.0_f32, 32.0_f32, 64.0_f32);
         let list_top_at = |scroll: f32| {
             let first = (scroll / pitch).floor() as usize;
@@ -3303,7 +3498,7 @@ mod tests {
                     (tracks[i].channel, tracks[i].lane, rect)
                 })
                 .collect();
-            list_top(&song, &rows, 1.0, false)
+            list_top(&song, &rows, 1.0)
         };
         // At 63 row 0 is first and row 1 is below it; at 64 row 1 is alone. The list's top still moves by the point.
         assert_ne!(list_top_at(63.0), list_top_at(64.0));
@@ -3692,6 +3887,62 @@ mod tests {
             (832, 3.5, 0.5)
         );
         assert!(a.muted && b.muted);
+    }
+
+    /// `Chop...` (#91): an audio clip at 512 showing 3 beats from content beat 0.5 of its 4-beat loop. Every 1/2 beat
+    /// cuts it at content beats 1, 1.5 … 3; 1/3 beat at whole ticks nearest content beats 2/3, 1 …; the transients at
+    /// content beats 0.25 and 3 cut each of their plays inside it, the next pass's too once it shows 6 beats. Each
+    /// piece plays where it played: content beat 0 stays at song tick 448 (a loop apart), the pieces end to end, ids
+    /// left to right.
+    #[test]
+    fn chop_cuts_by_division_or_transients_and_every_piece_plays_where_it_played() {
+        let mut lane = Lane::new(LaneKind::Audio);
+        let c = lane.add_clip(512, 4.0);
+        (c.visible_len_beats, c.offset_beats) = (3.0, 0.5);
+        let original = lane.clone();
+        let spans = |lane: &Lane| -> Vec<(u32, u32, f64)> {
+            let ppq = f64::from(PPQ);
+            (lane.clips.iter())
+                .map(|c| {
+                    let origin = f64::from(c.start_tick) - c.offset_beats * ppq;
+                    assert_eq!((origin - 448.0).rem_euclid(512.0), 0.0, "{}", c.id);
+                    (c.id, c.start_tick, end_tick(c))
+                })
+                .collect()
+        };
+        let every = |lane: &mut Lane, d| {
+            let ticks = every_ticks(&lane.clips[0], d);
+            chop(lane, 1, ticks)
+        };
+        assert_eq!(every(&mut lane, 0.5), [1, 2, 3, 4, 5, 6]);
+        let ends: Vec<_> = [512, 576, 640, 704, 768, 832, 896]
+            .windows(2)
+            .map(|w| (w[0], f64::from(w[1])))
+            .collect();
+        let got: Vec<_> = spans(&lane).into_iter().map(|(_, s, e)| (s, e)).collect();
+        assert_eq!(got, ends);
+
+        let mut thirds = original.clone();
+        assert_eq!(every(&mut thirds, 1.0 / 3.0).len(), 10);
+        let starts: Vec<u32> = spans(&thirds).into_iter().map(|(_, s, _)| s).collect();
+        assert_eq!(starts, [512, 533, 576, 619, 661, 704, 747, 789, 832, 875]);
+
+        let mut hits = original.clone();
+        let ticks = play_ticks(&hits.clips[0], &[0.25, 3.0]);
+        assert_eq!(chop(&mut hits, 1, ticks), [1, 2]);
+        assert_eq!(spans(&hits), [(1, 512, 832.0), (2, 832, 896.0)]);
+        let mut long = original.clone();
+        long.clips[0].visible_len_beats = 6.0;
+        let ticks = play_ticks(&long.clips[0], &[0.25, 3.0]);
+        assert_eq!(chop(&mut long, 1, ticks), [1, 2, 3]);
+        assert_eq!(
+            spans(&long),
+            [(1, 512, 832.0), (2, 832, 992.0), (3, 992, 1280.0)]
+        );
+        // Nothing inside: the clip alone, unchanged.
+        let mut none = original.clone();
+        assert_eq!(chop(&mut none, 1, vec![512, 896]), [1]);
+        assert_eq!(none, original);
     }
 
     #[test]
@@ -5101,18 +5352,18 @@ mod tests {
             lane: 0,
             id: 1,
         };
-        let b = selection_box(&song, &[r(0), r(2)], &rows, AXIS, 1.0, false);
+        let b = selection_box(&song, &[r(0), r(2)], &rows, AXIS, 1.0);
         assert_eq!(
             b,
             Some(Rect::from_min_max(pos2(164.0, 48.0), pos2(420.0, 240.0)))
         );
         // One clip: its start to its end across its own row.
-        let b = selection_box(&song, &[r(2)], &rows, AXIS, 1.0, false);
+        let b = selection_box(&song, &[r(2)], &rows, AXIS, 1.0);
         assert_eq!(
             b,
             Some(Rect::from_min_max(pos2(292.0, 176.0), pos2(420.0, 240.0)))
         );
-        assert_eq!(selection_box(&song, &[], &rows, AXIS, 1.0, false), None);
+        assert_eq!(selection_box(&song, &[], &rows, AXIS, 1.0), None);
     }
 
     #[test]
@@ -5192,6 +5443,16 @@ mod tests {
             .as_deref()
             .unwrap();
         assert_eq!(slot.file.stretch_ratio, 3.0);
+        // `Match tempo...` (#91): at 90 BPM the sample holds 3 beats, so at the song's 120 it plays in 3: ratio
+        // 90/120, from the stretched 12 beats to 3, and the visible length goes with it, a quarter of its 6.
+        assert!(match_tempo(&mut song, r, (88_200, 44_100), 90.0));
+        let clip = &song.channels[2].lanes[0].clips[0];
+        let slot = clip.file.sample.as_deref().unwrap();
+        assert_eq!((slot.file.stretch_mode, slot.file.stretch_ratio), (1, 0.75));
+        assert_eq!(
+            (clip.file.source_len_beats, clip.visible_len_beats),
+            (3.0, 1.5)
+        );
     }
 
     #[test]

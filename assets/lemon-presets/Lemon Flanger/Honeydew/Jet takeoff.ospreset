@@ -1,0 +1,15 @@
+OSPRESET 1
+plugin=Lemon Flanger	id=clap:org.openstudio.lemon-flanger	format=clap	body=params
+# Honeydew's own preset (tools/lemon_presets.py).
+Delay = 100
+Depth = 4500
+Rate = 900
+Phase = 119
+Damp = 0
+Shape = 0
+Feedback = 80
+Invert feedback = 1024
+Invert wet = 1024
+Dry = 3500
+Wet = 3000
+Cross = 2500

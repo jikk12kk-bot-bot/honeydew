@@ -1,25 +1,32 @@
 //! The side browser's previews: the audition strip over the picked row of an instrument's presets, and the sample strip
-//! at the bottom of a sample picker. [`crate::ui::modules_browser::SidePanel`] draws them; the caller turns them on,
+//! at the bottom of a sample picker (an instrument's pickers have no keys of their own: they end above the app's
+//! keyboard, which stays in front of them). [`crate::ui::modules_browser::SidePanel`] draws them; the caller turns them on,
 //! and sends what they ask for to the audio.
 //!
 //! **Audition strip.** Invisible, over the picked row's full rect, catching a touch before the list does: a finger down
 //! plays note trunc(24 + 60u) (u: where across the row, clamped to [0, 1]) at velocity 1 until it lifts, one note at a
 //! time; while one finger holds, another touch falls through and re-picks the row. Enter (action `open`, `Preview`)
 //! holds note 60 while the strip has the keyboard focus (it takes it after each pick); the focus leaving it lets the
-//! note go. While the module loads it draws the `LOADING...` pulse over the row.
+//! note go. While the module loads it draws the `LOADING...` pulse over the row. Over a drum kit's pick it plays the
+//! kit's pads instead, across the row in pad order (#88).
 //!
 //! **Sample strip.** 1.75 U at the bottom of the panel, `menuFill`: the play button (icon 3, 1.2 U, centred in a 2 U
-//! column), the waveform (from x + 2 U, max(W − 2.4 U, 0) wide, 1 U tall, `text` at 0.85), and under it the sample's
-//! name and its progress in a 5 : 1 width. It plays the pick once from the start; the play button (or the play key)
-//! stops or plays from the start, a touch on the waveform stops and its release plays from there. The waveform sits
-//! 0.125 U below the strip's top, the labels fill the rest; the progress is the position as m:ss (0:00 while stopped).
+//! column; ■ while it plays, #124), the waveform (from x + 2 U, max(W − 2.4 U, 0) wide, 1 U tall, `text` at 0.85), and
+//! under it the sample's name and its progress in a 5 : 1 width. It plays the pick once from the start; the play button
+//! (or the play key) stops or plays from the start, a touch on the waveform stops and its release plays from there. The
+//! waveform sits 0.125 U below the strip's top, the labels fill the rest; the progress is the position as m:ss (0:00
+//! while stopped). The waveform is the playlist's audio clips' of the whole file
+//! ([`crate::ui::clips::wave_mesh`]: each channel's min/max a device pixel a column, stereo in halves, at full scale;
+//! #124, where #108 drew one smoothed band of held peaks). While it plays, the editors' playhead line marks the
+//! position on it (#123).
 
-use eframe::egui::{Align2, Id, Mesh, Painter, Rect, Sense, Ui, pos2, vec2};
+use eframe::egui::{Align2, Id, Painter, Rect, Sense, Ui, pos2, vec2};
 
 use crate::icons::{IconId, draw_icon};
 use crate::metrics::FontSize;
 use crate::sample_cache::Waveform;
-use crate::ui::audio_editor::{add_column, pixel_columns, wave_rows};
+use crate::ui::audio_editor::{Wave, pixel_columns, wave_rows};
+use crate::ui::clips::wave_mesh;
 use crate::ui::widgets::truncated;
 use crate::ui::{Finger, UiCtx, fingers};
 
@@ -35,11 +42,15 @@ const LOADING_INSET: f32 = 0.25;
 const LOADING_ALPHA: f32 = 0.5;
 pub const LOADING: &str = "LOADING...";
 
-/// The note a touch at `x` plays over `row`: trunc(24 + 60u), u = clamp((x − left)/width, 0, 1).
+/// The note a touch at `x` plays over `row`: trunc(24 + 60u) ([`across`]).
 pub fn note_at(x: f32, row: Rect) -> u8 {
+    (LOW + SPAN * across(x, row)) as u8
+}
+
+/// Where `x` is across `row`: u = clamp((x − left)/width, 0, 1).
+fn across(x: f32, row: Rect) -> f32 {
     let u = ((x - row.left()) / row.width()).clamp(0.0, 1.0);
-    let u = if u.is_nan() { 0.0 } else { u };
-    (LOW + SPAN * u) as u8
+    if u.is_nan() { 0.0 } else { u }
 }
 
 /// The loading fill's `text` alpha at `t` seconds: 0.5·|sin(2π·frac(t))|, two pulses a second.
@@ -67,6 +78,9 @@ pub(crate) struct Audition {
     /// `LOADING...`'s alpha, a ← 0.95a + 0.05 a frame while loading, else 0.
     text_alpha: f32,
     sounds: Vec<Sound>,
+    /// A drum kit's pad notes, in pad order (#88): a touch plays pad trunc(n·u) of the n, not [`note_at`]; Enter the
+    /// first. Empty for an instrument.
+    pub pads: Vec<u8>,
 }
 
 impl Audition {
@@ -104,7 +118,11 @@ impl Audition {
                 Finger::Down(..) if self.held.is_some_and(|(by, _)| by != KEY) => repick = true,
                 Finger::Down(id, pos) => {
                     if let Some(row) = row {
-                        self.trigger(id, note_at(pos.x, row));
+                        let key = match self.pads.len() {
+                            0 => note_at(pos.x, row),
+                            n => self.pads[((n as f32 * across(pos.x, row)) as usize).min(n - 1)],
+                        };
+                        self.trigger(id, key);
                     }
                 }
                 Finger::Up(id, _) if self.held.is_some_and(|(by, _)| by == id) => self.release(),
@@ -118,7 +136,7 @@ impl Audition {
     pub fn key(&mut self, pressed: bool, down: bool) {
         let holding = self.held.is_some_and(|(by, _)| by == KEY);
         if pressed && !holding {
-            self.trigger(KEY, KEY_NOTE);
+            self.trigger(KEY, self.pads.first().copied().unwrap_or(KEY_NOTE));
         } else if holding && !down {
             self.release();
         }
@@ -276,7 +294,6 @@ impl SampleStrip {
         }
 
         let button = ui.interact(play, id.with("sample play"), Sense::click());
-        draw_icon(&painter, play, IconId::Play, text, 1.0, m);
         // The play key plays or stops it too (`Play preview` / `Pause preview`), unless a text field has the keys.
         let key = !ui.ctx().wants_keyboard_input() && crate::keymap::pressed(ui.ctx(), "play");
         if button.clicked() || key {
@@ -285,6 +302,12 @@ impl SampleStrip {
                 false => self.play(0),
             }
         }
+        let icon = if self.playing.is_some() {
+            IconId::Stop
+        } else {
+            IconId::Play
+        };
+        draw_icon(&painter, play, icon, text, 1.0, m);
 
         let wave_id = id.with("sample wave");
         ui.interact(wave_rect, wave_id, Sense::click_and_drag());
@@ -304,19 +327,21 @@ impl SampleStrip {
             }
         }
 
+        // The playlist's audio clip waveform of the whole file: a frame a content beat (Honeydew change, #124).
         let ink = text.gamma_multiply(WAVE_ALPHA);
-        let px = 1.0 / m.ppp();
         let (x0, width) = pixel_columns(wave_rect, m);
-        let fpp = frames as f64 / width.max(1) as f64;
         let rows = wave_rows(wave_rect, wave.summary.len() > 1);
-        let mut mesh = Mesh::default();
-        for ((samples, summary), &row) in wave.channels().zip(&rows) {
-            let peaks = honeydew_audio::sample_edit::peaks(samples, summary, fpp, 0.0, width);
-            for (i, peak) in peaks.into_iter().enumerate() {
-                add_column(&mut mesh, x0 + i as f32 * px, peak, row, px, ink);
-            }
+        let whole = Wave {
+            frames,
+            per_beat: 1.0,
+            reversed: false,
+        };
+        let span = ((0.0, frames as f64 / width.max(1) as f64), (x0, width));
+        painter.add(wave_mesh(&wave, whole, &rows, span, 1.0 / m.ppp(), ink));
+        if let Some(at) = self.position(now) {
+            let x = wave_rect.left() + wave_rect.width() * (at / frames.max(1) as f64) as f32;
+            crate::ui::timeline::playhead_line(&painter, wave_rect, x, cx);
         }
-        painter.add(mesh);
 
         let seconds = self.position(now).unwrap_or(0.0) / f64::from(wave.data.sample_rate);
         let label = clock(seconds);

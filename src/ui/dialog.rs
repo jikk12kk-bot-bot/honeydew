@@ -8,7 +8,8 @@
 //! were opened from.
 
 use eframe::egui::{
-    Color32, Context, Id, LayerId, Order, Painter, Rangef, Rect, Response, Stroke, StrokeKind,
+    Color32, Context, Id, LayerId, Order, Painter, Rangef, Rect, Response, Sense, Stroke,
+    StrokeKind, Ui, Vec2, pos2,
 };
 
 use super::anim;
@@ -30,6 +31,45 @@ pub(crate) fn floating_x(screen: Rect, m: &Metrics) -> Rangef {
     let w = m.u(MAX_W).min(screen.width() - 4.0 / m.ppp());
     let left = m.round_px(screen.center().x - w / 2.0);
     Rangef::new(left, left + m.round_px(w))
+}
+
+/// The temp-data key, under a panel's id, of how far its drags moved it ([`moved`]).
+const MOVED: &str = "moved by drags";
+
+/// A movable panel's rect this frame: `rect`, where its layout puts it, moved by its drags so far ([`drag_to_move`]),
+/// kept on `screen`.
+pub(crate) fn moved(ctx: &Context, id: Id, rect: Rect, screen: Rect) -> Rect {
+    let by = ctx.data(|d| d.get_temp::<Vec2>(id.with(MOVED)));
+    kept_on(rect.translate(by.unwrap_or_default()), screen)
+}
+
+/// `rect` moved onto `screen`, its top left first when it is the bigger.
+fn kept_on(rect: Rect, screen: Rect) -> Rect {
+    let x = rect.left().min(screen.right() - rect.width()).max(screen.left());
+    let y = rect.top().min(screen.bottom() - rect.height()).max(screen.top());
+    rect.translate(pos2(x, y) - rect.min)
+}
+
+/// The drags on `handle` (a movable panel's free room, under its controls) move panel `id`, shown at `rect` ([`moved`])
+/// on `screen`, from the next frame. Call it first in the panel's area, so that its controls, laid over it, keep their
+/// touches; it also takes the touches that hit no control, which never reach what is under the panel.
+pub(crate) fn drag_to_move(
+    ui: &mut Ui,
+    id: Id,
+    handle: Rect,
+    rect: Rect,
+    screen: Rect,
+) -> Response {
+    let response = ui.interact(handle, id.with("move"), Sense::click_and_drag());
+    let d = response.drag_delta();
+    if response.dragged() && d != Vec2::ZERO {
+        let to = kept_on(rect.translate(d), screen);
+        let (ctx, key) = (ui.ctx(), id.with(MOVED));
+        let by = ctx.data(|m| m.get_temp::<Vec2>(key)).unwrap_or_default();
+        ctx.data_mut(|m| m.insert_temp(key, by + (to.min - rect.min)));
+        ctx.request_repaint();
+    }
+    response
 }
 
 /// Paints the floating panel `rect` into `painter` ([module docs](self)).

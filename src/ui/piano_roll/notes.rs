@@ -520,12 +520,14 @@ pub fn quantize_selected(events: &mut Vec<Event>, sel: &mut Vec<bool>, grid: f64
     true
 }
 
-/// Lengthens each selected note to the next later start among the selected notes; the last ones keep theirs.
-pub fn legato_selected(events: &mut [Event], sel: &[bool]) {
+/// Lengthens each selected note to the next later start among the selected notes. Honeydew change (GitHub #123):
+/// the last ones reach the end of the bar (`bar` ticks long) their start falls in, unless they end past it.
+pub fn legato_selected(events: &mut [Event], sel: &[bool], bar: f64) {
     let starts: Vec<f64> = flagged(events, sel).map(|(pos, _, _)| pos).collect();
     let new = map_notes(events, sel, |pos, len, key| {
         let next = starts.iter().copied().filter(|&s| s > pos).reduce(f64::min);
-        (pos, next.map_or(len, |s| s - pos), key)
+        let bar_end = ((pos / bar).floor() + 1.0) * bar;
+        (pos, next.map_or(len.max(bar_end - pos), |s| s - pos), key)
     });
     events.copy_from_slice(&new);
 }
@@ -913,8 +915,7 @@ pub struct Ghost {
 /// The notes of every other channel's notes lanes that play during the edited clip's first loop pass (without a
 /// clip: during the first bar), mapped into the clip's content: those that reach the content ticks `view` shows, from
 /// clips whose loop passes are at least `px` ticks (a pixel) long ([`Clip::plays_to_draw`]). So the walk is bounded
-/// by the view, not by a file's loop or visible lengths. A hidden track's notes (`Hide track`) are never ghosts, whatever
-/// Settings `Show hidden tracks` (the playlist's) says.
+/// by the view, not by a file's loop or visible lengths.
 pub fn ghost_notes(
     song: &Song,
     channel: usize,
@@ -933,7 +934,7 @@ pub fn ghost_notes(
         if ci == channel {
             continue;
         }
-        for lane in (ch.lanes.iter()).filter(|l| l.kind == LaneKind::Notes && !l.hidden) {
+        for lane in (ch.lanes.iter()).filter(|l| l.kind == LaneKind::Notes) {
             for c in &lane.clips {
                 // A note that starts before the view reaches into it by its length.
                 // ponytail: at most a view's width; a ghost longer than that, starting further before the view, is

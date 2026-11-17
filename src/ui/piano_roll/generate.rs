@@ -6,14 +6,14 @@
 //! The panel is the dialog look without the dim, so the preview shows: 14 U wide at the roll's right edge, centred on
 //! its height and kept inside the screen. Top to bottom: the title, then a row each for `Preset` (Pop, Minor, Lo-fi,
 //! Epic, Random), `Bars` (1, 2, 4, 8), `Lead` (Chords: a melody written over them; Melody: the chords fitted under
-//! the clip's own notes) and `Seed` (its number and `New seed`), then `Reset`, `Cancel` and
+//! the clip's own notes) and `Seed` (its number, which a tap types in, and `New seed`), then `Reset`, `Cancel` and
 //! `Apply`.
 
 use std::hash::{BuildHasher, RandomState};
 
 use eframe::egui::{
-    Align2, Area, Color32, Context, Id, LayerId, Order, Rect, ScrollArea, Sense, Ui, UiBuilder,
-    pos2, scroll_area::ScrollBarVisibility, vec2,
+    Align, Align2, Area, Color32, Context, Id, LayerId, Order, Rect, ScrollArea, Sense, TextEdit, Ui,
+    UiBuilder, pos2, scroll_area::ScrollBarVisibility, vec2,
 };
 
 use super::compose::{
@@ -92,6 +92,45 @@ impl Panel {
         }
     }
 
+    /// The panel as the app settings keep it (`pianoRollGenerate`): its ten choices, in field order.
+    pub(crate) fn to_prefs(self) -> Vec<u32> {
+        [
+            self.bars,
+            self.seed as usize,
+            self.key,
+            self.scale,
+            self.octave,
+            self.duration,
+            self.rests,
+            self.arp,
+            self.chords,
+            self.tempo,
+        ]
+        .into_iter()
+        .map(|v| v as u32)
+        .collect()
+    }
+
+    /// The panel [`Self::to_prefs`] kept; `None` for anything else. A choice past its list is its last.
+    pub(crate) fn from_prefs(prefs: &[u32]) -> Option<Self> {
+        let &[bars, seed, key, scale, octave, duration, rests, arp, chords, tempo] = prefs else {
+            return None;
+        };
+        let at = |v: u32, len: usize| (v as usize).min(len.saturating_sub(1));
+        Some(Self {
+            bars: at(bars, BARS.len()),
+            seed: u64::from(seed) % SEEDS,
+            key: at(key, KEYS.len() + 1),
+            scale: at(scale, SCALE_CHOICES.len() + 1),
+            octave: at(octave, OCTAVES.len()),
+            duration: at(duration, DURATIONS.len()),
+            rests: at(rests, RESTS.len()),
+            arp: at(arp, ARPS.len()),
+            chords: at(chords, CHORD_MODES.len()),
+            tempo: at(tempo, TEMPOS.len() + 1),
+        })
+    }
+
     /// What the rows say ([module docs](self)).
     pub(crate) fn settings(&self) -> Settings {
         Settings {
@@ -135,7 +174,9 @@ pub(crate) fn show(
     panel: &mut Panel,
 ) -> Option<Close> {
     let (m, c) = (cx.m, &cx.theme.colors);
-    let rect = layout(ctx.content_rect(), over, m);
+    let screen = ctx.content_rect();
+    // Where its drags moved it (`dialog::drag_to_move`).
+    let rect = dialog::moved(ctx, id, layout(screen, over, m), screen);
     // In the panel's layer, before its area, which egui lays out unseen on its first frame.
     dialog::panel(
         &ctx.layer_painter(LayerId::new(Order::Foreground, id)),
@@ -152,8 +193,9 @@ pub(crate) fn show(
         .constrain(false)
         .fade_in(false)
         .show(ctx, |ui| {
-            // The whole panel, so it swallows the touches that hit no control.
+            // The whole panel, so it swallows the touches that hit no control; a drag on it moves it.
             ui.allocate_exact_size(rect.size(), Sense::hover());
+            dialog::drag_to_move(ui, id, rect, rect, screen);
             let inner = rect.shrink(m.u(MARGIN));
             let text = c.text.to_color32();
             ui.painter().text(
@@ -269,14 +311,8 @@ fn rows(ui: &mut Ui, cx: &UiCtx, id: Id, column: Rect, ink: Color32, panel: &mut
     panel.bars = dropdown(ui, r, "bars", &BAR_LABELS, panel.bars, None);
     let r = next(CHOICE);
     label(ui, r, "Seed", text);
-    let at = pos2(r.left() + m.u(LABEL_W), r.center().y);
-    ui.painter().text(
-        at,
-        Align2::LEFT_CENTER,
-        panel.seed.to_string(),
-        font.clone(),
-        text,
-    );
+    let field = seed_rect(r, m);
+    seed_field(ui, cx, id.with("seed"), field, &mut panel.seed, SEEDS);
     if action_button(ui, r, "new seed", "New seed") {
         let now = ui.input(|i| i.time).to_bits();
         panel.seed = RandomState::new().hash_one(now) % SEEDS;
@@ -316,4 +352,55 @@ fn rows(ui: &mut Ui, cx: &UiCtx, id: Id, column: Rect, ink: Color32, panel: &mut
     let r = next(CHOICE);
     label(ui, r, "Chords", text);
     panel.chords = dropdown(ui, r, "chords", &CHORD_MODES, panel.chords, None);
+}
+
+/// The seed's text field in its row `r`: after the label, up to `New seed` at the right.
+pub(super) fn seed_rect(r: Rect, m: &Metrics) -> Rect {
+    let left = r.left() + m.u(LABEL_W);
+    let right = (r.right() - m.u(BUTTON[0] + MARGIN)).max(left + m.u(1.0));
+    let h = m.u(BUTTON[1]);
+    Rect::from_x_y_ranges(left..=right, r.center().y - h / 2.0..=r.center().y + h / 2.0)
+}
+
+/// A seed's number in a text field at `rect`, which a tap types into (Android's text editor on a phone): a number
+/// typed (digits only, kept below `seeds`) is the seed. Whether it changed.
+pub(super) fn seed_field(ui: &mut Ui, cx: &UiCtx, id: Id, rect: Rect, seed: &mut u64, seeds: u64) -> bool {
+    let (m, c) = (cx.m, &cx.theme.colors);
+    let digits = (seeds.saturating_sub(1)).to_string().len();
+    // What is typed while it has the focus (it may be empty for a moment); the seed's number otherwise.
+    let focused = ui.memory(|mem| mem.has_focus(id));
+    let mut typed = match focused {
+        true => ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| seed.to_string()),
+        false => seed.to_string(),
+    };
+    ui.painter().rect_filled(rect, m.u(0.15), c.control_fill.to_color32());
+    let edit = TextEdit::singleline(&mut typed)
+        .id(id)
+        .char_limit(digits)
+        .frame(false)
+        .font(m.font_id(FontSize::Pt10))
+        .text_color(c.text.to_color32())
+        .margin(vec2(m.u(0.25), 0.0))
+        .desired_width(rect.width())
+        .min_size(rect.size())
+        .vertical_align(Align::Center);
+    let mut response = ui.put(rect, edit);
+    crate::android_text::edit(&mut response, &mut typed, digits);
+    typed.retain(|ch| ch.is_ascii_digit());
+    let mut changed = false;
+    if response.changed()
+        && let Ok(value) = typed.parse::<u64>()
+    {
+        let value = value.min(seeds.saturating_sub(1));
+        changed = value != *seed;
+        *seed = value;
+    }
+    if response.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, typed));
+    } else {
+        ui.data_mut(|d| {
+            d.remove_temp::<String>(id);
+        });
+    }
+    changed
 }

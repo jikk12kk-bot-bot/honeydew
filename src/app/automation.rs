@@ -284,6 +284,7 @@ impl HoneydewApp {
             slots.mixer.touch.take(),
             slots.drum_editor.touch.take(),
             self.main_screen.touch.take(),
+            slots.lemon_editor.touch.take(),
         ];
         let mut pick = None;
         for (channel, touch) in touches.into_iter().flatten() {

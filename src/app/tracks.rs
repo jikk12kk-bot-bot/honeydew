@@ -19,7 +19,7 @@ use crate::song::{
 use crate::ui::clips::{ClipRef, Emptied};
 use crate::ui::preview::ClipKey;
 use crate::ui::rack::PresetTarget;
-use crate::ui::track_menu::TrackOp;
+use crate::ui::track_menu::{FolderOp, TrackOp};
 use crate::ui::views::sample_picker::{playing, replace_sample};
 use crate::ui::views::{self, Nav, Overlay, SongEdit, View};
 
@@ -352,8 +352,11 @@ impl HoneydewApp {
             }
             // The screen shows the add-channel popup for it.
             TrackOp::InsertChannel => {}
-            // The file goes to [`Self::midi_import`] once read.
-            TrackOp::ImportMidi => self.files.pick_midi_tracks(ch.id),
+            // Our picker (#113), whose pick goes to [`Self::midi_import`] once read.
+            TrackOp::ImportMidi => {
+                let id = ch.id;
+                self.navigate(Nav::Open(Overlay::MidiPicker(id)));
+            }
             // The one-format Save dialog, proposing the channel's name; its `SAVE` writes the channel alone.
             TrackOp::SaveMidi => {
                 let overlay = self.slots.export.save_as_midi(ch.id, &ch.name);
@@ -373,7 +376,126 @@ impl HoneydewApp {
             }
             // Disabled in the menu (see `TrackOp`).
             TrackOp::SyncAllSamples => {}
+            // The screen opens the folder list.
+            TrackOp::MoveToFolderMenu => {}
+            TrackOp::NewFolder => {
+                let ids = channel_ids(&self.song);
+                if self.song.new_folder(Some(channel)).is_some() {
+                    self.folders_edited(&ids, tick);
+                }
+            }
+            TrackOp::MoveToFolder(folder) => {
+                let ids = channel_ids(&self.song);
+                if self.song.move_to_folder(channel, Some(folder)) {
+                    self.folders_edited(&ids, tick);
+                }
+            }
+            TrackOp::LeaveFolder => {
+                let ids = channel_ids(&self.song);
+                if self.song.move_to_folder(channel, None) {
+                    self.folders_edited(&ids, tick);
+                }
+            }
         }
+    }
+
+    /// A track folder row's tap or menu pick on folder `folder`: `Rename Folder` opens the folder name dialog.
+    pub(super) fn folder_op(&mut self, folder: usize, op: FolderOp, tick: u64) {
+        if folder >= self.song.file.folders.len() {
+            return;
+        }
+        let ids = channel_ids(&self.song);
+        match op {
+            FolderOp::Rename => {
+                let name = self.song.file.folders[folder].name.clone();
+                self.navigate(Nav::Open(Overlay::FolderName { folder, name }));
+                return;
+            }
+            FolderOp::Mute | FolderOp::Solo => {
+                let solo = op == FolderOp::Solo;
+                let mut changes =
+                    crate::ui::mini_mixer::folder_switch(&mut self.song, folder, solo);
+                if solo {
+                    // As a member's own `Solo` tap: smart solo.
+                    let target = crate::song::AutomationTarget {
+                        instance_id: 0,
+                        param: 3,
+                    };
+                    let taps: Vec<usize> = changes.iter().map(|c| c.0).collect();
+                    for x in taps {
+                        let more = crate::ui::mixer::smart_solo(&mut self.song, x).into_iter();
+                        changes.extend(more.map(|(c, v)| (c, target, v)));
+                    }
+                }
+                for &(channel, target, value) in &changes {
+                    self.audio.send(AudioCommand::SetParam {
+                        channel,
+                        instance_id: target.instance_id,
+                        index: target.param,
+                        value,
+                    });
+                }
+                if !changes.is_empty() {
+                    self.song_edited(SongEdit::ChannelParam, tick);
+                }
+                return;
+            }
+            FolderOp::Toggle => self.song.toggle_folder(folder),
+            FolderOp::AllOpen(open) => self.song.set_folders_open(open),
+            FolderOp::Delete => {
+                self.song.delete_folder(folder);
+            }
+        }
+        self.folders_edited(&ids, tick);
+    }
+
+    /// The add-channel popup's `Folder`: a new empty track folder, or (`Insert Channel`'s) one holding channel
+    /// `channel`. At [`MAX_FOLDERS`](crate::song::folders::MAX_FOLDERS) nothing.
+    pub(super) fn add_folder(&mut self, channel: Option<usize>, tick: u64) {
+        let ids = channel_ids(&self.song);
+        if self.song.new_folder(channel.filter(|&c| c > 0)).is_some() {
+            self.folders_edited(&ids, tick);
+        }
+    }
+
+    /// A track header's drop: channel `.0` of `member` into folder `.1` (none: out of any) first, then the channels in
+    /// playlist order `order` (their indices before the drop), each folder's members kept together. One undo step.
+    pub(super) fn drop_tracks(
+        &mut self,
+        order: &[usize],
+        member: Option<(usize, Option<usize>)>,
+        tick: u64,
+    ) {
+        let (ids, folders) = (channel_ids(&self.song), self.song.file.folders.clone());
+        if let Some((channel, folder)) = member {
+            self.song.set_folder_member(channel, folder);
+        }
+        self.song.set_playlist(order);
+        self.song.gather_folders();
+        if channel_ids(&self.song) != ids || self.song.file.folders != folders {
+            self.folders_edited(&ids, tick);
+        }
+    }
+
+    /// After a track folder edit, one undo step: the clips selected on channels a closed folder now hides are
+    /// deselected; a member moved to its folder is a completed edit that keeps every voice by channel id, as a track
+    /// header's drop ([`Self::set_playlist`]), anything else one the audio never reads. `ids` are the channels' ids
+    /// before it.
+    fn folders_edited(&mut self, ids: &[i32], tick: u64) {
+        // Members of channels deleted since go.
+        self.song.prune_folders();
+        let song = &self.song;
+        let clips = &mut self.main_screen.clips;
+        let hidden = |r: &ClipRef| song.folded_away(r.channel);
+        if clips.selected.as_ref().is_some_and(hidden) {
+            *clips = Default::default();
+        }
+        clips.group.retain(|r| !hidden(r));
+        let edit = match channel_ids(&self.song) != ids {
+            true => SongEdit::Final,
+            false => SongEdit::Param,
+        };
+        self.song_edited(edit, tick);
     }
 
     /// After the files, each frame: `Import MIDI Tracks`. A file of exactly one MIDI channel goes into the channel
@@ -1008,15 +1130,19 @@ impl HoneydewApp {
             | Overlay::CtrlMenu
             | Overlay::Message { .. }
             | Overlay::TempoEditor
+            | Overlay::FolderName { .. }
             | Overlay::PresetDialog { .. }
             | Overlay::SampleName { .. }
             | Overlay::Busy { .. }
             | Overlay::LearnCc
             // Its channel is kept by id.
             | Overlay::MidiImport
+            | Overlay::MidiPicker(_)
             | Overlay::Credits
             | Overlay::WhatsNew
-            | Overlay::Versions => true,
+            | Overlay::Versions
+            | Overlay::Displayer
+            | Overlay::SectionSettings { .. } => true,
         });
         // The audio editor's op waiting to be saved (`app/audio_edit.rs`) follows its clip, or goes with it.
         self.audio_edit = (self.audio_edit.take()).and_then(|p| p.moved(|c, l| rk.track(c, l)));

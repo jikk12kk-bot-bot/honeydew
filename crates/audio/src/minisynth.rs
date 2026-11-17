@@ -834,6 +834,10 @@ impl MiniSynth {
         }
         voice.busy = true;
         (voice.key, voice.velocity, voice.pan) = (note, velocity, pan);
+        // A new note starts without slide offsets, as on the other synths: a reused voice (MONO, a steal, a release
+        // still running) must not keep the last slide's, which would play every later note off its key (upstream
+        // #143). A LEAD legato hand-over (above) keeps them.
+        voice.slide = [0.0; 3];
         voice.started = self.serial;
         voice.pitch = f32::from(start);
         voice.amp.attack(attack);

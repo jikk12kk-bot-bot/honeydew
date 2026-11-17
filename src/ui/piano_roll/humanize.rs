@@ -14,7 +14,7 @@
 //!   `Pitch → Length`: the app font has no arrow), −100 to +100 % (0);
 //! - `Base adjustments`, bipolar: `Velocity` −50 to +50 % of full scale, `Length` ×0.25 to ×4 (log), `Timing` ±0.25
 //!   beat in whole ticks;
-//! - `Seed`, its number (0–99999, a fresh one at each opening) and, at the right, `New seed`;
+//! - `Seed`, its number (0–99999, a fresh one at each opening; a tap types one in) and, at the right, `New seed`;
 //! - `Apply to`: `Selected` (with a selection only) or `All`, the current one lit, at the right; `Selected` when the
 //!   panel opened on a selection.
 //!
@@ -146,7 +146,9 @@ fn layout(screen: Rect, over: Rect, m: &Metrics) -> Rect {
     let top = (over.center().y - h / 2.0)
         .min(screen.bottom() - m.u(MARGIN) - h)
         .max(screen.top() + m.u(MARGIN));
-    Rect::from_min_size(pos2(m.round_px(right - w), m.round_px(top)), vec2(w, h))
+    // Kept inside the screen beside a roll the rack narrows (#107).
+    let left = (right - w).max(screen.left() + m.u(MARGIN));
+    Rect::from_min_size(pos2(m.round_px(left), m.round_px(top)), vec2(w, h))
 }
 
 /// One frame of the panel beside the roll `over`, its sliders in `ink`; `Some` when it closes.
@@ -159,7 +161,9 @@ pub(crate) fn show(
     panel: &mut Panel,
 ) -> Option<Close> {
     let (m, c) = (cx.m, &cx.theme.colors);
-    let rect = layout(ctx.content_rect(), over, m);
+    let screen = ctx.content_rect();
+    // Where its drags moved it (`dialog::drag_to_move`).
+    let rect = dialog::moved(ctx, id, layout(screen, over, m), screen);
     // In the panel's layer, before its area, which egui lays out unseen on its first frame.
     dialog::panel(
         &ctx.layer_painter(LayerId::new(Order::Foreground, id)),
@@ -176,8 +180,9 @@ pub(crate) fn show(
         .constrain(false)
         .fade_in(false)
         .show(ctx, |ui| {
-            // The whole panel, so it swallows the touches that hit no control.
+            // The whole panel, so it swallows the touches that hit no control; a drag on it moves it.
             ui.allocate_exact_size(rect.size(), Sense::hover());
+            dialog::drag_to_move(ui, id, rect, rect, screen);
             let inner = rect.shrink(m.u(MARGIN));
             let text = c.text.to_color32();
             ui.painter().text(
@@ -281,14 +286,11 @@ fn rows(ui: &mut Ui, cx: &UiCtx, id: Id, column: Rect, ink: Color32, panel: &mut
     };
     let r = next(CHOICE);
     label(ui, r, "Seed", text);
-    let at = pos2(r.left() + m.u(LABEL_W), r.center().y);
-    ui.painter().text(
-        at,
-        Align2::LEFT_CENTER,
-        panel.seed.to_string(),
-        font.clone(),
-        text,
-    );
+    let field = r
+        .with_min_x(r.left() + m.u(LABEL_W))
+        .with_max_x((r.right() - m.u(BUTTON[0] + MARGIN)).max(r.left() + m.u(LABEL_W + 1.0)))
+        .shrink2(vec2(0.0, (r.height() - m.u(BUTTON[1])).max(0.0) / 2.0));
+    super::generate::seed_field(ui, cx, id.with("seed"), field, &mut panel.seed, SEEDS);
     if choice(ui, r, 0, "new seed", "New seed", false, true) {
         let now = ui.input(|i| i.time).to_bits();
         panel.seed = RandomState::new().hash_one(now) % SEEDS;

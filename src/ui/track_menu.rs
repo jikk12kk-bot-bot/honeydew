@@ -8,7 +8,7 @@ use crate::ui::popup::PopupItem;
 /// The menu's items.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrackOp {
-    /// `Show Tracks` / `Hide tracks` (zipping the sub-tracks inside the channel).
+    /// `Show Tracks` / `Hide tracks`.
     ToggleZip,
     ChannelSettings,
     CloneChannel,
@@ -35,13 +35,136 @@ pub enum TrackOp {
     AddPitchTrack,
     /// Disabled: resyncing the audio clips is not implemented.
     SyncAllSamples,
+    /// `Move to Folder…`: the folder list ([`move_to_folder_items`]).
+    MoveToFolderMenu,
+    /// The folder list's `New Folder`: a new track folder holding the channel ([`crate::song::folders`]).
+    NewFolder,
+    /// A folder in the folder list: the channel into folder `n`.
+    MoveToFolder(usize),
+    /// `Remove from Folder`: the channel out of its folder.
+    LeaveFolder,
+}
+
+/// Rows of folders in each column of the folder list, under its header row.
+pub const FOLDER_ROWS: usize = 9;
+
+/// The track menu's `Folder:` column (column `col`) for channel `channel`: `Move to Folder…`, then `Remove from Folder`
+/// while the channel is in a folder. None for the master or a missing channel.
+pub fn folder_items(song: &Song, channel: usize, col: usize) -> Vec<PopupItem<TrackOp>> {
+    use TrackOp::*;
+    if channel == 0 || channel >= song.channels.len() {
+        return Vec::new();
+    }
+    let mut items = vec![
+        PopupItem::header(col, 0, "Folder:"),
+        PopupItem::new(MoveToFolderMenu, col, 1, "Move to Folder…"),
+    ];
+    if song.folder_of(channel).is_some() {
+        items.push(PopupItem::new(LeaveFolder, col, 2, "Remove from Folder"));
+    }
+    items
+}
+
+/// `Move to Folder…`'s list for channel `channel`: the `Move to Folder:` header, then `New Folder` (holding the
+/// channel; disabled at [`MAX_FOLDERS`](crate::song::folders::MAX_FOLDERS)) and every folder of the song by name, in
+/// columns of [`FOLDER_ROWS`]; the channel's own folder is marked current and not selectable. None for the master or a
+/// missing channel.
+pub fn move_to_folder_items(song: &Song, channel: usize) -> Vec<PopupItem<TrackOp>> {
+    use TrackOp::*;
+    if channel == 0 || channel >= song.channels.len() {
+        return Vec::new();
+    }
+    let own = song.folder_of(channel);
+    let full = song.file.folders.len() >= crate::song::folders::MAX_FOLDERS;
+    let mut items = vec![PopupItem::header(0, 0, "Move to Folder:")];
+    let at = |k: usize| (k / FOLDER_ROWS, 1 + k % FOLDER_ROWS);
+    let (col, row) = at(0);
+    items.push(PopupItem {
+        disabled: full,
+        ..PopupItem::new(NewFolder, col, row, "New Folder")
+    });
+    for (i, f) in song.file.folders.iter().enumerate() {
+        let mine = own == Some(i);
+        let (col, row) = at(i + 1);
+        items.push(PopupItem {
+            current: mine,
+            disabled: mine,
+            ..PopupItem::new(MoveToFolder(i), col, row, f.name.clone())
+        });
+    }
+    items
+}
+
+/// A folder row's menu items.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FolderOp {
+    /// `Rename Folder` / `Folder Color`: the folder's dialog (name and colour).
+    Rename,
+    /// `Mute Folder` / `Unmute Folder`: every member's mute.
+    Mute,
+    /// `Solo Folder` / `Unsolo Folder`: every member's solo.
+    Solo,
+    /// `Collapse Folder` / `Expand Folder`.
+    Toggle,
+    /// `Collapse All Folders` (false) / `Expand All Folders` (true).
+    AllOpen(bool),
+    /// `Delete Folder`: the folder goes, its tracks stay.
+    Delete,
+}
+
+/// The menu of folder `folder`'s row (a long press or secondary click on it): column 0 `Rename Folder`, `Folder Color`
+/// (both the folder's dialog), `Collapse Folder` (`Expand Folder` while it is closed), `Collapse All Folders` while any
+/// folder is open (else `Expand All Folders`), and `Delete Folder`, which keeps its tracks; column 1 `Mute Folder`
+/// (`Unmute Folder` while every member is muted) and `Solo Folder` (`Unsolo Folder`), disabled while it is empty.
+/// Empty for a missing folder.
+pub fn folder_menu(song: &Song, folder: usize) -> Vec<PopupItem<FolderOp>> {
+    use FolderOp::*;
+    let Some(f) = song.file.folders.get(folder) else {
+        return Vec::new();
+    };
+    let toggle = match f.open {
+        true => "Collapse Folder",
+        false => "Expand Folder",
+    };
+    let any_open = song.file.folders.iter().any(|f| f.open);
+    let all = match any_open {
+        true => (AllOpen(false), "Collapse All Folders"),
+        false => (AllOpen(true), "Expand All Folders"),
+    };
+    let mut items: Vec<PopupItem<FolderOp>> = [
+        (Rename, "Rename Folder"),
+        (Rename, "Folder Color"),
+        (Toggle, toggle),
+        all,
+        (Delete, "Delete Folder (keep tracks)"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(row, (op, label))| PopupItem::new(op, 0, row, label))
+    .collect();
+    let empty = song.folder_members(folder).is_empty();
+    let mute = match song.folder_muted(folder) {
+        true => "Unmute Folder",
+        false => "Mute Folder",
+    };
+    let solo = match song.folder_soloed(folder) {
+        true => "Unsolo Folder",
+        false => "Solo Folder",
+    };
+    for (row, (op, label)) in [(Mute, mute), (Solo, solo)].into_iter().enumerate() {
+        items.push(PopupItem {
+            disabled: empty,
+            ..PopupItem::new(op, 1, row, label)
+        });
+    }
+    items
 }
 
 /// The menu for track `lane` of channel `channel`. The primary track is the channel's lane 0.
 /// - Column 0: `Show Tracks` while the sub-tracks are hidden, else `Hide tracks`, enabled with more than one track;
 ///   `Channel Settings`; `Clone Channel` and `Insert Channel` (not on the master); `Delete Track`, enabled when the
-///   channel has more than one track of the primary's kind or this track's kind differs from it; then
-///   `Delete Channel` (not on the master), last (#68). The master's menu is items 0, 2 and 5.
+///   channel has more than one track of the primary's kind or this track's kind differs from it; then `Delete Channel`
+///   (not on the master), last (#68). The master's menu is items 1, 2 and 5.
 /// - Column 1, generator channels only (not the master, not a send), by the primary track's kind: notes
 ///   `Import MIDI Tracks`, `Save as MIDI`, `Burn Notes to Track`, `Add Track`; audio `Add Track`, `Sync All Samples`; drums `Load Drumset`,
 ///   `Save Drumset`, `Add StepSeq Track`, `Add Notes Track`, `Save as MIDI`. `Sync All Samples` is disabled (see
@@ -221,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn the_master_has_items_0_1_4_and_a_send_no_column_1() {
+    fn the_master_has_items_1_2_5_and_a_send_no_column_1() {
         let song = song();
         assert_eq!(
             menu(&song, 0, 0),
@@ -313,5 +436,82 @@ mod tests {
                 AddPitchTrack
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+    use crate::song::SynthKind;
+
+    fn labels<T>(items: &[PopupItem<T>]) -> Vec<String> {
+        items.iter().map(|i| i.label.to_string()).collect()
+    }
+
+    #[test]
+    fn the_folder_column_opens_the_list_of_every_folder() {
+        let mut song = Song::default();
+        for _ in 0..3 {
+            song.add_channel(ChannelKind::Synth(SynthKind::MiniSynth));
+        }
+        assert!(folder_items(&song, 0, 2).is_empty(), "the master");
+        assert!(move_to_folder_items(&song, 0).is_empty(), "the master");
+        let items = folder_items(&song, 1, 2);
+        assert_eq!(labels(&items), ["Folder:", "Move to Folder…"]);
+        assert!(items.iter().all(|i| i.col == 2));
+        assert_eq!(
+            labels(&move_to_folder_items(&song, 1)),
+            ["Move to Folder:", "New Folder"]
+        );
+        let drums = song.new_folder(Some(1)).unwrap();
+        song.rename_folder(drums, "Drums");
+        song.new_folder(None);
+        assert_eq!(
+            labels(&folder_items(&song, 1, 2)),
+            ["Folder:", "Move to Folder…", "Remove from Folder"]
+        );
+        let items = move_to_folder_items(&song, 1);
+        assert_eq!(labels(&items), ["Move to Folder:", "New Folder", "Drums", "Folder 1"]);
+        assert_eq!(items[0].id, None);
+        assert!(items[2].current && items[2].disabled, "its own folder");
+        assert_eq!(items[3].id, Some(TrackOp::MoveToFolder(1)));
+        let rows: Vec<(usize, usize)> = items.iter().map(|i| (i.col, i.row)).collect();
+        assert_eq!(rows, [(0, 0), (0, 1), (0, 2), (0, 3)]);
+        // Past FOLDER_ROWS entries the list goes on in the next column.
+        for _ in 0..FOLDER_ROWS {
+            song.new_folder(None);
+        }
+        let items = move_to_folder_items(&song, 2);
+        assert!(items.iter().all(|i| i.row <= FOLDER_ROWS));
+        assert_eq!(items.last().map(|i| i.col), Some(1));
+    }
+
+    #[test]
+    fn a_folder_row_s_menu_renames_toggles_and_deletes() {
+        let mut song = Song::default();
+        song.add_channel(ChannelKind::Drums);
+        let f = song.new_folder(Some(1)).unwrap();
+        assert_eq!(
+            labels(&folder_menu(&song, f)),
+            [
+                "Rename Folder",
+                "Folder Color",
+                "Collapse Folder",
+                "Collapse All Folders",
+                "Delete Folder (keep tracks)",
+                "Mute Folder",
+                "Solo Folder"
+            ]
+        );
+        song.toggle_folder(f);
+        song.channels[1].params.0[2] = 1.0;
+        let items = folder_menu(&song, f);
+        assert_eq!(labels(&items)[2..4], ["Expand Folder", "Expand All Folders"]);
+        assert_eq!(items[3].id, Some(FolderOp::AllOpen(true)));
+        assert_eq!((items[5].col, &*items[5].label), (1, "Unmute Folder"));
+        // An empty folder has nothing to mute or solo.
+        let empty = song.new_folder(None).unwrap();
+        assert!(folder_menu(&song, empty)[5..].iter().all(|i| i.disabled));
+        assert!(folder_menu(&song, 5).is_empty());
     }
 }

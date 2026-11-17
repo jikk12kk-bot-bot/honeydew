@@ -1,7 +1,7 @@
 //! The file actions of SONGS and the preset pickers (the ≡ options menu; [`FileActions`]) on a [`SongLibrary`]: make a
 //! folder, delete into [`RECENTLY_DELETED`] (a copy at the same place below the user folder), restore from it, delete
-//! for good, paste what was copied or cut, rename, export, show in the system's file manager, and convert one WAV to
-//! FLAC beside it.
+//! for good, paste what was copied or cut, rename, export, show in the system's file manager, send (a phone's share
+//! sheet), and convert one WAV to FLAC beside it.
 //!
 //! Nothing is ever replaced. A paste, a delete, a restore and an export take a free `Name (n)` where the name is
 //! taken (as `New Song (1)`); a name the user typed that is taken is refused with a message. Links are
@@ -19,14 +19,18 @@ use crate::project_files::PRESETS_FOLDER;
 use crate::project_files::content::{FOLD_CASE, inside as fold_inside};
 use crate::ui::popup::PopupItem;
 
-/// The ≡ menu's items that apply to SONGS and the preset pickers: `Send to playlist` and `Insert at playhead` never do.
-/// `Unzip` only does in SONGS, the one that lists archives; `Convert to FLAC` only in the pickers that list audio files.
+/// The ≡ menu's items that apply to SONGS and the preset pickers: `Insert at playhead` never does. `Unzip` only does in
+/// SONGS, the one that lists archives, and so does `Send to playlist` (#106); `Convert to FLAC` only in the pickers that
+/// list audio files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Opt {
     SelectAll,
     Restore,
     DeletePermanently,
     CreateFolder,
+    /// SONGS only (#106): the selected audio files, each on a new audio track at the playhead. [`FileActions`] leaves it
+    /// to the tab, as `Unzip`.
+    SendToPlaylist,
     Delete,
     /// SONGS only: [`FileActions`] leaves it to the tab, which needs the app's files to extract with.
     Unzip,
@@ -37,6 +41,12 @@ pub(crate) enum Opt {
     Export,
     Rename,
     Reveal,
+    /// `Send` (#72): the selected files to the phone's share sheet ([`crate::project_files::share`]).
+    Send,
+    /// `Add shortcut` / `Remove shortcut` (Honeydew addition): the open folder as a root row of every browser
+    /// ([`crate::ui::shortcuts`]). The browser does it, not [`FileActions`]; the browser adds the item.
+    AddShortcut,
+    RemoveShortcut,
 }
 
 /// What the ≡ menu depends on.
@@ -48,6 +58,8 @@ pub(crate) struct MenuState {
     pub archive: bool,
     /// The selection is exactly one `.wav` file.
     pub wav: bool,
+    /// The selection holds audio files, which `Send to playlist` takes (SONGS only, #106).
+    pub audio: bool,
     /// The open folder is `Recently Deleted`, or one inside it.
     pub in_trash: bool,
     /// The clipboard holds something.
@@ -60,9 +72,12 @@ pub(crate) struct MenuState {
     pub locked_folder: bool,
     /// A selected row is read-only (imported content): it is not moved, renamed or deleted.
     pub locked_picked: bool,
+    /// `Send` (SONGS on a phone): whether the selection is files only, which it needs; `None` leaves it out.
+    pub send: Option<bool>,
 }
 
-/// The ≡ menu, one column: `Select all`, then the file actions in their order. An item that is not present in this
+/// The ≡ menu, one column: `Select all`, then the file actions in their order (a browser adds its shortcut item:
+/// [`shortcut_item`]). An item that is not present in this
 /// state is left out; one that cannot apply to the selection is disabled, and so is one that would change original
 /// content (`locked_folder`, `locked_picked`: copying out of it stays).
 pub(crate) fn options_menu(s: MenuState) -> Vec<PopupItem<Opt>> {
@@ -71,7 +86,7 @@ pub(crate) fn options_menu(s: MenuState) -> Vec<PopupItem<Opt>> {
     let reveal: Option<Cow<'static, str>> =
         s.reveal.map(|name| format!("Show in {name}...").into());
     // (item, label, present, enabled)
-    let items: [(Opt, Cow<'static, str>, bool, bool); 13] = [
+    let items: [(Opt, Cow<'static, str>, bool, bool); 15] = [
         (SelectAll, "Select all".into(), true, true),
         (Restore, "Restore".into(), s.in_trash, any),
         (
@@ -86,6 +101,7 @@ pub(crate) fn options_menu(s: MenuState) -> Vec<PopupItem<Opt>> {
             !s.in_trash,
             !s.locked_folder,
         ),
+        (SendToPlaylist, "Send to playlist".into(), s.audio, true),
         (
             Delete,
             "Delete".into(),
@@ -116,6 +132,12 @@ pub(crate) fn options_menu(s: MenuState) -> Vec<PopupItem<Opt>> {
             any && reveal.is_some(),
             true,
         ),
+        (
+            Send,
+            "Send".into(),
+            any && s.send.is_some(),
+            s.send == Some(true),
+        ),
     ];
     items
         .into_iter()
@@ -126,6 +148,16 @@ pub(crate) fn options_menu(s: MenuState) -> Vec<PopupItem<Opt>> {
             ..PopupItem::new(opt, 0, row, label)
         })
         .collect()
+}
+
+/// The ≡ menu's shortcut item after `items` (Honeydew addition): `Remove shortcut` while the open folder is a shortcut
+/// (`shortcut` true), else `Add shortcut`.
+pub(crate) fn shortcut_item(items: &mut Vec<PopupItem<Opt>>, shortcut: bool) {
+    let (opt, label) = match shortcut {
+        true => (Opt::RemoveShortcut, "Remove shortcut"),
+        false => (Opt::AddShortcut, "Add shortcut"),
+    };
+    items.push(PopupItem::new(opt, 0, items.len(), label));
 }
 
 /// `Delete permanently`'s question.
@@ -214,7 +246,9 @@ impl FileActions {
                 self.purge = Some(picked);
                 return Step::Confirm(question);
             }
-            Opt::Unzip => return Step::Nothing,
+            Opt::Unzip | Opt::SendToPlaylist | Opt::AddShortcut | Opt::RemoveShortcut => {
+                return Step::Nothing;
+            }
             Opt::ConvertFlac => {
                 if let [entry] = &picked[..] {
                     self.convert = Some(Convert::Shown(entry.path.clone()));
@@ -245,6 +279,16 @@ impl FileActions {
                 }
                 return Step::Kept(Ok(()));
             }
+            Opt::Send => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let files: Vec<PathBuf> = picked.into_iter().map(|e| e.path).collect();
+                    let mime = crate::project_files::mime(&files);
+                    return Step::Kept(crate::project_files::share(&files, mime));
+                }
+                #[cfg(target_arch = "wasm32")]
+                return Step::Kept(Ok(()));
+            }
         })
     }
 
@@ -269,6 +313,11 @@ impl FileActions {
     pub(crate) fn answered(&mut self, yes: bool, lib: &mut dyn SongLibrary) -> Option<Done> {
         let picked = self.purge.take()?;
         yes.then(|| delete_permanently(lib, &picked, &mut self.moved))
+    }
+
+    /// What the actions moved (`Some` where to) or deleted since [`Self::take_moves`] last ran, oldest first.
+    pub(crate) fn moves(&self) -> &[Moved] {
+        &self.moved
     }
 
     /// What the actions moved (`Some` where to) or deleted since the last call, oldest first.
@@ -1692,7 +1741,7 @@ mod tests {
         std::fs::create_dir_all(unzipped.join("Pack/My Samples")).unwrap();
         std::fs::write(unzipped.join("Pack/Beat.flm"), b"b").unwrap();
         let mut lib = NativeLibrary::at(user.join(SONGS_FOLDER));
-        assert_eq!(lib.places(), [trash(&lib), unzipped.clone()]);
+        assert!(lib.places().contains(&trash(&lib)) && lib.places().contains(&unzipped));
         // The folder itself: a root of SONGS, which cannot be deleted whole.
         let root_entry = entry(&lib, None, "Unzipped songs");
         assert_eq!(root_entry.path, unzipped);

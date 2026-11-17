@@ -63,6 +63,12 @@ pub(super) fn edit(last: &mut Song, new: &Song, tempo_moved: bool) -> Edit {
         let Some(a) = last.channels.iter().find(|a| a.id == b.id) else {
             continue;
         };
+        // Upstream issue #140: the note effects (Transpose, Scale, Randomizer, ...) worked the notes out ahead, so a
+        // note playing under the old ones would get its note-off at the key the new ones give it, and hang (a synth
+        // forever, a sampler its whole sample). Their change silences the channel; the next notes play as they say.
+        if note_effects(a) != note_effects(b) && !edit.silence.contains(&index) {
+            edit.silence.push(index);
+        }
         if a.lanes == b.lanes {
             continue;
         }
@@ -116,6 +122,16 @@ fn renumber(a: &mut Channel, b: &Channel, deleted: &[i32]) {
             _ => true,
         });
     }
+}
+
+/// The note effects of `channel`'s rack, in order: each one's instance id, type and params.
+fn note_effects(channel: &Channel) -> Vec<(i32, u16, &[f32])> {
+    use crate::params::{Role, module_spec};
+    let note = |type_id: u16| module_spec(type_id).is_some_and(|s| s.role == Role::NoteEffect);
+    (channel.rack.modules.iter())
+        .filter(|m| note(m.type_id))
+        .map(|m| (m.instance_id, m.type_id, m.params.as_slice()))
+        .collect()
 }
 
 /// `new` is `old` with empty lanes inserted, the others unchanged and in order.

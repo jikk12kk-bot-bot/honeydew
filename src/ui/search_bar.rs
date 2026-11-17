@@ -15,7 +15,8 @@
 //! the name in FontSize 3 (an 18 pt name and the path do not fit the row), the path in FontSize 1 at α 0.6. The current
 //! row (the last pick, or the folder holding it) is inverted, a `text` fill under `menuFill` ink, outside select mode;
 //! a pressed row is lit `text` α 0.15, a hovered one α 0.05. In select mode a `controlFill` checkbox circle (radius
-//! 0.2 U at x + 0.525 U) grows in, a selected row's with an inner `text` disc, and the label moves right 0.75 U.
+//! 0.2 U at x + 0.525 U) grows in, a selected row's with an inner `text` disc, and the label moves right 0.75 U. A
+//! picker's row ends in its [`Mark`], the label stopping 0.25 U short of it.
 //!
 //! - A `Search` tap that shows the bar starts the search as Ctrl+F does (the field takes the keyboard, select mode is
 //!   left).
@@ -38,13 +39,14 @@ use eframe::egui::{
     Align, Align2, Color32, Context, Id, Painter, Rect, RichText, Stroke, TextEdit, Ui, pos2, vec2,
 };
 
+use crate::icons::{IconId, draw_icon};
 use crate::keymap;
 use crate::metrics::{FontSize, Metrics};
 use crate::ui::UiCtx;
 use crate::ui::focus::{self, Dir, Kind};
 use crate::ui::main_menu::SongEntry;
 use crate::ui::main_menu::library::MAX_LISTED;
-use crate::ui::widgets::{Button, button, truncated};
+use crate::ui::widgets::{Button, button, truncated, truncated_bold};
 
 /// How far the bar moves the breadcrumbs and the list down while it shows, in U.
 pub(crate) const DROP: f32 = 1.75;
@@ -194,6 +196,46 @@ pub(crate) struct RowLook<'a> {
     pub hovered: bool,
     /// Select mode: how far its checkbox has grown in (0 to 1), and whether the row is selected.
     pub select: Option<(f32, bool)>,
+    /// The name in a heavier stroke ([`truncated_bold`]): SONGS' folders.
+    pub bold: bool,
+    /// What it shows at its right end, the label stopping short of it.
+    pub mark: Option<Mark<'a>>,
+}
+
+/// What a picker row shows at its right end (a Honeydew addition, #109, #123): a folder's
+/// `›` (icon 10), a file's extension (an audio file's too), dimmed as a search row's path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mark<'a> {
+    Folder,
+    Ext(&'a str),
+}
+
+/// A mark's icon box at the row's right end, and its icons' size factor.
+const MARK_W: f32 = 1.0;
+const MARK_ICON: f32 = 0.75;
+
+/// Paints `mark` in `ink` at the right end of the row `rect`, inside its label inset, and gives the width it takes.
+fn paint_mark(painter: &Painter, m: &Metrics, rect: Rect, mark: Mark, ink: Color32) -> f32 {
+    let right = rect.right() - m.u(ROW_PAD);
+    let icon = |id| {
+        let square = Rect::from_x_y_ranges(right - m.u(MARK_W)..=right, rect.y_range());
+        draw_icon(painter, square, id, ink, MARK_ICON, m);
+        m.u(MARK_W)
+    };
+    match mark {
+        Mark::Folder => icon(IconId::Collapse),
+        Mark::Ext(ext) => {
+            let at = pos2(right, rect.center().y);
+            let (text, font) = (
+                format!(".{}", ext.to_lowercase()),
+                m.font_id(FontSize::Pt10),
+            );
+            let dim = ink.gamma_multiply(PLACE_ALPHA);
+            painter
+                .text(at, Align2::RIGHT_CENTER, text, font, dim)
+                .width()
+        }
+    }
 }
 
 /// Paints a browser row in `rect` (see the module docs).
@@ -221,7 +263,11 @@ pub(crate) fn paint_row(painter: &Painter, cx: &UiCtx, rect: Rect, row: &RowLook
         }
         label.min.x += m.u(CHECK_SHIFT) * t;
     }
+    if let Some(mark) = row.mark {
+        label.max.x -= paint_mark(painter, m, rect, mark, ink) + m.u(ROW_PAD);
+    }
     let left = Align2::LEFT_CENTER;
+    let draw = if row.bold { truncated_bold } else { truncated };
     match row.place.filter(|p| !p.is_empty()) {
         Some(place) => {
             let top = label.center().y - m.u(NAME_LINE + PLACE_LINE) / 2.0;
@@ -230,11 +276,11 @@ pub(crate) fn paint_row(painter: &Painter, cx: &UiCtx, rect: Rect, row: &RowLook
                 .with_min_y(name.bottom())
                 .with_max_y(name.bottom() + m.u(PLACE_LINE));
             let font = m.font_id(FontSize::Pt12);
-            truncated(painter, name, left, row.name, font, ink, 0);
+            draw(painter, name, left, row.name, font, ink, 0);
             let (font, dim) = (m.font_id(FontSize::Pt8), ink.gamma_multiply(PLACE_ALPHA));
             truncated(painter, line, left, place, font, dim, 0);
         }
-        None => truncated(painter, label, left, row.name, m.font_id(row.font), ink, 0),
+        None => draw(painter, label, left, row.name, m.font_id(row.font), ink, 0),
     }
 }
 

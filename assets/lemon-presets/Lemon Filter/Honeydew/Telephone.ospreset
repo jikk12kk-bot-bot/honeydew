@@ -1,0 +1,10 @@
+OSPRESET 1
+plugin=Lemon Filter	id=clap:org.openstudio.lemon-filter	format=clap	body=params
+# Honeydew's own preset (tools/lemon_presets.py).
+Cutoff frequency = 600
+Resonance = 300
+Low pass = 0
+Band pass = 1024
+High pass = 300
+X 2 = 1
+Center = 1

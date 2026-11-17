@@ -120,14 +120,15 @@ pub fn inputs() -> Vec<(i32, String)> {
 }
 
 /// Opens the input labelled `label` (one of [`inputs`]) at `rate` into a new ring: stereo float, else mono, at the
-/// default input preset as cpal's default input. Through AAudio by its device id, as cpal opens a device by its name
-/// only, which a headset's mic shares with its earphones. (ndk's `audio` feature is cpal's, for its AAudio host.)
+/// default input preset and in the low-latency mode as cpal's default input (Honeydew change, #130). Through AAudio by
+/// its device id, as cpal opens a device by its name only, which a headset's mic shares with its earphones. (ndk's
+/// `audio` feature is cpal's, for its AAudio host.)
 pub fn open_input(
     label: &str,
     rate: u32,
 ) -> Result<(Arc<InputRing>, android_activity::ndk::audio::AudioStream), String> {
     use android_activity::ndk::audio::{
-        AudioCallbackResult, AudioDirection, AudioFormat, AudioStreamBuilder,
+        AudioCallbackResult, AudioDirection, AudioFormat, AudioPerformanceMode, AudioStreamBuilder,
     };
     let (id, _) = (inputs().into_iter())
         .find(|(_, l)| l == label)
@@ -144,6 +145,7 @@ pub fn open_input(
             .channel_count(channels as i32)
             .format(AudioFormat::PCM_Float)
             .sample_rate(rate as i32)
+            .performance_mode(AudioPerformanceMode::LowLatency)
             .data_callback(Box::new(move |_, data, frames| {
                 let len = frames.max(0) as usize * channels;
                 // SAFETY: AAudio hands `frames` frames of `channels` floats, the format asked for.
@@ -204,6 +206,23 @@ pub extern "system" fn Java_dev_daijro_honeydew_HoneydewActivity_onInterrupted(
     if let Some(tap) = RECORDING.lock().ok().as_deref().and_then(Option::as_ref) {
         tap.disarm();
         INTERRUPTED.store(true, Ordering::Release);
+    }
+}
+
+/// `onPause`, before Android pauses the app thread, which then runs no frame until the app is back: the frame that
+/// writes the song's unsaved changes ([`crate::project_files::leave`]) runs first, waited for up to half a second.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_daijro_honeydew_HoneydewActivity_onLeaving(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) {
+    crate::project_files::leave();
+    // ponytail: polled every 5 ms; a condvar if the wait ever shows.
+    for _ in 0..100 {
+        if !crate::project_files::leaving() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 
@@ -298,6 +317,88 @@ pub extern "system" fn Java_dev_daijro_honeydew_HoneydewActivity_onDocumentPicke
     finish(&PICKING, picked);
 }
 
+/// What the Displayer's media pick finishes with: the document's URI (permission kept over restarts), an error, or
+/// `None` when it was cancelled.
+pub type PickedMedia = Option<Result<String, String>>;
+static PICKING_MEDIA: Waiting<PickedMedia> = Mutex::new(None);
+
+/// Opens the system document picker for the Displayer (`HoneydewActivity.openMedia`), showing files of MIME type
+/// `mime` (`image/*`, `video/*`): `done` gets the document's URI, which stays readable after a restart, on a Java
+/// thread. Nothing is copied: the file stays where it is.
+pub fn pick_media(mime: &str, done: impl FnOnce(PickedMedia) + Send + 'static) {
+    *PICKING_MEDIA.lock().expect("picker lock") = Some(Box::new(done));
+    let mime = mime.to_owned();
+    let opened = with_activity(|env, activity| {
+        let mime = env.auto_local(env.new_string(&mime)?);
+        let arg = jni::objects::JValue::Object(mime.as_ref());
+        env.call_method(activity, "openMedia", "(Ljava/lang/String;)V", &[arg])
+            .map(drop)
+    });
+    if let Err(err) = opened {
+        finish(&PICKING_MEDIA, Some(Err(err)));
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_daijro_honeydew_HoneydewActivity_onMediaPicked(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    uri: jni::objects::JString<'_>,
+    error: jni::objects::JString<'_>,
+) {
+    let picked = match (text(&mut env, &uri), text(&mut env, &error)) {
+        (Some(uri), _) => Some(Ok(uri)),
+        (None, Some(error)) => Some(Err(error)),
+        (None, None) => None,
+    };
+    finish(&PICKING_MEDIA, picked);
+}
+
+/// A file descriptor of the document at `uri` (`HoneydewActivity.openUriFd`), read-only, which the caller owns and
+/// closes; `None` when it cannot be opened (gone, permission lost).
+pub fn open_uri_fd(uri: &str) -> Option<i32> {
+    let mut fd = -1;
+    let _ = with_activity_unlocked(|env, activity| {
+        let uri = env.auto_local(env.new_string(uri)?);
+        let arg = jni::objects::JValue::Object(uri.as_ref());
+        fd = env
+            .call_method(activity, "openUriFd", "(Ljava/lang/String;)I", &[arg])?
+            .i()?;
+        Ok(())
+    });
+    (fd >= 0).then_some(fd)
+}
+
+/// Puts `text` on the system clipboard (`HoneydewActivity.copyText`): egui's own copy reaches no clipboard here.
+pub fn copy_text(text: &str) {
+    let _ = with_activity_unlocked(|env, activity| {
+        let text = env.auto_local(env.new_string(text)?);
+        let arg = jni::objects::JValue::Object(text.as_ref());
+        env.call_method(activity, "copyText", "(Ljava/lang/String;)V", &[arg])?;
+        Ok(())
+    });
+}
+
+/// The display name of the document at `uri`, if the provider gives one.
+pub fn uri_name(uri: &str) -> Option<String> {
+    let mut name = None;
+    let _ = with_activity_unlocked(|env, activity| {
+        let uri = env.auto_local(env.new_string(uri)?);
+        let arg = jni::objects::JValue::Object(uri.as_ref());
+        let value = env
+            .call_method(
+                activity,
+                "uriName",
+                "(Ljava/lang/String;)Ljava/lang/String;",
+                &[arg],
+            )?
+            .l()?;
+        name = text(env, &value.into());
+        Ok(())
+    });
+    name.filter(|n| !n.is_empty())
+}
+
 /// Opens the system folder picker (`HoneydewActivity.openFolder`); `done` gets the files of the folder picked, listed
 /// on a Java thread.
 pub fn pick_folder(done: impl FnOnce(PickedFolder) + Send + 'static) {
@@ -368,9 +469,9 @@ pub extern "system" fn Java_dev_daijro_honeydew_HoneydewActivity_onFilesCopied(
 /// `Settings::android_orientation`). The window then turns and resizes like a rotation (the manifest's `configChanges`
 /// keep the Activity), and the next frame lays out at the new size. A failure is only logged.
 ///
-/// The Activity posts the request to its UI thread itself (`HoneydewActivity.requestOrientation`): changing a window's
-/// orientation from the app's own thread is not the UI thread's to do, and on some devices it wedges the window until
-/// the app is killed.
+/// PR #87: the Activity posts the request to its UI thread itself (`HoneydewActivity.requestOrientation`): changing a
+/// window's orientation from the app's own thread is not the UI thread's to do, and on some devices it wedges the
+/// window until the app is killed.
 pub fn request_orientation(orientation: i32) {
     let requested = with_activity(|env, activity| {
         env.call_method(
@@ -401,6 +502,30 @@ pub fn show_folder(folder: &std::path::Path) -> Result<(), String> {
     })
 }
 
+/// `Send` (#72): `files`, in the user folder, to the system's chooser as `mime` (`HoneydewActivity.share`), each by
+/// its document in `HoneydewDocuments` with a read grant only. Why not, when one is not in the user folder.
+pub fn share(files: &[PathBuf], mime: &str) -> Result<(), String> {
+    let list: String = files.iter().map(|f| format!("{}\0", f.display())).collect();
+    let mut failed = None;
+    with_activity(|env, activity| {
+        let list = env.auto_local(env.new_string(list)?);
+        let mime = env.auto_local(env.new_string(mime)?);
+        let why = env.call_method(
+            activity,
+            "share",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+            &[
+                jni::objects::JValue::Object(list.as_ref()),
+                jni::objects::JValue::Object(mime.as_ref()),
+            ],
+        )?;
+        let why = env.auto_local(jni::objects::JString::from(why.l()?));
+        failed = text(env, &why);
+        Ok(())
+    })?;
+    failed.map_or(Ok(()), Err)
+}
+
 /// The network the phone is on: the sound library's download waits for an unmetered one (`update`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Network {
@@ -429,17 +554,27 @@ pub fn network() -> Network {
 /// Downloads `url` into the file at `path`, going on from the bytes it holds (`HoneydewActivity.download`), on this
 /// thread, which it blocks for as long: `None` once it is in, else why not (`offline` without a network).
 pub fn download(url: &str, path: &str) -> Option<String> {
+    download_with(url, path, "", "")
+}
+
+/// [`download`] with a GitHub `token` and the `accept` to ask with (each empty for none), sent to `url`'s host only
+/// (`HoneydewActivity.downloadWith`), never on to where it redirects.
+pub fn download_with(url: &str, path: &str, token: &str, accept: &str) -> Option<String> {
     let mut failed = None;
     let called = with_activity_unlocked(|env, activity| {
         let url = env.auto_local(env.new_string(url)?);
         let path = env.auto_local(env.new_string(path)?);
+        let token = env.auto_local(env.new_string(token)?);
+        let accept = env.auto_local(env.new_string(accept)?);
         let why = env.call_method(
             activity,
-            "download",
-            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+            "downloadWith",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
             &[
                 jni::objects::JValue::Object(url.as_ref()),
                 jni::objects::JValue::Object(path.as_ref()),
+                jni::objects::JValue::Object(token.as_ref()),
+                jni::objects::JValue::Object(accept.as_ref()),
             ],
         )?;
         let why = env.auto_local(jni::objects::JString::from(why.l()?));

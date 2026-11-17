@@ -539,12 +539,12 @@ fn a_stretch_sets_the_ratio_and_the_clip_resyncs_by_the_loop_rule() {
 
 #[test]
 fn the_zoom_limits_use_the_subdivision_d() {
-    // (12/U)·4/d … (0.01/U)·4/d beats per point, d = TDIV byte 0 (the shared frame's).
+    // U·d/192 … 100·U·d beats per point, d = TDIV byte 0 (the shared frame's).
     let sig = |d, b| TimeSig {
         subdivision: d,
         beats_per_bar: b,
     };
-    assert_eq!(geom::zoom_limits(32.0, sig(3, 4)), [2.0, 2400.0]);
+    assert_eq!(geom::zoom_limits(32.0, sig(3, 4)), [0.5, 9600.0]);
     assert_eq!(
         geom::zoom_limits(32.0, sig(3, 7)),
         geom::zoom_limits(32.0, sig(3, 4))

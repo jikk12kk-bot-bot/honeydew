@@ -52,8 +52,9 @@ pub const IMPORT_FAILED: &str = "Import failed";
 const NOMEDIA: &str = ".nomedia";
 
 impl ProjectFiles {
-    /// The library the sample picker lists: the user folder holds [`SAMPLES_FOLDER`] and [`RECORDINGS_FOLDER`] (even
-    /// before they exist), and each of those its folders and [`SAMPLE_EXTS`] files. Read-only.
+    /// The library the sample picker lists: the user folder holds its folders, [`SAMPLES_FOLDER`] and
+    /// [`RECORDINGS_FOLDER`] even before they exist, and its [`SAMPLE_EXTS`] files; each folder its folders and those
+    /// files. Read-only.
     pub fn sample_library(&self) -> Box<dyn SongLibrary + '_> {
         Box::new(Samples(self))
     }
@@ -69,6 +70,21 @@ impl ProjectFiles {
     pub fn import_audio(&mut self, dir: PathBuf) {
         self.import_dir = Some(dir);
         self.open_pick(Pick::Sample);
+    }
+
+    /// `Import` in a plugin module's preset picker: asks for a plugin preset, which [`Self::update`] keeps in `dir`,
+    /// the picker's `My Presets/<plugin>` ([`Self::audio_imported`] keeps any picked file).
+    pub fn import_plugin_preset(&mut self, dir: PathBuf) {
+        self.import_dir = Some(dir);
+        self.open_pick(Pick::PluginPreset);
+    }
+
+    /// The MIDI picker's `Import` (issue #113): [`Self::import_audio`] of a MIDI file, into [`MIDI_FOLDER`].
+    pub fn import_midi(&mut self) {
+        if let Some(dir) = self.user_dir().map(|u| u.join(MIDI_FOLDER)) {
+            self.import_dir = Some(dir);
+            self.open_pick(Pick::Midi);
+        }
     }
 
     /// Keeps the picked audio file `path` (on the web its name alone) in the folder [`Self::import_audio`] named, under
@@ -106,48 +122,6 @@ impl ProjectFiles {
                 None
             }
         }
-    }
-
-    /// Keeps an Android plugin editor's picked sample in the app's normal sample folder, so the path saved in plugin
-    /// state remains valid after the document picker's cache copy is removed.
-    #[cfg(target_os = "android")]
-    pub(crate) fn keep_plugin_sample(path: &Path) -> io::Result<PathBuf> {
-        let dir = crate::ui::main_menu::user_dir()
-            .ok_or(io::ErrorKind::NotFound)?
-            .join(SAMPLES_FOLDER);
-        std::fs::create_dir_all(&dir)?;
-        Self::keep_plugin_sample_in(path, &dir)
-    }
-
-    // Only the Android entry point and the test use it; on a host build it would be dead code.
-    #[cfg(any(target_os = "android", test))]
-    fn keep_plugin_sample_in(path: &Path, dir: &Path) -> io::Result<PathBuf> {
-        let ext = path
-            .extension()
-            .ok_or(io::ErrorKind::InvalidInput)?
-            .to_string_lossy();
-        if ext.is_empty() {
-            return Err(io::ErrorKind::InvalidInput.into());
-        }
-        let bytes = std::fs::read(path)?;
-        let base = super::stem(path);
-        for n in 1u32.. {
-            let name = if n == 1 {
-                base.clone()
-            } else {
-                format!("{base} ({n})")
-            };
-            let target = dir.join(format!("{name}.{ext}"));
-            if target.exists() {
-                continue;
-            }
-            match super::write_atomic(&target, &bytes) {
-                Ok(()) => return Ok(target),
-                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(err) => return Err(err),
-            }
-        }
-        unreachable!("an unbounded range has a free sample name")
     }
 
     /// A file a built-in plugin's editor saved where there is no save dialog (Android, the web;
@@ -295,12 +269,18 @@ impl ProjectFiles {
     }
 }
 
-/// Makes the user folder `user`'s own folders ([`MY_FOLDERS`]) where they are missing.
+/// Makes the user folder `user`'s own folders ([`MY_FOLDERS`]) where they are missing, and in `My Presets` each
+/// module's folder ([`super::preset_folder`]), even with no preset yet: every picker's default shortcut is there at once.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn make_user_folders(user: &Path) -> io::Result<()> {
     MY_FOLDERS
         .iter()
-        .try_for_each(|folder| std::fs::create_dir_all(user.join(folder)))
+        .try_for_each(|folder| std::fs::create_dir_all(user.join(folder)))?;
+    let presets = user.join(PRESETS_FOLDER);
+    let specs = crate::params::modules().chain(crate::params::instruments());
+    (specs.filter(|s| !s.legacy))
+        .filter_map(|s| super::preset_folder(s.id))
+        .try_for_each(|folder| std::fs::create_dir_all(presets.join(folder)))
 }
 
 /// The user folder an archive's file of this name is imported into, by its type, in any case: samples, presets of
@@ -338,14 +318,24 @@ impl SongLibrary for Samples<'_> {
             return Ok(Vec::new());
         };
         if dir == user {
+            // The whole user folder, as every picker's `My Files` is: its folders and audio files, `My Samples` and
+            // `My Recordings` even before they exist.
             let folder = |name: &str| SongEntry {
                 name: name.into(),
                 path: user.join(name),
                 is_folder: true,
                 recency: 0,
             };
-            // The whole user folder as `My Files`: every `My …` folder, not only the sample ones.
-            return Ok(MY_FOLDERS.iter().map(|name| folder(name)).collect());
+            let mut entries = vec![folder(SAMPLES_FOLDER), folder(RECORDINGS_FOLDER)];
+            let listed = self.0.preset_library(&SAMPLE_EXTS).list(Some(dir));
+            for entry in listed.unwrap_or_default() {
+                let here = entry.is_folder || entry.path.parent() == Some(user);
+                if here && !entries.iter().any(|e| e.path == entry.path) {
+                    entries.push(entry);
+                }
+            }
+            entries.sort_by(|a, b| a.path.cmp(&b.path));
+            return Ok(entries);
         }
         let mut entries = self.0.preset_library(&SAMPLE_EXTS).list(Some(dir))?;
         entries.sort_by(|a, b| a.path.cmp(&b.path));
@@ -354,6 +344,11 @@ impl SongLibrary for Samples<'_> {
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         self.0.read_user_file(path).map_err(io::Error::other)
+    }
+
+    /// As the user's files have it: an empty `My Samples` is there too, for its shortcut row.
+    fn exists(&self, path: &Path) -> bool {
+        self.0.preset_library(&SAMPLE_EXTS).exists(path)
     }
 
     fn store(&mut self, _: &str, _: &[u8]) -> io::Result<()> {
@@ -387,7 +382,8 @@ mod tests {
         (name, path.to_owned(), false)
     }
 
-    /// At start the user folder gets its eleven own folders where they are missing; what is there stays.
+    /// At start the user folder gets its eleven own folders where they are missing, and each module's presets' folder;
+    /// what is there stays.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn the_user_folders_own_folders_are_made_where_missing() {
@@ -415,31 +411,15 @@ mod tests {
         ];
         assert_eq!(made, all);
         assert!(all.iter().all(|f| user.join(f).is_dir()));
+        // Each module's presets' folder, empty.
+        for folder in ["SuperSaw", "DW Sampler", "SoundFont Player", "3xOsc"] {
+            assert!(user.join("My Presets").join(folder).is_dir(), "{folder}");
+        }
         assert_eq!(
             std::fs::read(user.join("My Samples/kick.wav")).unwrap(),
             b"kick"
         );
         let _ = std::fs::remove_dir_all(&user);
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn plugin_samples_are_copied_to_my_samples_without_overwriting() {
-        let root =
-            std::env::temp_dir().join(format!("honeydew-plugin-sample-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let source = root.join("Loop.wav");
-        let dir = root.join(SAMPLES_FOLDER);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(&source, b"first").unwrap();
-        let one = ProjectFiles::keep_plugin_sample_in(&source, &dir).unwrap();
-        std::fs::write(&source, b"second").unwrap();
-        let two = ProjectFiles::keep_plugin_sample_in(&source, &dir).unwrap();
-        assert_eq!(one.file_name().unwrap().to_string_lossy(), "Loop.wav");
-        assert_eq!(two.file_name().unwrap().to_string_lossy(), "Loop (2).wav");
-        assert_eq!(std::fs::read(one).unwrap(), b"first");
-        assert_eq!(std::fs::read(two).unwrap(), b"second");
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

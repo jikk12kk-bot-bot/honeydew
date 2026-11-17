@@ -15,6 +15,12 @@ use crate::ui::focus_lost;
 pub const LONG_PRESS_S: f64 = 0.3;
 /// The calm zone's radius (U).
 pub const CALM_U: f32 = 0.5;
+/// A knob's or slider's long press ([`control_long_press`]): held this long (s), as a finger resting on a fader before
+/// it slides must not open the menu.
+pub const CONTROL_LONG_PRESS_S: f64 = 0.5;
+/// A knob's or slider's drag this far (points) from its touch-down is a drag, not a long press: any slide of the
+/// value cancels it, well inside the calm zone.
+pub const CONTROL_STILL_PT: f32 = 2.0;
 /// [`press`] fires this early: the frame a repaint wakes for can come a hair before it is due.
 const WAKE_EARLY_S: f64 = 1e-3;
 
@@ -46,6 +52,25 @@ pub fn long_press(ui: &Ui, response: &mut Response, m: &Metrics) -> bool {
     press(ui, response, m, Vec2::length).long
 }
 
+/// A knob's or slider's long press (its parameter menu): held more than [`CONTROL_LONG_PRESS_S`], and cancelled by a
+/// drag of more than [`CONTROL_STILL_PT`], so a finger that rests on a fader and then slides it changes the value
+/// instead of opening the menu.
+pub fn control_long_press(ui: &Ui, response: &mut Response, m: &Metrics) -> bool {
+    let law = Law {
+        long_s: CONTROL_LONG_PRESS_S,
+        still: Some(CONTROL_STILL_PT),
+    };
+    press_with(ui, response, m, Vec2::length, law).long
+}
+
+/// How long a press is held before it is long, and how far a drag goes before it cancels it (`None`: egui's click
+/// distance).
+#[derive(Clone, Copy)]
+struct Law {
+    long_s: f64,
+    still: Option<f32>,
+}
+
 /// The calm zone of the track headers: vertical travel only.
 pub fn vertical(d: Vec2) -> f32 {
     d.y.abs()
@@ -72,6 +97,21 @@ pub struct Press {
 /// touch-down; [`Vec2::length`] is the round zone, [`vertical`] the headers'). A press that leaves the calm zone before
 /// its long press reports nothing more. Call it every frame `response` is shown, once for each law.
 pub fn press(ui: &Ui, response: &mut Response, m: &Metrics, calm: fn(Vec2) -> f32) -> Press {
+    let law = Law {
+        long_s: LONG_PRESS_S,
+        still: None,
+    };
+    press_with(ui, response, m, calm, law)
+}
+
+/// [`press`] by `law`.
+fn press_with(
+    ui: &Ui,
+    response: &mut Response,
+    m: &Metrics,
+    calm: fn(Vec2) -> f32,
+    law: Law,
+) -> Press {
     let id = response.id.with("long press");
     let frame = ui.ctx().cumulative_frame_nr();
     let (down, released, start, origin, pos, now, cancel) = ui.input(|i| {
@@ -117,19 +157,25 @@ pub fn press(ui: &Ui, response: &mut Response, m: &Metrics, calm: fn(Vec2) -> f3
         };
     };
     h.seen = frame;
-    let click = ui.ctx().options(|o| o.input_options.max_click_dist);
-    let dragged = response.dragged() && pos.is_some_and(|p| p.distance(h.origin) > click);
+    let dragged = match law.still {
+        // A control's own travel, before egui calls it a drag (which waits for its click distance).
+        Some(still) => pos.is_some_and(|p| p.distance(h.origin) > still),
+        None => {
+            let click = ui.ctx().options(|o| o.input_options.max_click_dist);
+            response.dragged() && pos.is_some_and(|p| p.distance(h.origin) > click)
+        }
+    };
     h.cancelled |= h.fired.is_none()
         && (cancel || dragged || pos.is_some_and(|p| calm(p - h.origin) > m.u(CALM_U)));
     // Due a hair early ([`WAKE_EARLY_S`]). A release in the first frame after the hold came due (no frame in between)
     // is a long press too.
     let held = now - h.start;
     if !h.cancelled && h.fired.is_none() {
-        if is_long(held + WAKE_EARLY_S) {
+        if held + WAKE_EARLY_S > law.long_s {
             h.fired = Some(frame);
         } else if down {
             ui.ctx()
-                .request_repaint_after_secs((LONG_PRESS_S - held) as f32);
+                .request_repaint_after_secs((law.long_s - held) as f32);
         }
     }
     if h.fired.is_some() {

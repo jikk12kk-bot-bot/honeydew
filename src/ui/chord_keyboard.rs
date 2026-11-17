@@ -459,6 +459,7 @@ impl ChordKeyboard {
             cell_pitches(chord(s), input.strum, input.editor, cell, input.shift)
         };
         let timing = (!input.strum && !input.editor).then_some((now, input.timing_ms));
+        crate::ui::touch_route::takes_fingers(ui.ctx(), response.id);
         for finger in fingers(ui, response.id)
             .into_iter()
             .filter(|_| input.enabled)

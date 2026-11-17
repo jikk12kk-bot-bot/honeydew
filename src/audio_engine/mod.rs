@@ -19,6 +19,7 @@ pub(crate) mod slicer;
 mod slides;
 
 pub use input::{LiveInput, MONITOR_MAX_LAG_FRAMES, RecordTap, TakeStart};
+pub(crate) use midi_sends::{Received, midi_reach, midi_received};
 pub(crate) use prepare::{burned_hits, burned_notes};
 
 use std::sync::Arc;
@@ -682,20 +683,22 @@ impl SongAudioEngine {
     }
 
     /// Mute and Solo are on above 0.5: a channel is out of the mix while its Mute is on, or while another channel's
-    /// Solo is on and its own is not, unless a path of sends or pad targets joins it to a soloed channel. The master is
-    /// never out under a solo.
-    // solo keeps send and pad-target sources audible.
+    /// Solo is on and its own is not, unless it is on a soloed channel's path to the master (sends and pad targets, on
+    /// down): a soloed bus keeps none of its sources (#82). The master is never out under a solo. A channel out of the
+    /// mix takes its pads that play into another channel with it.
     fn sync_mixer_controls(&mut self) {
         let soloed = |controls: &[f32; 4]| controls[3] > 0.5;
         let solo = self.channel_controls.iter().any(soloed);
         for (index, controls) in self.channel_controls.iter().enumerate() {
-            let linked =
-                || (self.routing.linked[index].iter()).any(|&o| soloed(&self.channel_controls[o]));
-            let mut level = controls[0];
-            if controls[2] > 0.5 || (index != 0 && solo && !soloed(controls) && !linked()) {
-                level = 0.0;
-            }
+            let on_path = || {
+                (self.routing.upstream[index].iter()).any(|&o| soloed(&self.channel_controls[o]))
+            };
+            let out = controls[2] > 0.5 || (index != 0 && solo && !soloed(controls) && !on_path());
+            let level = if out { 0.0 } else { controls[0] };
             let _ = self.mixer.set_channel_controls(index, level, controls[1]);
+            if let Some(kit) = &mut self.kits[index] {
+                kit.out = out;
+            }
         }
     }
 
@@ -813,9 +816,10 @@ impl SongAudioEngine {
         for kit in self.kits.iter_mut().flatten() {
             kit.render(&mut self.buffers);
         }
+        let speed = self.speed();
         for (clips, buffer) in self.clips.iter_mut().zip(&mut self.buffers) {
             if let Some(clips) = clips {
-                clips.render(buffer);
+                clips.render(buffer, speed);
             }
         }
         if let Some(monitor) = &mut self.monitor {
@@ -1132,7 +1136,8 @@ impl AudioRenderer for SongAudioEngine {
 
     /// A tempo change without a rebuild (a tempo drag): from the next frame the transport runs at `bpm`, at the same
     /// beat. The prepared events, param timelines, loop and audio clip spans stay timed at the build's tempo and keep
-    /// their beats, as the transport's frames go by faster or slower; a running count-in keeps its beats; the
+    /// their beats, as the transport's frames go by faster or slower (a SYNC clip's sample resamples with them,
+    /// [`audio_clips::Clips::render`]); a running count-in keeps its beats; the
     /// instruments, the effects and the live keys' note effects take the tempo ([`live`]: an Arpeggiator's steps follow
     /// it, a free rate keeping its milliseconds, and Note Echo times what it makes from then on at it). During a drag
     /// The note effects' step interval is not recomputed: their prepared output is one of those compiled lists, so it
@@ -1394,6 +1399,45 @@ impl SongAudioEngine {
         } else {
             0
         }
+    }
+
+    /// Output frames until the transport, playing on from where it is, reaches tick `tick`: at the live tempo, then at
+    /// each tempo the master's tempo automation sets on the way (Honeydew change, #126: an export's range plays as long
+    /// as playback does). Infinite for a tick past any frame.
+    // ponytail: a Modulator on the tempo is not counted; walk its curve too if one ever drives it.
+    pub fn frames_to_tick(&self, tick: u64) -> f64 {
+        let beat = tick as f64 / f64::from(PPQ);
+        let Ok(end) = beat_frame(beat, self.sample_rate, self.built_bpm) else {
+            return f64::INFINITY;
+        };
+        let built = f64::from(self.built_bpm);
+        let (mut at, mut bpm, mut frames) = (
+            self.frame as f64 + self.phase,
+            f64::from(self.tempo_bpm),
+            0.0,
+        );
+        let tempos = (self.actions[self.action_index..].iter()).filter_map(|event| match event {
+            ScheduledAction {
+                frame,
+                channel: 0,
+                action:
+                    Action::Param {
+                        instance_id: 0,
+                        index: TEMPO_PARAM,
+                        value,
+                    },
+            } => Some((*frame, f64::from(automated_tempo(*value) as f32))),
+            _ => None,
+        });
+        for (frame, tempo) in tempos.take_while(|&(frame, _)| frame < end) {
+            let frame = frame as f64;
+            if frame > at {
+                frames += (frame - at) * built / bpm;
+                at = frame;
+            }
+            bpm = tempo;
+        }
+        frames + (end as f64 - at).max(0.0) * built / bpm
     }
 
     /// Moves the transport on by `frames` output frames.
@@ -1790,8 +1834,8 @@ impl SongAudioEngine {
     /// position re-sync at the start, which finds nothing left to release: a note spanning the start stays silent, one
     /// starting on it plays. At a live tempo the transport goes past the end by up to an output frame's worth of
     /// frames, which it carries on from the start; the actions it passes there play next. A transport further past the
-    /// end (a seek, a loop moved before it) starts at the start. So does one before the loop's start (a Play or a seek
-    /// there, a loop drawn after it): whenever the transport is outside the loop, it goes back into it at once.
+    /// end (a seek, a loop moved before it) starts at the start. So does one before the loop's start (PR #87: a Play or
+    /// a seek there, a loop drawn after it): whenever the transport is outside the loop, it goes back into it at once.
     fn wrap_at_loop_end(&mut self) {
         let Some((start, end)) = self.wrap_range() else {
             return;

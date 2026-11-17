@@ -102,17 +102,19 @@ pub trait SongLibrary {
     fn trash(&self) -> Option<PathBuf> {
         None
     }
-    /// The user folder above the root (`My Songs`), which SONGS' `Back` at the root goes up to (#73). `None`: no
-    /// going up.
-    fn user_folder(&self) -> Option<PathBuf> {
-        None
-    }
     /// The folders listed at the root that are places, not items: never selected, deleted, renamed or moved, as they
     /// hold what the user keeps in them. [`RECENTLY_DELETED`], and in the songs library `Unzipped songs`
-    /// ([`crate::project_files::UNZIPPED_FOLDER`]); in the whole user folder also every fixed folder ([`SONGS_FOLDER`],
-    /// the user folders, the Original Content folder). The default has the bin alone.
+    /// ([`crate::project_files::UNZIPPED_FOLDER`]); in the whole user folder, and in the songs library that goes up to
+    /// it ([`Self::user_folder`]), also every fixed folder ([`SONGS_FOLDER`], the user folders, the Original Content
+    /// folder). The default has the bin alone.
     fn places(&self) -> Vec<PathBuf> {
         self.trash().into_iter().collect()
+    }
+    /// The folder SONGS goes up to from its root (#73): the user folder, which holds the root (`My Songs`) and the
+    /// other `My …` folders. It lists its folders only (its files are the app's), and every folder below it but the
+    /// root lists every file. `None`: SONGS stops at its root.
+    fn user_folder(&self) -> Option<PathBuf> {
+        None
     }
     /// Where deleting `path` puts it in [`Self::trash`]: its place relative to the user folder, the folder that holds
     /// the root and the bin. `None`: deleting it is for good, because it is in the bin or outside the user folder.
@@ -589,8 +591,10 @@ const STAYS: &str = ".user-folder-stays-here";
 /// `rename` (one rename each, nothing copied), and nothing is deleted or written over:
 /// - `old` missing or holding nothing to move: `new`;
 /// - `old` marked ([`STAYS`]) by an earlier start: `old`. Marked for one of the app's own files (#58: up to 0.4.6
-///   Android's settings file kept `old` the user folder from the second start on), the folders `new` holds come over
-///   too ([`move_files`]), with what the first start saved in them;
+///   Android's settings file; build 48's GitHub token file), which was never the user's: what `old` holds but the
+///   app's own files moves out into `new` after all ([`move_out`]), merged with what `new` holds, the marker goes and
+///   `new` is the user folder. On Android `new` is the folder the user can reach (`Android/data/<package>/files`).
+///   Should a file not move, `old` stays this time (still marked) and the next start goes on;
 /// - a name in both: nothing moves, both keep their files, and `old` stays (marked);
 /// - a rename fails (another file system, no permission): what moved goes back, and `old` stays (marked, so the next
 ///   start does not try again).
@@ -621,13 +625,17 @@ fn migrate_user_dir(
         let why = std::fs::read_to_string(&marker).unwrap_or_default();
         let named = why.split([':', ' ']).next().unwrap_or_default();
         if app_file(std::ffi::OsStr::new(named)) {
-            let folders = std::fs::read_dir(new).into_iter().flatten().flatten();
-            for folder in folders.filter(|e| e.file_type().is_ok_and(|t| t.is_dir())) {
-                let (from, to) = (folder.path(), old.join(folder.file_name()));
-                if let Err(err) = move_files(&from, &to, &rename) {
-                    eprintln!("{} not moved to {}: {err}", from.display(), to.display());
+            return match move_out(old, new, &rename) {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&marker);
+                    eprintln!("moved the user folder {} to {}", old.display(), new.display());
+                    new.to_owned()
                 }
-            }
+                Err(err) => {
+                    eprintln!("{} not moved to {}: {err}", old.display(), new.display());
+                    old.to_owned()
+                }
+            };
         }
         return old.to_owned();
     }
@@ -673,19 +681,108 @@ fn migrate_user_dir(
 
 /// The app's own files in the app data folder, which stay there when the user folder moves out of it: the installed
 /// sound library ([`SOUND_LIBRARY_FOLDER`]), Android's settings file ([`SETTINGS_FILE`]) with the temp file a cut
-/// short write of it leaves ([`crate::project_files::replace_file`]), and the kept update check
-/// ([`crate::update::CACHE`]).
+/// short write of it leaves ([`crate::project_files::replace_file`]), the kept update check ([`crate::update::CACHE`],
+/// and its download's `.part`), and the user's GitHub token ([`crate::update::TOKEN_FILE`]), with their temp files.
 #[cfg(not(target_arch = "wasm32"))]
 fn app_file(name: &std::ffi::OsStr) -> bool {
     use crate::settings::SETTINGS_FILE;
-    let tmp = |n: &str| n == format!(".{SETTINGS_FILE}.tmp");
-    let own = [SOUND_LIBRARY_FOLDER, SETTINGS_FILE, crate::update::CACHE];
-    own.iter().any(|n| name == *n) || name.to_str().is_some_and(tmp)
+    let own = [
+        SOUND_LIBRARY_FOLDER,
+        SETTINGS_FILE,
+        crate::update::CACHE,
+        crate::update::TOKEN_FILE,
+    ];
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let part = format!("{}.part", crate::update::CACHE);
+    own.iter().any(|n| {
+        name == *n || name == format!(".{n}.tmp") || (*n == crate::update::CACHE && name == part)
+    })
 }
 
-/// Moves the files below the folder `from` into the same places below `to`, each by `rename`, else (another file
-/// system) by a copy that is synced before the file goes. A name `to` has takes a free number
-/// ([`free_path`](super::file_ops::free_path)). The folders emptied go; links stay where they are.
+/// Moves what the earlier user folder `old` holds but the app's own files ([`app_file`]) and the marker ([`STAYS`])
+/// into `new`, merged with what is there ([`move_files`]): a file already there with the same bytes is not kept
+/// twice; another of the same name takes a free number. Stops at the first file that does not move.
+#[cfg(not(target_arch = "wasm32"))]
+fn move_out(
+    old: &Path,
+    new: &Path,
+    rename: &impl Fn(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    std::fs::create_dir_all(new)?;
+    for entry in std::fs::read_dir(old)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if app_file(&name) || name == STAYS {
+            continue;
+        }
+        let (path, kind) = (entry.path(), entry.file_type()?);
+        if kind.is_dir() {
+            move_files(&path, &new.join(&name), rename)?;
+        } else if kind.is_file() {
+            move_file(&path, new, &name, rename)?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether the files `a` and `b` hold the same bytes.
+#[cfg(not(target_arch = "wasm32"))]
+fn same_bytes(a: &Path, b: &Path) -> bool {
+    use std::io::Read;
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+        return false;
+    };
+    if !ma.is_file() || !mb.is_file() || ma.len() != mb.len() {
+        return false;
+    }
+    let (Ok(mut fa), Ok(mut fb)) = (std::fs::File::open(a), std::fs::File::open(b)) else {
+        return false;
+    };
+    let (mut ba, mut bb) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
+    loop {
+        let Ok(n) = fa.read(&mut ba) else { return false };
+        if n == 0 {
+            return true;
+        }
+        if fb.read_exact(&mut bb[..n]).is_err() || ba[..n] != bb[..n] {
+            return false;
+        }
+    }
+}
+
+/// Moves the file `path` into the folder `to` as `name` by `rename`, else (another file system) by a copy that is
+/// synced before the file goes. The same bytes already there: the file just goes. Another file of that name: it takes
+/// a free number ([`free_path`](super::file_ops::free_path)).
+#[cfg(not(target_arch = "wasm32"))]
+fn move_file(
+    path: &Path,
+    to: &Path,
+    name: &std::ffi::OsStr,
+    rename: &impl Fn(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    if same_bytes(path, &to.join(name)) {
+        return std::fs::remove_file(path);
+    }
+    let taken = NativeLibrary::at(to.to_owned());
+    let target = super::file_ops::free_path(&taken, to, name, false);
+    if rename(path, &target).is_err() {
+        let copied = std::fs::copy(path, &target)
+            .and_then(|_| std::fs::File::open(&target)?.sync_all())
+            .and_then(|()| std::fs::remove_file(path));
+        if let Err(err) = copied {
+            // The file stays where it was, whole, for the next start.
+            let _ = std::fs::remove_file(&target);
+            return Err(err);
+        }
+    }
+    Ok(())
+}
+
+/// Moves the files below the folder `from` into the same places below `to`, each as [`move_file`] does: by `rename`,
+/// else (another file system) by a copy that is synced before the file goes; the same bytes already there are not kept
+/// twice, and another file of the name takes a free number. The folders emptied go; links stay where they are.
 #[cfg(not(target_arch = "wasm32"))]
 fn move_files(
     from: &Path,
@@ -699,18 +796,7 @@ fn move_files(
         if kind.is_dir() {
             move_files(&path, &to.join(entry.file_name()), rename)?;
         } else if kind.is_file() {
-            let taken = NativeLibrary::at(to.to_owned());
-            let target = super::file_ops::free_path(&taken, to, &entry.file_name(), false);
-            if rename(&path, &target).is_err() {
-                let copied = std::fs::copy(&path, &target)
-                    .and_then(|_| std::fs::File::open(&target)?.sync_all())
-                    .and_then(|()| std::fs::remove_file(&path));
-                if let Err(err) = copied {
-                    // The file stays where it was, whole, for the next start.
-                    let _ = std::fs::remove_file(&target);
-                    return Err(err);
-                }
-            }
+            move_file(&path, to, &entry.file_name(), rename)?;
         }
     }
     // Only an empty folder goes.
@@ -868,11 +954,13 @@ impl NativeLibrary {
         }
     }
 
-    /// The folders the root lists from beside it ([`row_owns`]): its places, and the Original Content folder's
+    /// The folders the root lists from beside it ([`row_owns`]): the bin, `Unzipped songs`, and the Original Content folder's
     /// [`DEMO_SONGS`] once it is there.
     fn root_rows(&self) -> Vec<PathBuf> {
         let demos = self.content_folder(DEMO_SONGS_PATH);
-        self.places().into_iter().chain(demos).collect()
+        (self.trash().into_iter().chain(self.unzipped()))
+            .chain(demos)
+            .collect()
     }
 
     /// The Original Content folder, beside the root as the bin is.
@@ -910,16 +998,6 @@ impl Default for NativeLibrary {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl SongLibrary for NativeLibrary {
-    fn user_folder(&self) -> Option<PathBuf> {
-        match self.whole {
-            true => self.root.clone(),
-            false => self
-                .root
-                .as_ref()
-                .and_then(|root| root.parent().map(Path::to_owned)),
-        }
-    }
-
     fn list(&self, folder: Option<&Path>) -> io::Result<Vec<SongEntry>> {
         let Some(dir) = folder.or(self.root.as_deref()) else {
             return Ok(Vec::new());
@@ -933,6 +1011,10 @@ impl SongLibrary for NativeLibrary {
         // lossily; its path is the real one. The cap counts what is listed, not what the folder holds; the scan stops
         // after [`MAX_SCANNED`] entries. Only a row kept is asked for its time.
         let scanned = entries.into_iter().flatten().take(MAX_SCANNED).flatten();
+        let user = self.user_folder();
+        let top = user.as_deref() == Some(dir);
+        let every =
+            user.is_some() && !top && self.root.as_deref().is_some_and(|r| !dir.starts_with(r));
         let listed = scanned.filter_map(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
             // `DirEntry::file_type` does not follow links, and most systems give it with the entry.
@@ -941,8 +1023,9 @@ impl SongLibrary for NativeLibrary {
             let is_song = Path::new(&name)
                 .extension()
                 .is_some_and(|e| self.exts.iter().any(|x| e.eq_ignore_ascii_case(x)))
-                || self.exts.is_empty();
-            if name.starts_with('.') || !(is_folder || is_song && kind.is_file()) {
+                || self.exts.is_empty()
+                || every;
+            if name.starts_with('.') || !(is_folder || is_song && kind.is_file() && !top) {
                 return None;
             }
             let meta = entry.metadata().ok()?;
@@ -1042,9 +1125,9 @@ impl SongLibrary for NativeLibrary {
 
     fn places(&self) -> Vec<PathBuf> {
         let mut places: Vec<_> = self.trash().into_iter().chain(self.unzipped()).collect();
-        // The whole user folder holds every fixed folder as its own: deleting one (`My Presets`) could not be restored,
+        // The whole user folder (and SONGS, which goes up to it) holds every fixed folder as its own: deleting one (`My Presets`) could not be restored,
         // and renaming one (`My Samples`) would break the songs' paths into it. What they hold stays the user's.
-        if self.whole
+        if (self.whole || self.user_folder().is_some())
             && let Some(user) = self.user()
         {
             use crate::project_files as pf;
@@ -1053,6 +1136,12 @@ impl SongLibrary for NativeLibrary {
             places.extend(fixed.map(|f| user.join(f)));
         }
         places
+    }
+
+    fn user_folder(&self) -> Option<PathBuf> {
+        (self.is_songs() && !self.whole)
+            .then(|| self.user().map(Path::to_owned))
+            .flatten()
     }
 
     fn bin_path(&self, path: &Path) -> Option<PathBuf> {
@@ -1631,7 +1720,10 @@ mod tests {
             names(&listed),
             [("Song.flm", false), ("Unzipped songs", true)]
         );
-        assert_eq!(songs.places(), [songs.trash().unwrap(), unzipped.clone()]);
+        // With the user folder's fixed folders, which SONGS goes up to (#73).
+        let places = songs.places();
+        assert!(places.contains(&songs.trash().unwrap()) && places.contains(&unzipped));
+        assert!(places.contains(&user.join("My Samples")) && places.contains(&root));
         // Browsable: the extraction's folder, then its songs and the folders its samples are in.
         let pack = songs.list(Some(&unzipped)).unwrap();
         assert_eq!(names(&pack), [("Pack", true)]);
@@ -2347,7 +2439,8 @@ mod tests {
     /// #58: Android keeps its settings file in the app data folder, the user folder before, on another file system than
     /// the user folder now, where no rename works. The file stays there and keeps that folder from coming back into use:
     /// the song the first start saved is listed after a restart. An install an earlier version kept in the app data
-    /// folder for that file (marked so) gets that start's songs back, a name it has numbered.
+    /// folder for that file (marked so), or for the GitHub token's (build 48), moves out to the user folder after all:
+    /// a song of a name it has numbered, the same bytes kept once.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_song_saved_at_the_first_start_is_listed_after_a_restart() {
@@ -2380,16 +2473,21 @@ mod tests {
         )
         .unwrap();
         put(&old.join("My Songs/Beat.flm"), b"later");
+        put(&old.join("My Songs/Demo Songs/Demo.flm"), b"demo");
         put(&new.join("My Songs/Demo Songs/Demo.flm"), b"demo");
-        assert_eq!(migrate_user_dir(&old, &new, other_disk), old);
-        let songs = old.join(SONGS_FOLDER);
+        put(&old.join(crate::update::TOKEN_FILE), b"token");
+        assert_eq!(migrate_user_dir(&old, &new, other_disk), new);
+        let songs = new.join(SONGS_FOLDER);
         assert_eq!(
             tree(&songs),
             ["Beat (1).flm", "Beat.flm", "Demo Songs/Demo.flm"]
         );
-        assert_eq!(std::fs::read(songs.join("Beat (1).flm")).unwrap(), b"beat");
-        assert_eq!(std::fs::read(songs.join("Beat.flm")).unwrap(), b"later");
-        assert!(!new.join(SONGS_FOLDER).exists(), "moved, not copied");
+        assert_eq!(std::fs::read(songs.join("Beat (1).flm")).unwrap(), b"later");
+        assert_eq!(std::fs::read(songs.join("Beat.flm")).unwrap(), b"beat");
+        assert!(!old.join(SONGS_FOLDER).exists(), "moved, not copied");
+        assert!(!old.join(STAYS).exists() && old.join(crate::update::TOKEN_FILE).exists());
+        // The token alone keeps nothing back now.
+        assert_eq!(migrate_user_dir(&old, &new, other_disk), new);
     }
 
     /// The folders a deeper file implies list (the web's `My Files`) and exist, so the file actions take them.

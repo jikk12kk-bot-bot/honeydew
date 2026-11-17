@@ -219,7 +219,7 @@ pub struct DrumGridView {
     pub covered: bool,
     pub playhead: u64,
     /// How far past `playhead` the playhead is drawn, as [`StepSeqView::lead`].
-    pub lead: u64,
+    pub lead: i64,
     pub playing: bool,
     /// REC is armed: the playhead disc shows the record icon. The host sets it each frame.
     pub armed: bool,
@@ -247,6 +247,8 @@ pub struct DrumGridView {
     last: Option<Layout>,
     overlay: Option<Overlay>,
     graph_drag: Option<(Vec<Event>, bool)>,
+    /// The drag's touch-down while it keeps to its column ([`graph_lane::drum_paint_x`]).
+    graph_lock: Option<Pos2>,
     /// The hits before the gesture whose ongoing [`StepAction::Hits`] edits [`Self::apply`] is making.
     hits_from: Option<Vec<Event>>,
     gesture: Gesture,
@@ -561,7 +563,7 @@ impl DrumGridView {
                 .clip_rect()
                 .intersect(Rect::everything_right_of(l.column_right())),
         );
-        let drawn = region::playhead_tick(clip, self.playhead + self.lead);
+        let drawn = region::playhead_tick(clip, self.playhead.saturating_add_signed(self.lead));
         let end = loop_beats * BEAT;
         let x = (self.knob).line_x(ui, cx.m, &at, end, axis.x(drawn.unwrap_or(0.0)));
         timeline::playhead_line(&line, l.grid(), x, cx);
@@ -1240,6 +1242,7 @@ impl DrumGridView {
         }
         if response.drag_started() && live && !pinch {
             self.graph_drag = Some((events.to_vec(), false));
+            self.graph_lock = ui.input(|i| i.pointer.press_origin());
         }
         if response.dragged()
             && live
@@ -1253,7 +1256,8 @@ impl DrumGridView {
             };
             let value = prop.stored(v);
             let mut new = events.to_vec();
-            if edit::paint(&mut new, &self.sel, pad, prop, axis.tick(p.x), value) {
+            let x = graph_lane::drum_paint_x(&mut self.graph_lock, p, m);
+            if edit::paint(&mut new, &self.sel, pad, prop, axis.tick(x), value) {
                 remembered.graph(prop, value);
                 if let Some((_, sent)) = self.graph_drag.as_mut() {
                     *sent = true;

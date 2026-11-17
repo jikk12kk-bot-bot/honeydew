@@ -11,7 +11,8 @@ use crate::song::ModuleInstance;
 use crate::ui::picker_preview::LOADING;
 use crate::ui::rack::PresetTarget;
 
-/// The root's rows with our factory: `My Files`, then our seven categories.
+/// The root's rows with our factory: `My Files`, its shortcuts whose folders are there (`My Presets`, `My Instruments`;
+/// none in a fresh rig), then our seven categories.
 const CATEGORIES: [&str; 7] = ["Bass", "Bells", "Keyboard", "Lead", "Pad", "Pluck", "Synth"];
 const MY_FILES: usize = 0;
 const BELLS: usize = 2;
@@ -117,6 +118,19 @@ fn the_modules_browsers_instrument_lists_them_in_its_panel_and_a_later_pick_repl
     }
     let browser = Overlay::ModulesBrowser { channel: 1, at };
     assert_eq!(rig.overlays(), [Overlay::Rack(1), browser]);
+    // Issue #123: the whole browse adds one module, across its lists too. The Instruments list again, then Back and an
+    // effect: each pick takes the place of the module the last one added.
+    nested_row(&mut rig, 2);
+    nested_row(&mut rig, BELLS);
+    nested_row(&mut rig, 0);
+    assert_eq!(types(&rig, 1), [0, 2]);
+    for _ in 0..2 {
+        rig.click_id(Id::new(BROWSER).with("back"));
+        rig.frame(vec![]);
+    }
+    super::rack_wiring::pick(&mut rig, "Dist");
+    assert_eq!(types(&rig, 1), [0, 6]);
+    assert_eq!(rig.app.history.steps(), steps);
 }
 
 #[test]
@@ -424,7 +438,8 @@ fn a_later_pick_on_the_ui_thread_replaces_an_instruments_pick_still_loading() {
     let hold = crate::ui::views::preset_picker::WORKER_HOLD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    click_row(&mut rig, SYNTH);
+    // `Synth`, after the shortcut `My Presets`, there now.
+    click_row(&mut rig, SYNTH + 1);
     click_row(&mut rig, 0);
     rig.frame(vec![]);
     assert!(rig.app.slots.preset_picker.loading());

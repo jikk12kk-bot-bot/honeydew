@@ -32,6 +32,7 @@ pub mod automation_editor;
 pub mod channel_settings;
 pub mod ctrl_menu;
 pub mod drum_editor;
+pub mod folder_name;
 pub mod keyboard_settings;
 pub mod main_menu;
 pub mod message;
@@ -61,6 +62,12 @@ pub mod instrument_builder;
 pub mod versions;
 // A Lemon plugin's editor full screen (#68).
 pub mod lemon_editor;
+// A song section's dialog (#80).
+pub mod section_settings;
+// `Import MIDI Tracks`' picker (#113).
+pub mod midi_picker;
+// The Displayer's panel and window (the image / video player).
+pub mod displayer;
 
 /// What fills the editor area, between the top of the screen and the transport bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -111,6 +118,8 @@ pub enum Overlay {
     TempoEditor,
     /// A channel's `Channel Settings` dialog (the track menu's), with its name field's text.
     ChannelSettings { channel: usize, name: String },
+    /// A track folder's `Rename Folder` dialog, with its name field's text.
+    FolderName { folder: usize, name: String },
     /// The Save dialog of a preset (`Save preset`, `Save Rack preset`, `Save Drumset`), with its `File Name` field.
     /// What it saves is [`ProjectFiles`]'s.
     PresetDialog {
@@ -175,6 +184,14 @@ pub enum Overlay {
     /// The editor of the built-in Lemon plugin module with instance id `module` on `channel`, full screen (#68, its rack
     /// card's full screen button).
     LemonEditor { channel: usize, module: i32 },
+    /// Song section `section`'s dialog (#80: the playlist ruler's `Section…`, or a tap on its name), with its name field's
+    /// text.
+    SectionSettings { section: usize, name: String },
+    /// `Import MIDI Tracks`' picker (#113) for the channel with this id.
+    MidiPicker(i32),
+    /// The Displayer's panel (the transport's Displayer button): its source, its video's trim and sound, and how it
+    /// shows ([`displayer::show`]). The media itself shows in its own window or behind the views, panel or not.
+    Displayer,
 }
 
 /// `Link to MIDI CC`'s prompt.
@@ -367,6 +384,8 @@ pub enum SongEdit {
     RackState,
     /// Mid-gesture (a drag): the song changed, the audio is not rebuilt yet.
     Ongoing,
+    /// Mid-gesture with a new engine that plays it: the Generate panel's preview in its clip.
+    Audition,
     /// Rack state the audio reads only at build (a drum strip's `Shift`, `AUX`, a stretch): as [`Self::RackState`],
     /// and a new engine.
     RackRebuild,
@@ -568,6 +587,11 @@ pub struct Slots {
     pub versions: versions::State,
     /// The full screen Lemon editor's texture and pointer.
     pub lemon_editor: lemon_editor::State,
+    /// `Import MIDI Tracks`' picker.
+    pub midi_picker: midi_picker::State,
+    /// The Displayer: its media (image, video player) and its panel's and window's state. Not the song's: it stays
+    /// when another song opens, and its settings are the app's ([`crate::settings::Settings::displayer`]).
+    pub displayer: displayer::State,
 }
 
 impl Slots {
@@ -575,6 +599,7 @@ impl Slots {
     pub fn stop_samples(&mut self) {
         self.sample_picker.stop_sample();
         self.preset_picker.stop_sample();
+        self.main_menu.stop_sample();
     }
 
     /// Points the editor of `key`'s lane at that clip, if it exists: the piano roll keeps its snap and zoom, the drum
@@ -652,7 +677,19 @@ impl Slots {
         let asking =
             (overlays.iter()).any(|o| matches!(o, Overlay::Message { tag: t, .. } if *t == tag));
         let (state, rack) = (&mut self.preset_picker, &mut self.rack);
+        // Issue #98: a card's ◀ or ▶ of the last frame.
+        if let Some(step) = rack.step.take() {
+            preset_picker::step_preset(state, app, step);
+        }
         preset_picker::land_close_grands(state, rack, ui.ctx(), app, asking);
+        // SONGS' preview stops once SONGS is not shown (#106).
+        if !(overlays.iter()).any(|o| matches!(o, Overlay::MainMenu(MenuTab::Songs))) {
+            self.main_menu.leave(app.audio);
+        }
+        // Issue #120: the SoundFont picker's note and keys stop once it is not open.
+        if !(overlays.iter()).any(|o| matches!(o, Overlay::SoundFontPicker { .. })) {
+            soundfont_picker::stop(&mut self.soundfont_picker, app.audio);
+        }
         let top = overlays.len().saturating_sub(1);
         self.rack.full = overlays.iter().find_map(|o| match o {
             Overlay::LemonEditor { channel, module } => Some((*channel, *module)),
@@ -737,6 +774,7 @@ impl Slots {
             Overlay::ChannelSettings { channel, name } => {
                 channel_settings::show(ui, app, *channel, name)
             }
+            Overlay::FolderName { folder, name } => folder_name::show(ui, app, *folder, name),
             // Modal like the Save dialog.
             Overlay::PresetDialog { name, kind } => {
                 top.then(|| save_dialog::show_preset(ui, app, name, *kind))?
@@ -772,7 +810,14 @@ impl Slots {
                 top.then(|| save_dialog::show_sample(ui, app, name, &mut self.audio_editor))?
             }
             Overlay::Busy { title } => {
-                busy(ui.ctx(), &app.cx, title);
+                let ctx = ui.ctx().clone();
+                let pass = ctx.cumulative_pass_nr();
+                let key = egui::Id::new(BUSY_ABORTABLE);
+                // An MP4 render offers its Cancel ([`busy_abortable`]).
+                let abortable = ctx.data(|d| d.get_temp::<u64>(key)) == Some(pass);
+                if busy_screen(&ctx, &app.cx, title, abortable) {
+                    ctx.data_mut(|d| d.insert_temp(egui::Id::new(BUSY_ABORTED), true));
+                }
                 None
             }
             Overlay::ModuleSamplePicker { channel, module } => {
@@ -814,6 +859,14 @@ impl Slots {
             Overlay::LemonEditor { channel, module } => {
                 top.then(|| lemon_editor::show(&mut self.lemon_editor, ui, app, *channel, *module))?
             }
+            Overlay::SectionSettings { section, name } => {
+                section_settings::show(ui, app, *section, name)
+            }
+            Overlay::MidiPicker(channel) => {
+                midi_picker::show(&mut self.midi_picker, ui, app, *channel)
+            }
+            // Modal like the Save dialog: hidden while a message shows over it.
+            Overlay::Displayer => top.then(|| displayer::show(&mut self.displayer, ui, app))?,
         }
     }
 }
@@ -830,7 +883,38 @@ pub fn busy_abort(ctx: &egui::Context, cx: &UiCtx, title: &str) -> bool {
     busy_screen(ctx, cx, title, true)
 }
 
+/// The temp-data keys of [`busy_abortable`] and [`take_busy_aborted`].
+const BUSY_ABORTABLE: &str = "busy abortable";
+const BUSY_ABORTED: &str = "busy aborted";
+
+/// `Overlay::Busy` shows its abort button this frame (an MP4 render's Cancel). Call it before the screens draw.
+pub fn busy_abortable(ctx: &egui::Context) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(BUSY_ABORTABLE), pass));
+}
+
+/// `Overlay::Busy`'s abort button was clicked since the last call.
+pub fn take_busy_aborted(ctx: &egui::Context) -> bool {
+    ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new(BUSY_ABORTED)))
+        .unwrap_or(false)
+}
+
+/// The temp-data key of [`busy_progress`].
+const BUSY_PROGRESS: &str = "busy progress";
+
+/// Shows `progress` (0 to 1) as a bar under the busy screen's title this frame (an export's render or encoding); `None`
+/// shows none. Call it before the screens draw, each frame it applies.
+pub fn busy_progress(ctx: &egui::Context, progress: Option<f32>) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(BUSY_PROGRESS), (pass, progress)));
+}
+
 fn busy_screen(ctx: &egui::Context, cx: &UiCtx, title: &str, abort: bool) -> bool {
+    let pass = ctx.cumulative_pass_nr();
+    let progress = ctx
+        .data(|d| d.get_temp::<(u64, Option<f32>)>(egui::Id::new(BUSY_PROGRESS)))
+        .filter(|&(at, _)| at == pass)
+        .and_then(|(_, p)| p);
     let screen = ctx.content_rect();
     let mut aborted = false;
     let c = &cx.theme.colors;
@@ -853,7 +937,28 @@ fn busy_screen(ctx: &egui::Context, cx: &UiCtx, title: &str, abort: bool) -> boo
             job.halign = egui::Align::Center;
             let galley = painter.layout_job(job);
             let at = screen.center() - egui::vec2(0.0, galley.size().y / 2.0);
+            let below = at.y + galley.size().y;
             painter.galley(at, galley, ink);
+            // The bar: a `text` fill over a dim track, the percentage under it.
+            if let Some(p) = progress {
+                let m = cx.m;
+                let w = m.u(16.0).min(screen.width() * 0.7);
+                let track = egui::Rect::from_min_size(
+                    egui::pos2(screen.center().x - w / 2.0, below + m.u(1.0)),
+                    egui::vec2(w, m.u(0.3)),
+                );
+                let r = track.height() / 2.0;
+                painter.rect_filled(track, r, ink.gamma_multiply(0.25));
+                let mut fill = track;
+                fill.set_width(track.width() * p.clamp(0.0, 1.0));
+                if fill.width() > 0.0 {
+                    painter.rect_filled(fill, r, ink);
+                }
+                let label = format!("{}%", (p * 100.0).floor().clamp(0.0, 100.0) as u32);
+                let font = m.font_id(crate::metrics::FontSize::Pt10);
+                let pos = egui::pos2(track.center().x, track.bottom() + m.u(0.5));
+                painter.text(pos, egui::Align2::CENTER_TOP, label, font, ink);
+            }
             if abort {
                 let (m, inset) = (cx.m, cx.m.u(0.25));
                 let cell = egui::Rect::from_min_size(
@@ -892,11 +997,44 @@ pub fn covered(overlays: &[Overlay], regions: &Regions, ui: &egui::Ui) -> bool {
     let Some(at) = ui.input(|i| i.pointer.latest_pos()) else {
         return false;
     };
+    // The keyboard panel in front of the pickers is theirs to cover no more.
+    if crate::ui::front_panel(ui.ctx()).is_some_and(|r| r.contains(at)) {
+        return false;
+    }
     overlays.iter().any(|o| match o {
         Overlay::Rack(_) => regions.rack.contains(at),
         Overlay::KeyboardSettings => false,
+        // The Displayer's panel floats over the views' right side with no backdrop.
+        Overlay::Displayer => displayer::panel_rect(ui.ctx()).is_some_and(|r| r.contains(at)),
         _ => true,
     })
+}
+
+/// Whether the keyboard panel stays in front of `overlays` (with Settings `Keyboard in front of pickers` on): some
+/// are open over the views, and every one of them is a side picker (the Modules browser, a preset, SoundFont or sample
+/// picker). The rack, the keyboard settings strip and the Displayer's panel do not count; any other overlay covers the
+/// panel as before.
+pub fn panel_in_front(overlays: &[Overlay]) -> bool {
+    let over = |o: &&Overlay| {
+        !matches!(
+            o,
+            Overlay::Rack(_) | Overlay::KeyboardSettings | Overlay::Displayer
+        )
+    };
+    let picker = |o: &Overlay| {
+        matches!(
+            o,
+            Overlay::ModulesBrowser { .. }
+                | Overlay::PresetPicker { .. }
+                | Overlay::SoundFontPicker { .. }
+                | Overlay::SamplePicker { .. }
+                | Overlay::ClipSamplePicker(_)
+                | Overlay::TrackSamplePicker { .. }
+                | Overlay::ModuleSamplePicker { .. }
+        )
+    };
+    let mut open = overlays.iter().filter(over).peekable();
+    open.peek().is_some() && open.all(picker)
 }
 
 /// Takes this frame's `close` press (Escape by default) out of the input, so that the lower overlays never see it. Call

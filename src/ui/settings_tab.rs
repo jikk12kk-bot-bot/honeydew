@@ -58,8 +58,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{
-    Align2, Color32, DragValue, Id, Pos2, Rect, Sense, Shape, TextEdit, Ui, UiBuilder, WidgetInfo,
-    WidgetType, vec2,
+    self, Align2, Color32, DragValue, Id, Pos2, Rect, Response, Sense, Shape, TextEdit, Ui,
+    UiBuilder, WidgetInfo, WidgetType, vec2,
 };
 
 use crate::icons::{IconId, draw_icon};
@@ -127,7 +127,25 @@ fn generated_mcp_token() -> String {
     token
 }
 
-#[cfg(not(desktop))]
+/// The phones' token: 32 bytes from the system's random source.
+#[cfg(mobile)]
+fn generated_mcp_token() -> String {
+    use std::io::Read;
+    let mut bytes = [0_u8; 32];
+    let read = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes));
+    if read.is_err() {
+        return String::new();
+    }
+    let mut token = String::with_capacity(8 + bytes.len() * 2);
+    token.push_str("honeydew_");
+    for byte in bytes {
+        use std::fmt::Write;
+        write!(token, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    token
+}
+
+#[cfg(not(any(desktop, mobile)))]
 fn generated_mcp_token() -> String {
     String::new()
 }
@@ -144,9 +162,12 @@ enum Kind {
     McpPort,
     McpToken,
     McpStatus,
+    /// MCP's address (with `Allow over Wi-Fi`, this device's on the network), `Copy`, and `QR` showing it as a code.
+    McpAddress,
     /// A disabled toggle fixed in this state.
     FixedToggle(bool),
-    /// `Enable audio recording latency compensation`: a toggle of the stored `Option<bool>`, shown ON while unset.
+    /// `Enable audio recording latency compensation`: ON compensates (Honeydew change, #129: it was inverted),
+    /// with `Calibrate` beside it while ON.
     Latency,
     /// A wide light button showing the current item; a tap opens the popup of items.
     Dropdown(Choice),
@@ -219,10 +240,15 @@ enum Choice {
     /// `Sample memory limit` (#38): `Auto` or a fixed limit ([`crate::sample_cache::MEMORY_LIMITS`]); not on the web,
     /// whose budget is fixed.
     SampleMemory,
+    /// `Sample rate:`: the rate playback and renders use ([`crate::song::SAMPLE_RATES`]), in Hz.
+    SampleRate,
     /// `Screen orientation:` (#41): `Auto`, `Portrait` or `Landscape` ([`crate::settings::ORIENTATIONS`]).
     Orientation,
     /// `Project version size limit:` (#69), in MB ([`crate::settings::VERSION_SIZE_LIMITS`]).
     VersionSize,
+    /// `Plugin editor resolution:`, in percent ([`crate::settings::EDITOR_RESOLUTIONS`]): what the full-screen plugin
+    /// editor paints at.
+    EditorResolution,
 }
 
 /// `Screen orientation:`, after `Animation:` where the app can lock the screen's orientation
@@ -239,7 +265,7 @@ const fn row(label: &'static str, kind: Kind) -> Row {
 }
 
 /// Every row of the SETTINGS tab, in order.
-const ROWS: [Row; 51] = {
+const ROWS: [Row; 57] = {
     use Kind::*;
     [
         row("MIDI:", Header),
@@ -256,6 +282,7 @@ const ROWS: [Row; 51] = {
         row("Audio:", Header),
         row("Multi core processing", Toggle(|s| &mut s.multi_core)),
         row("Audio buffer size", BufferSize),
+        row("Sample rate:", Dropdown(Choice::SampleRate)),
         row(
             "Enable background audio (iOS Only)",
             if cfg!(target_os = "ios") {
@@ -285,6 +312,10 @@ const ROWS: [Row; 51] = {
         row("Scaling:", Scaling),
         row("Scale is currently limited to", ScaleLimit),
         row("Animation:", Dropdown(Choice::Animation)),
+        row(
+            "Plugin editor resolution:",
+            Dropdown(Choice::EditorResolution),
+        ),
         row("Application:", Header),
         row("Enable ghost notes", Toggle(|s| &mut s.ghost_notes)),
         row(
@@ -296,6 +327,7 @@ const ROWS: [Row; 51] = {
             "Show range labels on keyboard",
             Toggle(|s| &mut s.range_labels),
         ),
+        row("Keyboard in front of pickers", Toggle(|s| &mut s.picker_keys)),
         row(
             "Continuous scrolling during playback",
             Toggle(|s| &mut s.continuous_scroll),
@@ -303,6 +335,10 @@ const ROWS: [Row; 51] = {
         row(
             "Show CPU and RAM meters",
             Toggle(|s| &mut s.hardware_meters),
+        ),
+        row(
+            "Show performance overlay",
+            Toggle(|s| &mut s.performance_overlay),
         ),
         row("Project version size limit:", Dropdown(Choice::VersionSize)),
         row(
@@ -312,7 +348,9 @@ const ROWS: [Row; 51] = {
         row("MCP:", Header),
         row("Enable MCP control", Toggle(|s| &mut s.mcp_enabled)),
         row("Port", McpPort),
+        row("Allow over Wi-Fi", Toggle(|s| &mut s.mcp_wifi)),
         row("Authentication token", McpToken),
+        row("Address", McpAddress),
         row("Status", McpStatus),
         row("Advanced:", Header),
         row("Share logs", DisabledButton),
@@ -351,10 +389,12 @@ enum Menu {
 const RESTORE_QUESTION: &str = "Are you sure you want to restore default settings?";
 const CONFIRM_YES: usize = 1;
 const CONFIRM_NO: usize = 0;
-/// The warning a `Theme:` pick over the theme creator's unsaved edits asks first.
-pub const THEME_WARNING: [&str; 2] = [
+/// The warning a `Theme:` pick over the theme creator's unsaved edits asks first. Its line is in two, so that the popup
+/// fits a phone's width with room each side (#81).
+pub const THEME_WARNING: [&str; 3] = [
     "Warning",
-    "Setting the theme will undo changes made in the theme creator!",
+    "Setting the theme will undo changes",
+    "made in the theme creator!",
 ];
 /// The `Theme:` popup's value of the first user theme ([`SettingsTab::user_themes`]); the built-ins' are their ids.
 const USER_THEMES: usize = 1000;
@@ -405,6 +445,8 @@ pub struct SettingsTab {
     /// The audio buffer slider position while it is held: shown, applied when let go so the stream is reopened once.
     buffer_size: Option<f32>,
     mcp_status: &'static str,
+    /// MCP's `QR` shows the address as a code, until a tap closes it.
+    mcp_qr: bool,
     /// A new scale was applied: the next frame, at the new `U`, scrolls `Scaling:` back into view.
     reveal_scaling: bool,
     /// The user's themes, which `Theme:` lists after the built-ins. The caller keeps them current.
@@ -494,17 +536,22 @@ impl SettingsTab {
                         Kind::Dropdown(Choice::SampleMemory) | Kind::AudioInput
                     ))
                     && (cfg!(desktop)
-                        || (!matches!(
+                        || !matches!(
                             r.kind,
                             Kind::Dropdown(Choice::SoundMode) | Kind::InstallSounds
-                        ) && !matches!(
+                        ))
+                    // The app serves MCP itself everywhere but the web.
+                    && !(web
+                        && matches!(
                             r.label,
                             "MCP:"
                                 | "Enable MCP control"
                                 | "Port"
+                                | "Allow over Wi-Fi"
                                 | "Authentication token"
+                                | "Address"
                                 | "Status"
-                        )))
+                        ))
             })
             .collect();
         let plugins = if self.plugins { &PLUGIN_ROWS[..] } else { &[] };
@@ -714,23 +761,24 @@ impl SettingsTab {
             }
             Kind::Toggle(_) | Kind::FixedToggle(_) | Kind::Latency => {
                 // The rect starts 0.5 U left of the column and ends at its right edge; the latency one is 2.5 U
-                // shorter, for `Calibrate`, which is 2.5 U wide at the right end, only while the toggle is OFF
-                // (compensating).
+                // shorter, for `Calibrate`, which is 2.5 U wide at the right end, only while the toggle is ON
+                // (compensating; Honeydew change, #129).
                 let latency = matches!(row.kind, Kind::Latency);
                 let shorter = if latency { LATENCY_SHORTER } else { 0.0 };
                 let rect = Rect::from_x_y_ranges(
                     r.left() - m.u(TOGGLE_OUT)..=r.right() - m.u(shorter),
                     r.y_range(),
                 );
-                if latency && s.latency_compensation == Some(false) {
+                if latency && s.latency_compensation {
                     let at = right(CALIBRATE_W, BUTTON_H);
                     let b = Button::new(id.with("calibrate"), at, "Calibrate", false, colors);
-                    self.calibrate |= button(ui, cx, &b, !cfg!(mobile)).clicked();
+                    // On phones too (Honeydew change, #129): it asks for the microphone as REC does.
+                    self.calibrate |= button(ui, cx, &b, true).clicked();
                 }
                 let (on, field) = match row.kind {
                     Kind::Toggle(field) => (*field(s), Some(field)),
                     Kind::FixedToggle(on) => (on, None),
-                    Kind::Latency => (s.latency_compensation != Some(false), None),
+                    Kind::Latency => (s.latency_compensation, None),
                     _ => unreachable!("a toggle row"),
                 };
                 // Settings are not parameters: no parameter menu. The label is the pill's, plain and in `text`, and
@@ -758,7 +806,7 @@ impl SettingsTab {
                 match (changed, field) {
                     (true, Some(field)) => *field(s) = v >= 0.5,
                     (true, None) if matches!(row.kind, Kind::Latency) => {
-                        s.latency_compensation = Some(v >= 0.5);
+                        s.latency_compensation = v >= 0.5;
                     }
                     _ => {}
                 }
@@ -773,12 +821,15 @@ impl SettingsTab {
             }
             Kind::Dropdown(choice) => {
                 label(ui, before(button_rect), FontSize::Pt10);
-                // A theme of the user's, or the theme creator's work, is no item of the built-ins: its own name.
-                let current = match choice {
-                    Choice::Theme if !s.custom_theme.is_empty() => cx.theme.name.clone(),
-                    _ => choice.label(s),
+                // A theme of the user's, or the theme creator's work, is no item of the built-ins: its own name, of
+                // any length, shrunk as a device name is (#124).
+                let tapped = match choice {
+                    Choice::Theme if !s.custom_theme.is_empty() => {
+                        shrunk_button(ui, cx, id, button_rect, &cx.theme.name).clicked()
+                    }
+                    _ => light_button(ui, button_rect, &choice.label(s), true),
                 };
-                if light_button(ui, button_rect, &current, true) {
+                if tapped {
                     self.menu = Some((Menu::Choice(choice), button_rect.center()));
                 }
                 if matches!(choice, Choice::SoundMode) {
@@ -788,8 +839,16 @@ impl SettingsTab {
                     let sound_mode_tip = "ULTRASAFE: largest buffer; maximum stability and compatibility, highest latency.\nSAFE: moderately large buffer; fewer glitches with more latency.\nFAST: small buffer; lower latency but more CPU/dropout risk.\nNATIVE: device/OS default audio behavior.";
                     crate::ui::tooltip::tip(ui, button_rect, sound_mode_tip, None);
                 }
+                if matches!(choice, Choice::SampleRate) {
+                    let tip = "The rate playback and renders run at. Songs do not keep it. Device: the phone's own rate, for both. A phone that cannot play at a chosen rate plays at its own, and renders still use the chosen one.";
+                    crate::ui::tooltip::tip(ui, button_rect, tip, None);
+                }
                 if matches!(choice, Choice::SampleMemory) {
                     let tip = "The most memory SFZ and DW Sampler samples take. Past it, each keeps its start in memory and plays the rest from disk. Auto: the memory available, less a margin.";
+                    crate::ui::tooltip::tip(ui, button_rect, tip, None);
+                }
+                if matches!(choice, Choice::EditorResolution) {
+                    let tip = "How sharp the full-screen plugin editor is painted. A lower resolution paints faster, so the editor lags less in landscape and with the virtual mouse's zoom, and looks softer.";
                     crate::ui::tooltip::tip(ui, button_rect, tip, None);
                 }
                 if matches!(choice, Choice::VersionSize) {
@@ -799,28 +858,18 @@ impl SettingsTab {
             }
             Kind::MidiDropdown | Kind::AudioInput => {
                 label(ui, before(button_rect), FontSize::Pt10);
-                let b = Button::new(id, button_rect, "", false, colors);
-                let response = button(ui, cx, &b, true);
                 let name = match row.kind {
                     Kind::MidiDropdown => &s.midi_device,
                     _ if s.audio_input.is_empty() => DEFAULT_INPUT,
                     _ => &s.audio_input,
                 };
-                // The name it draws itself (shrunk) is its name for accessibility tools too.
-                response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
-                if response.clicked() {
+                if shrunk_button(ui, cx, id, button_rect, name).clicked() {
                     let midi = matches!(row.kind, Kind::MidiDropdown);
                     let menu = if midi { Menu::Midi } else { Menu::AudioInput };
                     self.menu = Some((menu, button_rect.center()));
                     self.midi_rescan |= midi;
                     self.audio_inputs = None;
                 }
-                // A device name is the device's, of any length: shrink drawing in the button, in the ink the button
-                // would give a label of its own.
-                let room = button_rect.shrink2(vec2(m.u(BUTTON_PAD), 0.0));
-                let ink = colors.menu_fill.to_color32();
-                let (align, pt) = (Align2::CENTER_CENTER, FontSize::Pt10.points() as u8);
-                shrink(ui.painter(), m, room, align, name, pt, ink);
             }
             Kind::FixedDropdown(value) => {
                 label(ui, before(button_rect), FontSize::Pt10);
@@ -915,7 +964,7 @@ impl SettingsTab {
                     }
                 }
                 if light_button_as(ui, id.with("copy"), copy, "Copy", !s.mcp_token.is_empty()) {
-                    ui.ctx().copy_text(s.mcp_token.clone());
+                    copy_text(ui.ctx(), s.mcp_token.clone());
                 }
                 let token_rect = r.with_max_x(copy.left() - m.u(MARGIN));
                 ui.put(
@@ -925,6 +974,38 @@ impl SettingsTab {
                         .password(true)
                         .hint_text("not generated"),
                 );
+            }
+            Kind::McpAddress => {
+                let url = crate::app::mcp_url(s.mcp_port, s.mcp_wifi);
+                let qr = Rect::from_min_size(
+                    button_rect.right_center() - vec2(m.u(3.0), m.u(BUTTON_H / 2.0)),
+                    vec2(m.u(3.0), m.u(BUTTON_H)),
+                );
+                let copy = Rect::from_min_size(
+                    qr.left_center() - vec2(m.u(3.25), m.u(BUTTON_H / 2.0)),
+                    vec2(m.u(3.0), m.u(BUTTON_H)),
+                );
+                if light_button(ui, qr, "QR", true) {
+                    self.mcp_qr = true;
+                }
+                if light_button_as(ui, id.with("copy"), copy, "Copy", true) {
+                    copy_text(ui.ctx(), url.clone());
+                }
+                let room = r.with_max_x(copy.left() - m.u(MARGIN));
+                let (name, value) = room.split_left_right_at_x(room.left() + room.width() * 0.3);
+                label(ui, name, FontSize::Pt10);
+                shrink(
+                    ui.painter(),
+                    m,
+                    value,
+                    Align2::RIGHT_CENTER,
+                    &url,
+                    FontSize::Pt10.points() as u8,
+                    text,
+                );
+                if self.mcp_qr && mcp_qr(ui.ctx(), cx, &url) {
+                    self.mcp_qr = false;
+                }
             }
             Kind::McpStatus => {
                 label(ui, before(button_rect), FontSize::Pt10);
@@ -1081,12 +1162,17 @@ impl SettingsTab {
         }
     }
 
-    /// Shows the open dropdown's popup and applies the pick.
+    /// Shows the open dropdown's popup and applies the pick. A question is centred on the screen, as the app's other
+    /// questions are, with equal margins each side (#81).
     fn popup(&mut self, ui: &Ui, cx: &UiCtx, s: &mut Settings) {
         let Some((menu, at)) = self.menu else {
             return;
         };
         let ctx = ui.ctx();
+        let at = match menu {
+            Menu::Restore | Menu::ThemeConfirm => ctx.content_rect().center(),
+            _ => at,
+        };
         // `Audio input:` shows once the app has listed the inputs, after the frame that opened it.
         let inputs = match (menu, &self.audio_inputs) {
             (Menu::AudioInput, None) => return ctx.request_repaint(),
@@ -1140,11 +1226,14 @@ impl SettingsTab {
                     .map_or_else(String::new, |i| inputs[i].clone());
             }
             // What the first run did stays done: the demos are not written over the user's copies at the next start,
-            // and What's New does not show again.
+            // and What's New does not show again; the folder shortcuts stay.
             (Menu::Restore, Some(CONFIRM_YES)) => {
                 *s = Settings {
                     demo_songs_version: s.demo_songs_version,
                     whats_new_seen: std::mem::take(&mut s.whats_new_seen),
+                    // The folder shortcuts are the user's places, not settings.
+                    folder_shortcuts: std::mem::take(&mut s.folder_shortcuts),
+                    hidden_shortcuts: std::mem::take(&mut s.hidden_shortcuts),
                     ..Settings::default()
                 }
             }
@@ -1210,12 +1299,23 @@ impl Choice {
                 .map(|&(label, _)| label.to_owned())
                 .enumerate()
                 .collect(),
+            Choice::SampleRate => std::iter::once((0, "Device".to_owned()))
+                .chain((crate::song::SAMPLE_RATES.iter()).map(|&r| {
+                    (
+                        r as usize,
+                        format!("{} Hz", crate::ui::main_menu::thousands(r.into())),
+                    )
+                }))
+                .collect(),
             Choice::Orientation => (crate::settings::ORIENTATIONS.iter())
                 .map(|&(label, _)| label.to_owned())
                 .enumerate()
                 .collect(),
             Choice::VersionSize => (crate::settings::VERSION_SIZE_LIMITS.iter())
                 .map(|&mb| (mb as usize, format!("{mb} MB")))
+                .collect(),
+            Choice::EditorResolution => (crate::settings::EDITOR_RESOLUTIONS.iter())
+                .map(|&p| (usize::from(p), format!("{p}%")))
                 .collect(),
         }
     }
@@ -1230,8 +1330,10 @@ impl Choice {
             Choice::Animation if !s.inertia => 2,
             Choice::Animation => usize::from(!s.animations),
             Choice::SampleMemory => usize::from(s.sample_memory_limit),
+            Choice::SampleRate => s.sample_rate as usize,
             Choice::Orientation => usize::from(s.screen_orientation),
             Choice::VersionSize => s.version_size_limit as usize,
+            Choice::EditorResolution => usize::from(s.plugin_editor_resolution),
         }
     }
 
@@ -1242,8 +1344,10 @@ impl Choice {
             Choice::Theme => (s.theme, s.custom_theme) = (value as u32, String::new()),
             Choice::Animation => (s.animations, s.inertia) = (value == 0, value != 2),
             Choice::SampleMemory => s.sample_memory_limit = value as u8,
+            Choice::SampleRate => s.sample_rate = value as u32,
             Choice::Orientation => s.screen_orientation = value as u8,
             Choice::VersionSize => s.version_size_limit = value as u32,
+            Choice::EditorResolution => s.plugin_editor_resolution = value as u8,
         }
     }
 
@@ -1253,6 +1357,18 @@ impl Choice {
         let pos = items.iter().position(|&(v, _)| v == current).unwrap_or(0);
         items.swap_remove(pos).1
     }
+}
+
+/// A light button showing `name`, which is the user's or a device's and of any length: shrink drawing in the button, in
+/// the ink the button would give a label of its own. The name it draws itself is its name for accessibility tools too.
+fn shrunk_button(ui: &mut Ui, cx: &UiCtx, id: Id, rect: Rect, name: &str) -> Response {
+    let (m, colors) = (cx.m, &cx.theme.colors);
+    let response = button(ui, cx, &Button::new(id, rect, "", false, colors), true);
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
+    let room = rect.shrink2(vec2(m.u(BUTTON_PAD), 0.0));
+    let (ink, pt) = (colors.menu_fill.to_color32(), FontSize::Pt10.points() as u8);
+    shrink(ui.painter(), m, room, Align2::CENTER_CENTER, name, pt, ink);
+    response
 }
 
 /// The metronome slider in `rect`: a double click resets it to the default level, and it fills from its low end
@@ -1306,12 +1422,13 @@ fn popup_items(
             ];
         }
         Menu::ThemeConfirm => {
-            let [warning, line] = THEME_WARNING;
+            let [warning, line, rest] = THEME_WARNING;
             return vec![
                 PopupItem::header(0, 0, warning),
                 PopupItem::header(0, 1, line),
-                PopupItem::new(CONFIRM_YES, 0, 2, "OK"),
-                PopupItem::new(CONFIRM_NO, 0, 3, "Cancel"),
+                PopupItem::header(0, 2, rest),
+                PopupItem::new(CONFIRM_YES, 0, 3, "OK"),
+                PopupItem::new(CONFIRM_NO, 0, 4, "Cancel"),
             ];
         }
     };
@@ -1331,6 +1448,70 @@ fn row_id(index: usize) -> Id {
 /// The id of the dropdown popup.
 fn popup_id() -> Id {
     Id::new("settings_tab").with("popup")
+}
+
+/// Puts `text` on the clipboard: Android's through the Activity, which egui's copy does not reach.
+fn copy_text(ctx: &egui::Context, text: String) {
+    #[cfg(target_os = "android")]
+    {
+        let _ = ctx;
+        crate::android::copy_text(&text);
+    }
+    #[cfg(not(target_os = "android"))]
+    ctx.copy_text(text);
+}
+
+/// MCP's address as a QR code, centred over the screen on a white card with its text under it. Returns whether a
+/// tap closed it.
+fn mcp_qr(ctx: &egui::Context, cx: &UiCtx, url: &str) -> bool {
+    let Ok(code) = qrcodegen::QrCode::encode_text(url, qrcodegen::QrCodeEcc::Medium) else {
+        return true;
+    };
+    let m = cx.m;
+    let screen = ctx.content_rect();
+    let n = code.size() as f32 + 8.0;
+    let side = (screen.width().min(screen.height()) * 0.7).min(m.u(12.0));
+    let cell = (side / n).floor().max(1.0);
+    let side = cell * n;
+    let card = Rect::from_center_size(screen.center(), vec2(side, side + m.u(1.5)));
+    let mut closed = false;
+    egui::Area::new(Id::new("mcp qr"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(screen.min)
+        .constrain(false)
+        .fade_in(false)
+        .show(ctx, |ui| {
+            let all = ui.allocate_exact_size(screen.size(), Sense::click());
+            let painter = ui.painter();
+            painter.rect_filled(screen, 0.0, egui::Color32::from_black_alpha(160));
+            painter.rect_filled(card, m.u(0.25), egui::Color32::WHITE);
+            let origin = card.min + vec2(4.0 * cell, 4.0 * cell);
+            for y in 0..code.size() {
+                for x in 0..code.size() {
+                    if code.get_module(x, y) {
+                        let at = origin + vec2(x as f32 * cell, y as f32 * cell);
+                        painter.rect_filled(
+                            Rect::from_min_size(at, vec2(cell, cell)),
+                            0.0,
+                            egui::Color32::BLACK,
+                        );
+                    }
+                }
+            }
+            let below = Rect::from_x_y_ranges(card.x_range(), card.top() + side..=card.bottom());
+            let font = FontSize::Pt10.points() as u8;
+            shrink(
+                painter,
+                m,
+                below.shrink(m.u(0.25)),
+                Align2::CENTER_CENTER,
+                url,
+                font,
+                egui::Color32::BLACK,
+            );
+            closed = all.1.clicked();
+        });
+    closed || ctx.input(|i| i.key_pressed(egui::Key::Escape))
 }
 
 #[cfg(test)]
@@ -1359,6 +1540,7 @@ mod tests {
                 "Audio:",
                 "Multi core processing",
                 "Audio buffer size",
+                "Sample rate:",
                 "Enable background audio (iOS Only)",
                 "Sound mode:",
                 "Sample memory limit:",
@@ -1380,14 +1562,18 @@ mod tests {
                 "Show key names on keyboard and piano roll",
                 "Set middle C to C4",
                 "Show range labels on keyboard",
+                "Keyboard in front of pickers",
                 "Continuous scrolling during playback",
                 "Show CPU and RAM meters",
+                "Show performance overlay",
                 "Project version size limit:",
                 "Enable sharing files with nearby devices",
                 "MCP:",
                 "Enable MCP control",
                 "Port",
+                "Allow over Wi-Fi",
                 "Authentication token",
+                "Address",
                 "Status",
                 "Advanced:",
                 "Share logs",
@@ -1429,7 +1615,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(toggles.len(), if cfg!(target_os = "ios") { 12 } else { 11 });
+        assert_eq!(toggles.len(), if cfg!(target_os = "ios") { 15 } else { 14 });
         for (label, field) in &toggles {
             let mut s = Settings::default();
             *field(&mut s) = !*field(&mut s);
@@ -1452,12 +1638,10 @@ mod tests {
             assert_eq!(values(Choice::SoundMode), [0, 1]);
         }
         #[cfg(not(desktop))]
+        #[cfg(not(desktop))]
         {
-            assert_eq!(
-                labels(Choice::SoundMode),
-                ["FAST", "SAFE", "ULTRASAFE", "NATIVE"]
-            );
-            assert_eq!(values(Choice::SoundMode), [1, 0, 2, 3]);
+            assert_eq!(labels(Choice::SoundMode), ["NATIVE"]);
+            assert_eq!(values(Choice::SoundMode), [3]);
         }
         assert_eq!(
             labels(Choice::Theme),
@@ -1975,7 +2159,7 @@ mod tests {
             let (u, t) = (m.u(1.0), m.t());
             let column_right = rig.width - 2.0 * u;
             let fills = fills(&rig);
-            assert_eq!(toggles().count(), 16);
+            assert_eq!(toggles().count(), 19);
             for r in toggles() {
                 let at = format!("ppp {ppp} scale {scale}: `{}`", r.label);
                 let control = rig.rect_of(row_id(index(r.label)));
@@ -2336,32 +2520,43 @@ mod tests {
         );
     }
 
+    /// Honeydew change (#129, #130): ON compensates (the earlier toggle compensated while OFF); it is ON by default.
     #[test]
-    fn the_latency_toggle_shows_on_while_unset_and_stores_what_a_tap_sets() {
-        // Unset shows ON, so the first tap turns it OFF (compensation on).
+    fn the_latency_toggle_is_on_while_it_compensates_and_a_tap_turns_it_off() {
         let mut rig = Rig::new();
         let label = "Enable audio recording latency compensation";
         rig.click_row(label);
-        assert_eq!(rig.settings.latency_compensation, Some(false));
+        assert!(!rig.settings.latency_compensation);
         assert!(rig.take_changed());
         rig.click_row(label);
-        assert_eq!(rig.settings.latency_compensation, Some(true));
+        assert!(rig.settings.latency_compensation);
     }
 
     #[test]
-    fn calibrate_shows_only_while_the_latency_toggle_is_off_and_a_tap_asks_the_app() {
-        // Compensation is on exactly when the toggle is OFF, and `Calibrate` is visible only then; unset shows ON. The
-        // toggle is then 2.5 U shorter and `Calibrate`, 2.5 U wide, takes the right end of the row.
+    fn calibrate_shows_only_while_the_latency_toggle_is_on_and_a_tap_asks_the_app() {
+        // Compensation is on exactly when the toggle is ON (Honeydew change, #129), and `Calibrate` is visible only
+        // then, on phones too. The toggle is then 2.5 U shorter and `Calibrate`, 2.5 U wide, takes the right end of the
+        // row.
         let mut rig = Rig::new();
         let label = "Enable audio recording latency compensation";
-        assert!(!rig.texts().contains(&"Calibrate".to_owned()), "unset");
-        let on = rig.rect_of(row_id(index(label)));
+        assert!(
+            rig.texts().contains(&"Calibrate".to_owned()),
+            "ON by default"
+        );
         rig.click_row(label);
-        assert_eq!(rig.settings.latency_compensation, Some(false));
+        assert!(!rig.settings.latency_compensation);
+        rig.frame(vec![]);
+        assert!(!rig.texts().contains(&"Calibrate".to_owned()), "OFF");
+        let off = rig.rect_of(row_id(index(label)));
+        rig.click_row(label);
+        assert!(rig.settings.latency_compensation);
         rig.frame(vec![]);
         let calibrate = rig.rect_of(row_id(index(label)).with("calibrate"));
         let toggle = rig.rect_of(row_id(index(label)));
-        assert_eq!(toggle, on, "the toggle is as short with `Calibrate` hidden");
+        assert_eq!(
+            toggle, off,
+            "the toggle is as short with `Calibrate` hidden"
+        );
         assert_eq!(calibrate.width(), 2.5 * 32.0);
         // The rig's page is under 20 U wide: the column is 0.5 U in.
         assert_eq!(calibrate.right(), rig.width - 0.5 * 32.0);
@@ -2376,11 +2571,11 @@ mod tests {
         assert!(!rig.tab.calibrate);
         rig.click(calibrate.center());
         assert!(rig.tab.calibrate, "the app starts it and clears this");
-        assert_eq!(rig.settings.latency_compensation, Some(false), "no toggle");
-        // ON again: hidden.
+        assert!(rig.settings.latency_compensation, "no toggle");
+        // OFF again: hidden.
         rig.click_row(label);
         rig.frame(vec![]);
-        assert_eq!(rig.settings.latency_compensation, Some(true));
+        assert!(!rig.settings.latency_compensation);
         assert!(!rig.texts().contains(&"Calibrate".to_owned()));
     }
 
@@ -2464,17 +2659,20 @@ mod tests {
             rig.frame(vec![]);
             assert_eq!(rig.tab.menu.map(|(m, _)| m), Some(Menu::ThemeConfirm));
             assert_eq!(rig.settings.custom_theme, edits);
+            // Centred on the screen (#81), not on the `Theme:` button: its cells are the popup's width.
+            let x = item(rig, 3).x - rig.width / 2.0;
+            assert!(x.abs() < 1.0, "{x}");
         };
         // `Cancel` keeps the edits; `OK` puts Mint in use.
         pick_mint(&mut rig);
-        rig.click(item(&rig, 3));
+        rig.click(item(&rig, 4));
         assert_eq!(
             (rig.settings.theme, &rig.settings.custom_theme),
             (0, &edits)
         );
         assert_eq!(rig.tab.menu, None);
         pick_mint(&mut rig);
-        rig.click(item(&rig, 2));
+        rig.click(item(&rig, 3));
         assert_eq!(
             (rig.settings.theme, rig.settings.custom_theme.as_str()),
             (6, "")

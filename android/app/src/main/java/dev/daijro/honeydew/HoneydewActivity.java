@@ -3,6 +3,8 @@ package dev.daijro.honeydew;
 import android.Manifest;
 import android.app.AlertDialog;
 import android.app.NativeActivity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
@@ -40,6 +42,7 @@ import java.net.ConnectException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.UnknownHostException;
+import java.util.ArrayList;
 
 public final class HoneydewActivity extends NativeActivity {
     static { System.loadLibrary("honeydew"); }
@@ -51,15 +54,18 @@ public final class HoneydewActivity extends NativeActivity {
     private static native void onDisplayDpi(float dpi);
     private static native void onDocumentPicked(String path, String error);
     private static native void onFolderPicked(String files, String error);
+    private static native void onMediaPicked(String uri, String error);
     private static native void onFilesCopied(String error);
     private static native void onMic(boolean granted);
     private static native void onHeadphones(boolean on);
     private static native void onInterrupted();
+    private static native void onLeaving();
     private static native void onBack();
 
     private static final int OPEN_DOCUMENT = 1;
     private static final int OPEN_FOLDER = 2;
     private static final int RECORD_AUDIO = 3;
+    private static final int OPEN_MEDIA = 4;
     private long openLimit;
     private AudioFocusRequest focus;
 
@@ -177,9 +183,11 @@ public final class HoneydewActivity extends NativeActivity {
         });
     }
 
-    // Leaving the screen ends a take too: Android gives an app in the background silence for its microphone.
+    // Leaving the screen ends a take too: Android gives an app in the background silence for its microphone. Before
+    // the app thread pauses, it writes the song's unsaved changes (onLeaving waits for that frame).
     @Override
     protected void onPause() {
+        onLeaving();
         super.onPause();
         onInterrupted();
     }
@@ -215,8 +223,8 @@ public final class HoneydewActivity extends NativeActivity {
         onDisplayDpi(getResources().getDisplayMetrics().xdpi);
     }
 
-    // The native side asks for an orientation (Settings' "Screen orientation") from its own thread; the window turns
-    // on the UI thread only, as every other call from that side is posted (see editText and openDocument).
+    // PR #87: the native side asks for an orientation (Settings' "Screen orientation") from its own thread; the window
+    // turns on the UI thread only, as every other call from that side is posted (see editText and openDocument).
     public void requestOrientation(final int orientation) {
         runOnUiThread(() -> {
             if (isFinishing() || isDestroyed()) return;
@@ -293,6 +301,53 @@ public final class HoneydewActivity extends NativeActivity {
                 onDocumentPicked(null, String.valueOf(e.getMessage()));
             }
         });
+    }
+
+    // The Displayer's image or video: picked in place, never copied. The URI's read permission is kept, so the app
+    // opens the same file after a restart (`openUriFd`); only the URI goes back to Rust.
+    public void openMedia(String mime) {
+        runOnUiThread(() -> {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                    .addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType(mime == null || mime.isEmpty() ? "*/*" : mime)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            try {
+                startActivityForResult(intent, OPEN_MEDIA);
+            } catch (RuntimeException e) {
+                onMediaPicked(null, String.valueOf(e.getMessage()));
+            }
+        });
+    }
+
+    // A read-only descriptor of the document `uri`, detached for Rust to own and close; -1 when it cannot be opened
+    // (the file is gone, or the permission was lost).
+    public int openUriFd(String uri) {
+        try {
+            android.os.ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(Uri.parse(uri), "r");
+            return pfd == null ? -1 : pfd.detachFd();
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    // The app's `Copy` buttons (Rust `android::copy_text`): NativeActivity has no clipboard of its own for egui.
+    public void copyText(String text) {
+        runOnUiThread(() -> {
+            try {
+                ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+                if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("Honeydew", text));
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
+    // The document's display name, for the Displayer's panel.
+    public String uriName(String uri) {
+        try {
+            return displayName(Uri.parse(uri));
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // SONGS `Import folder`: the system folder picker, which reaches Downloads, an SD card and other providers' folders.
@@ -409,6 +464,28 @@ public final class HoneydewActivity extends NativeActivity {
         });
     }
 
+    // Send (#72, Rust `android::share`): `paths`, files in the user folder each ending in '\0', to the system's chooser
+    // as `type`, each by its document in HoneydewDocuments with a read grant only (the clip carries it to the app
+    // picked). Returns why not, or null.
+    public String share(String paths, String type) {
+        ArrayList<Uri> uris = new ArrayList<>();
+        for (String path : paths.split("\0")) {
+            Uri uri = HoneydewDocuments.documentUri(this, path);
+            if (uri == null) return path + ": not in the user folder";
+            uris.add(uri);
+        }
+        Intent send = new Intent(uris.size() == 1 ? Intent.ACTION_SEND : Intent.ACTION_SEND_MULTIPLE)
+                .setType(type)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        if (uris.size() == 1) send.putExtra(Intent.EXTRA_STREAM, uris.get(0));
+        else send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+        ClipData clip = ClipData.newRawUri(null, uris.get(0));
+        for (int i = 1; i < uris.size(); i++) clip.addItem(new ClipData.Item(uris.get(i)));
+        send.setClipData(clip);
+        runOnUiThread(() -> startActivity(Intent.createChooser(send, null)));
+        return null;
+    }
+
     // The network the phone is on, for the sound library's download (Rust `update`): 0 none that reaches the internet,
     // 1 unmetered (Wi-Fi, Ethernet), 2 metered (mobile data, a hotspot).
     public int network() {
@@ -422,19 +499,48 @@ public final class HoneydewActivity extends NativeActivity {
     // A download for Rust (`update::get`), on Rust's worker thread, which it blocks: `url` (HTTPS, redirects followed)
     // into `path`, going on from the bytes the file holds. Returns why it failed ("offline" without a network), or null.
     public String download(String url, String path) {
+        return downloadWith(url, path, "", "");
+    }
+
+    // `download` with a GitHub token and the Accept header to ask with (each empty for none): both go to the first
+    // host only, never on to where it redirects (a private release asset redirects to its storage, which refuses a
+    // token besides). Redirects are followed here for that, at most 5.
+    public String downloadWith(String url, String path, String token, String accept) {
         File file = new File(path);
         try {
-            HttpURLConnection http = (HttpURLConnection) new URL(url).openConnection();
-            http.setConnectTimeout(30000);
-            http.setReadTimeout(60000);
-            http.setRequestProperty("User-Agent", "Honeydew");
+            URL first = new URL(url), at = first;
             long have = file.length();
-            if (have > 0) http.setRequestProperty("Range", "bytes=" + have + "-");
-            int code = http.getResponseCode();
+            HttpURLConnection http;
+            int code;
+            for (int hop = 0; ; hop++) {
+                if (!"https".equals(at.getProtocol())) return "The download left HTTPS";
+                http = (HttpURLConnection) at.openConnection();
+                http.setInstanceFollowRedirects(false);
+                http.setConnectTimeout(30000);
+                http.setReadTimeout(60000);
+                http.setRequestProperty("User-Agent", "Honeydew");
+                boolean home = at.getHost().equalsIgnoreCase(first.getHost());
+                if (home && !token.isEmpty()) http.setRequestProperty("Authorization", "Bearer " + token);
+                if (home && !accept.isEmpty()) http.setRequestProperty("Accept", accept);
+                if (have > 0) http.setRequestProperty("Range", "bytes=" + have + "-");
+                code = http.getResponseCode();
+                boolean moved = code == 301 || code == 302 || code == 303 || code == 307 || code == 308;
+                if (!moved) break;
+                String to = http.getHeaderField("Location");
+                http.disconnect();
+                if (to == null || hop >= 5) return "The server answered " + code + " without a usable redirect";
+                at = new URL(at, to);
+            }
             // A file that is whole already.
-            if (code == 416 && have > 0) return null;
-            if (code != 200 && code != 206) return "The server answered " + code + " (" + http.getResponseMessage() + ")";
-            if (!"https".equals(http.getURL().getProtocol())) return "The download left HTTPS";
+            if (code == 416 && have > 0) {
+                http.disconnect();
+                return null;
+            }
+            if (code != 200 && code != 206) {
+                String why = "The server answered " + code + " (" + http.getResponseMessage() + ")";
+                http.disconnect();
+                return why;
+            }
             try (InputStream in = http.getInputStream(); OutputStream out = new FileOutputStream(file, code == 206)) {
                 copy(in, out, Long.MAX_VALUE);
             } finally {
@@ -471,6 +577,20 @@ public final class HoneydewActivity extends NativeActivity {
 
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
+        if (request == OPEN_MEDIA) {
+            Uri media = result == RESULT_OK && data != null ? data.getData() : null;
+            if (media == null) {
+                onMediaPicked(null, null);
+                return;
+            }
+            try {
+                getContentResolver().takePersistableUriPermission(media, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (RuntimeException ignored) {
+                // A provider without persistable permissions: readable until the app restarts.
+            }
+            onMediaPicked(media.toString(), null);
+            return;
+        }
         if (request != OPEN_DOCUMENT && request != OPEN_FOLDER) {
             super.onActivityResult(request, result, data);
             return;

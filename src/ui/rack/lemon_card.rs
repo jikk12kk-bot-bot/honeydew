@@ -5,17 +5,22 @@
 //! - The pointer over it is the editor's, in the editor's pixels: presses (a second one within 0.4 s and 12 points is a
 //!   double click), moves, releases (also outside, while a press it took is held) and the wheel. While the editor holds
 //!   the cursor (a knob drag) the moves go as movement and the cursor hides. Issue #68: a double click on a knob or
-//!   fader resets it, as a double tap does Honeydew's own.
+//!   fader resets it, as a double tap does Honeydew's own. PR #87: a long press ([`gesture::long_press`]) is a right
+//!   click at the press, so a phone reaches a knob's menu (Reset, …) as a secondary click does on the desktop; a tap
+//!   or a moved press stays a left one.
 //! - The editor's menus show over the card in Lemon's own look (`os_ui::kit::menu`), with their submenus; its "Type in
 //!   value" box is a text field there.
 //! - Issue #52: where the editor has no file dialog (Android, the browser), the app's sample picker opens its sample
 //!   ([`wants_file`]).
 //! - Its edits reach the song as a plugin editor's do (`plugins::idle`): the song's params, undo, REC.
+//! - Full screen it may be driven by a virtual mouse ([`set_mouse`]): the screen turns into a touchpad that moves an
+//!   arrow cursor over the editor, for the editors' small controls, which a fingertip covers ([`trackpad`]). The cursor
+//!   drives the editor's menus and type-in box too, and a zoom about the cursor magnifies the editor ([`set_zoom`]).
 
 use eframe::egui::text::{CCursor, CCursorRange};
 use eframe::egui::text_edit::TextEditState;
 use eframe::egui::{
-    self, Area, Color32, ColorImage, CursorIcon, Event, Id, Key, Modifiers, MouseWheelUnit, Order,
+    self, Area, Color32, ColorImage, CursorIcon, Event, Id, Key, LayerId, Modifiers, MouseWheelUnit, Order,
     PointerButton, Pos2, Rect, Response, Sense, TextEdit, TextureHandle, TextureOptions, Ui, Vec2,
     pos2, vec2,
 };
@@ -42,15 +47,49 @@ const BUSY_S: f64 = 0.5;
 const WHEEL_POINTS: f32 = 50.0;
 /// The type-in box's width in the editor's pixels at scale 1, as Lemon's.
 const TYPE_IN_W: f32 = 140.0;
+/// The virtual mouse: cursor points per finger point, and its arrow's height in U.
+const PAD_SPEED: f32 = 1.25;
+const ARROW_U: f32 = 0.55;
+/// How much larger the zoom paints the editor at most: each frame is painted by the CPU, and its cost grows with the
+/// square.
+const SHARP_ZOOM: f32 = 2.0;
+
+/// The virtual mouse's state ([`trackpad`]).
+#[derive(Clone, Debug, Default)]
+struct Pad {
+    /// Where a finger drives it ([`set_pad_area`]; `None`: the editor), and the rects inside that are not the pad (the
+    /// buttons over it).
+    area: Option<Rect>,
+    keep_out: Vec<Rect>,
+    /// The zoom about the cursor ([`set_zoom`]): 1 (or less) is none.
+    zoom: f32,
+    /// A menu or type-in box showed last frame.
+    modal: bool,
+    /// The virtual mouse is on: its cursor's position as a fraction of the editor's size (a resize keeps it).
+    cursor: Option<Vec2>,
+    /// The finger on the pad: its id, where it went down and when; and where it was last.
+    down: Option<(u64, Pos2, f64)>,
+    last: Pos2,
+    /// The other fingers down on the pad meanwhile.
+    others: Vec<u64>,
+    /// It left its calm zone: the finger moves the cursor.
+    moved: bool,
+    /// The floating mouse buttons ([`set_buttons`]): Left's, Right's and their grip's rects (points).
+    buttons: Option<[Rect; 3]>,
+    /// The finger holding each (Left, Right, the grip), and whether Left's and Right's press reached the editor (one
+    /// that opened a menu is the menu's).
+    held: [Option<u64>; 3],
+    sent: [bool; 2],
+    /// The grip's finger was last here, and how far it moved the buttons since [`take_buttons_moved`].
+    grip_last: Pos2,
+    grip_moved: Vec2,
+}
 
 /// A Lemon card's own state: its editor's texture and the pointer's.
 #[derive(Default)]
 pub(crate) struct LemonCard {
     /// The editor shown ([`plugins::lemon_editor`]).
     editor: embed::Parent,
-    /// The editor's `Create automation clip` pick since the rack last read it: the parameter's list position
-    /// ([`show`] sets it, the rack makes the parameter's automation track).
-    pub(super) automate: Option<i32>,
     texture: Option<TextureHandle>,
     /// The frame shown, its size in pixels and when it came.
     version: u64,
@@ -58,11 +97,9 @@ pub(crate) struct LemonCard {
     size: (u32, u32),
     /// The button of the press the editor took: its moves and release are the editor's wherever they are.
     pressed: Option<Button>,
-    /// The press's long press was sent as a right click ([`forward`]); the left press was released with it, and the
-    /// release of a press whose right click opened no modal pairs the right click with an up.
+    /// That press's long press went as a right click (PR #87), the left press released with it: its release, where
+    /// the right click opened no modal, pairs the right click with an up.
     long_menu: bool,
-    /// The press left the calm zone before its long press came due: a drag, never a menu.
-    long_cancel: bool,
     /// That press is a finger's other than the pointer's ([`other_finger`]): its id and the pass it was last seen in.
     finger: Option<(u64, u64)>,
     /// The pointer's last position, and whether it was over the editor.
@@ -78,6 +115,10 @@ pub(crate) struct LemonCard {
     /// The editor asks for a file ([`Modal::OpenFile`]), and the request went to the app ([`wants_file`]) or is about to.
     asked_file: bool,
     wants_file: bool,
+    /// The virtual mouse ([`set_mouse`]).
+    pad: Pad,
+    /// The share of the screen's pixels it paints at ([`set_resolution`]); 0 (unset) is all of them.
+    resolution: f32,
 }
 
 impl std::fmt::Debug for LemonCard {
@@ -124,9 +165,16 @@ pub(crate) fn show(
     let ppp = ctx.pixels_per_point();
     // The editor at the card's width in device pixels, so that it is sharp ([`plugins::lemon_editor`] opens it again
     // only when that moves by more than a little), up to the largest texture (full screen on a big screen).
+    // The virtual mouse's zoom paints it larger (up to [`SHARP_ZOOM`]), so that the part shown is sharper.
     let (w, h) = plugin.size();
     let most = ctx.input(|i| i.max_texture_side) as f32 / w.max(h).max(1) as f32;
-    let scale = (content.width() * ppp / w as f32).max(0.5).min(most);
+    let zoom = zoom_of(card).min(SHARP_ZOOM);
+    // Full screen may paint at less than the screen's pixels (`Plugin editor resolution:`): faster, softer.
+    let resolution = match card.resolution {
+        r if r > 0.0 => r.min(1.0),
+        _ => 1.0,
+    };
+    let scale = (content.width() * zoom * ppp * resolution / w as f32).max(0.5).min(most);
     // The handle's type is the platform's (`embed::Parent`: `usize` on macOS).
     let Some(editor) = plugins::lemon_editor(channel_id, instance_id, scale)
         .map(|id| -> embed::Parent { id as _ })
@@ -134,14 +182,21 @@ pub(crate) fn show(
         return false;
     };
     if card.editor != editor {
+        // A reopened editor keeps the virtual mouse: where its cursor was, its pad, its zoom.
+        let pad = std::mem::take(&mut card.pad);
         *card = LemonCard {
             editor,
+            resolution: card.resolution,
             ..LemonCard::default()
         };
-    }
-    // The editor's "Create automation clip" picks (the Lemon editors share the link's queue; this card's are its own).
-    if let Some(&index) = lemon_sampler::take_automation_requests(editor as u64).last() {
-        card.automate = Some(index as i32);
+        card.pad = Pad {
+            down: None,
+            others: Vec::new(),
+            modal: false,
+            held: [None; 3],
+            sent: [false; 2],
+            ..pad
+        };
     }
     let size = shown_size(Some(card), plugin);
     let rect = Rect::from_min_size(
@@ -150,29 +205,81 @@ pub(crate) fn show(
     );
     // Global (an editor shows in one card at a time): tests and render harnesses find the card by its editor.
     let id = Id::new(("lemon editor", editor));
-    let response = ui.interact(rect, id, Sense::click_and_drag());
+    let mut response = ui.interact(rect, id, Sense::click_and_drag());
     // Editor pixels per point.
     let k = card.size.0 as f32 / rect.width();
     let modal = embed::modal(editor);
-    if modal.is_none() && card.size.0 > 0 {
+    // A file request waits for the app's picker: the virtual mouse goes on driving the editor meanwhile.
+    let menu_shows = matches!(modal, Some(Modal::Menu { .. } | Modal::TypeIn { .. }));
+    // The virtual mouse drives the editor, and while a menu or type-in box shows, that (`pad`: its cursor and click).
+    let mut pad = None;
+    if card.pad.cursor.is_some() && card.size.0 > 0 {
+        if menu_shows && !card.pad.modal {
+            // The press that asked is the modal's (its answer delivers it again, with its release): the finger still
+            // down only moves the cursor now.
+            (card.pressed, card.finger, card.long_menu) = (None, None, false);
+            let p = &mut card.pad;
+            p.sent = [false; 2];
+            p.moved |= p.down.is_some();
+        }
+        card.pad.modal = menu_shows;
+        let click = trackpad(ui, card, rect, k, m, !menu_shows);
+        // Where the cursor shows on the screen: through the zoom, as the menus and type-in box do.
+        let lens = Lens {
+            rect,
+            view: view(card, rect),
+        };
+        pad = Some(PadPointer {
+            pos: lens.show(rect.min + card.pad.cursor.unwrap_or_default() * rect.size()),
+            click,
+        });
+    } else if modal.is_none() && card.size.0 > 0 {
         other_finger(ui, card, &response, rect, k);
-        forward(ui, card, rect, k, response.hovered(), m);
+        forward(ui, card, rect, k, response.hovered());
+        // PR #87: a long press on the editor is a right click at the press (a phone has no secondary button). The left
+        // press is released with it: where the right click opens a menu, its answer replays the right click only.
+        let long = gesture::long_press(ui, &mut response, m);
+        if long && card.pressed == Some(Button::Left) && card.finger.is_none() && !card.long_menu {
+            let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(card.last);
+            let (x, y) = ((origin.x - rect.left()) * k, (origin.y - rect.top()) * k);
+            let held = mods(ui.input(|i| i.modifiers));
+            let btn = Button::Right;
+            embed::input(
+                editor,
+                Input::Down {
+                    x,
+                    y,
+                    btn,
+                    dbl: false,
+                },
+                held,
+            );
+            embed::input(editor, Input::Up { btn: Button::Left }, held);
+            card.long_menu = true;
+        }
     } else {
         // The press that asked is the modal's (its answer delivers it again, with its release): the next press is new.
-        (card.pressed, card.finger) = (None, None);
-        card.long_menu = false;
+        (card.pressed, card.finger, card.long_menu) = (None, None, false);
     }
     embed::pump(editor);
+    // Issue #72: only what changed goes into the texture (a whole frame is megabytes, a knob turn a small patch of
+    // it); all of it into a new texture or at a new size.
+    let (shown, whole) = (card.size, card.texture.is_none());
     let mut fresh = None;
     if let Some(v) = embed::frame(editor, card.version, |f| {
-        fresh = Some(image(&f.pixels, f.width, f.height))
+        let size = (f.width, f.height);
+        let area = (whole || size != shown).then_some((0, 0, size.0, size.1));
+        fresh = (area.or(f.changed)).map(|a| (size, a, image(&f.pixels, f.width, a)));
     }) {
         card.version = v;
         card.painted = ctx.input(|i| i.time);
     }
-    if let Some(image) = fresh {
-        card.size = (image.size[0] as u32, image.size[1] as u32);
+    if let Some((size, (x, y, ..), image)) = fresh {
+        card.size = size;
         match &mut card.texture {
+            Some(t) if size == shown => {
+                t.set_partial([x as usize, y as usize], image, TextureOptions::LINEAR)
+            }
             Some(t) => t.set(image, TextureOptions::LINEAR),
             None => {
                 card.texture = Some(ctx.load_texture(
@@ -183,21 +290,36 @@ pub(crate) fn show(
             }
         }
     }
-    paint(ui, rect, card);
-    if card.pressed.is_some() && embed::locked(editor) {
+    // Zoomed, the part of the editor about the cursor fills the rect; it stays zoomed while a menu or type-in box shows,
+    // which shows through the same zoom.
+    let view = view(card, rect);
+    let lens = Lens { rect, view };
+    paint_view(ui, rect, view, card);
+    let locked = card.pressed.is_some() && embed::locked(editor);
+    if locked {
         ctx.set_cursor_icon(CursorIcon::None);
+    }
+    // The virtual mouse's arrow, over everything (the editor's menus too), hidden while a knob or fader holds the
+    // cursor (as the desktop's is).
+    if let Some(cursor) = card.pad.cursor
+        && !locked
+    {
+        let tip = lens.show(rect.min + cursor * rect.size());
+        let painter = ctx.layer_painter(LayerId::new(Order::Tooltip, id.with("cursor")));
+        arrow(&painter, tip, m);
     }
     match modal {
         Some(Modal::Menu { x, y, menu, scale }) => {
-            show_menu(&ctx, id, card, rect, k, (x, y), menu, scale)
+            show_menu(&ctx, id, card, lens, k, (x, y), menu, scale, pad)
         }
         Some(Modal::TypeIn { x, y, text, scale }) => {
-            type_in(&ctx, id, card, rect, k, (x, y), text, scale)
+            type_in(&ctx, id, card, lens, k, (x, y), text, scale, pad)
         }
         Some(Modal::OpenFile) => {
             card.wants_file |= !std::mem::replace(&mut card.asked_file, true);
-            // A new press on the editor: the picker went without answering.
-            if response.hovered() && ctx.input(|i| i.pointer.any_pressed()) {
+            // A new press on the editor (with the virtual mouse, anywhere): the picker went without answering.
+            let on = response.hovered() || card.pad.cursor.is_some();
+            if on && ctx.input(|i| i.pointer.any_pressed()) {
                 embed::answer(editor, None);
             }
         }
@@ -211,11 +333,78 @@ pub(crate) fn show(
 }
 
 /// Paints the editor's last frame in `rect`, as it was: the card's while its editor shows full screen.
-pub(super) fn paint(ui: &Ui, rect: Rect, card: &LemonCard) {
-    if let Some(t) = &card.texture {
-        let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
-        ui.painter().image(t.id(), rect, uv, Color32::WHITE);
+pub(crate) fn paint(ui: &Ui, rect: Rect, card: &LemonCard) {
+    paint_view(ui, rect, rect, card);
+}
+
+/// Paints the part `view` (in `rect`'s points) of the editor's last frame over all of `rect`. A view standing out of
+/// the editor (a menu out of it shows) paints the editor's part only, where the zoom puts it.
+fn paint_view(ui: &Ui, rect: Rect, view: Rect, card: &LemonCard) {
+    let Some(t) = &card.texture else {
+        return;
+    };
+    let shown = view.intersect(rect);
+    if !(shown.width() > 0.0 && shown.height() > 0.0) {
+        return;
     }
+    let lens = Lens { rect, view };
+    let size = rect.size().max(Vec2::splat(1e-3));
+    let uv = Rect::from_min_max(
+        ((shown.min - rect.min) / size).to_pos2(),
+        ((shown.max - rect.min) / size).to_pos2(),
+    );
+    let at = Rect::from_min_max(lens.show(shown.min), lens.show(shown.max));
+    ui.painter().image(t.id(), at, uv, Color32::WHITE);
+}
+
+/// How the editor shows through the virtual mouse's zoom: the part `view` of the editor's points fills `rect` (the
+/// editor's place on the screen). Not zoomed, `view` is `rect` and points show where they are.
+#[derive(Clone, Copy, Debug)]
+struct Lens {
+    rect: Rect,
+    view: Rect,
+}
+
+impl Lens {
+    /// Screen points per editor point.
+    fn z(&self) -> f32 {
+        self.rect.width() / self.view.width().max(1e-3)
+    }
+
+    /// Where the editor's point `p` (unzoomed) shows on the screen.
+    fn show(&self, p: Pos2) -> Pos2 {
+        self.rect.min + (p - self.view.min) * self.z()
+    }
+}
+
+/// The virtual mouse's zoom as it shows: 1 while the mouse is off.
+fn zoom_of(card: &LemonCard) -> f32 {
+    match card.pad.cursor {
+        Some(_) => card.pad.zoom.max(1.0),
+        None => 1.0,
+    }
+}
+
+/// The part of the editor in `rect` (its points) that shows in `rect`: all of it, or zoomed in ([`set_zoom`]) the part
+/// that much smaller centred on the cursor, kept inside the editor. It stays zoomed while a menu shows, and may then
+/// go as far as the menu stands out of the editor, so that all of it can be reached.
+fn view(card: &LemonCard, rect: Rect) -> Rect {
+    let (zoom, Some(cursor)) = (zoom_of(card), card.pad.cursor) else {
+        return rect;
+    };
+    if zoom <= 1.0 {
+        return rect;
+    }
+    let size = rect.size() / zoom;
+    let centre = rect.min + cursor * rect.size();
+    let k = card.size.0 as f32 / rect.width().max(1e-3);
+    let limit = (card.menu.iter())
+        .flat_map(|m| m.levels.iter().map(move |l| (l, m.scale)))
+        .filter(|_| k > 0.0)
+        .map(|(l, scale)| Rect::from_min_size(rect.min + l.at / k, l.size(scale) / k))
+        .fold(rect, |limit, r| limit.union(r));
+    let min = (centre - size / 2.0).clamp(limit.min, limit.max - size);
+    Rect::from_min_size(min, size)
 }
 
 /// Cancels the editor's open menu or type-in box, as Escape over it would: whether one was open. The app's `close`
@@ -236,17 +425,88 @@ pub(crate) fn wants_file(card: &mut LemonCard) -> bool {
     std::mem::take(&mut card.wants_file)
 }
 
+/// Turns the virtual mouse on or off: on, the editor is a touchpad with a cursor on it ([`trackpad`]), starting at its
+/// centre; off, touches press where they land. A press the virtual mouse held is released.
+pub(crate) fn set_mouse(card: &mut LemonCard, on: bool) {
+    if on == card.pad.cursor.is_some() {
+        return;
+    }
+    let editor = card.editor;
+    let send = |e: Input| embed::input(editor, e, (false, false, false));
+    if card.pad.sent[1] {
+        send(Input::Up { btn: Button::Right });
+    }
+    if let Some(btn) = card.pressed.take() {
+        send(Input::Up { btn });
+    }
+    if std::mem::take(&mut card.over) {
+        send(Input::Leave);
+    }
+    card.finger = None;
+    card.pad = Pad {
+        cursor: on.then_some(vec2(0.5, 0.5)),
+        ..Pad::default()
+    };
+}
+
+/// Whether the virtual mouse is on.
+pub(crate) fn mouse_on(card: &LemonCard) -> bool {
+    card.pad.cursor.is_some()
+}
+
+/// Where a finger drives the virtual mouse: anywhere in `area` (full screen: the whole screen) but on `keep_out` (the
+/// buttons over it). Until set, the editor itself.
+pub(crate) fn set_pad_area(card: &mut LemonCard, area: Rect, keep_out: Vec<Rect>) {
+    (card.pad.area, card.pad.keep_out) = (Some(area), keep_out);
+}
+
+/// The virtual mouse's floating buttons, Left and Right, and the grip that moves them (rects in points; `None`: none).
+/// A finger on Left or Right holds that button at the cursor; on the grip it moves them ([`take_buttons_moved`]). They
+/// should be in the pad's `keep_out` too ([`set_pad_area`]).
+pub(crate) fn set_buttons(card: &mut LemonCard, buttons: Option<[Rect; 3]>) {
+    card.pad.buttons = buttons;
+}
+
+/// How far a finger on the floating buttons' grip moved them since the last call (points).
+pub(crate) fn take_buttons_moved(card: &mut LemonCard) -> Vec2 {
+    std::mem::take(&mut card.pad.grip_moved)
+}
+
+/// Whether the floating button `right` (else Left) is held.
+pub(crate) fn button_held(card: &LemonCard, right: bool) -> bool {
+    card.pad.held[usize::from(right)].is_some()
+}
+
+/// The virtual mouse's zoom: the editor shows `zoom` times larger about its cursor (1: not zoomed). The editor paints
+/// again at that size, to be sharp.
+pub(crate) fn set_zoom(card: &mut LemonCard, zoom: f32) {
+    card.pad.zoom = zoom.max(1.0);
+}
+
+/// Paints the editor at `resolution` (0 to 1) of the screen's pixels: full screen's `Plugin editor resolution:`. A
+/// change opens the editor again at the new size.
+pub(crate) fn set_resolution(card: &mut LemonCard, resolution: f32) {
+    card.resolution = resolution.clamp(0.1, 1.0);
+}
+
 /// Whether the pointer was over a Lemon editor this frame: the rack's wheel is then the editor's.
 pub(super) fn over(card: &LemonCard) -> bool {
     card.over || card.pressed.is_some()
 }
 
-/// XRGB rows of `w` as an image.
-fn image(px: &[u32], w: u32, h: u32) -> ColorImage {
-    let pixels = (px.iter())
-        .map(|&p| Color32::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8))
-        .collect();
-    ColorImage::new([w as usize, h as usize], pixels)
+/// The pixels (x0, y0, x1, y1) of XRGB rows of `w` as an image.
+fn image(px: &[u32], w: u32, (x0, y0, x1, y1): (u32, u32, u32, u32)) -> ColorImage {
+    let size = [(x1 - x0) as usize, (y1 - y0) as usize];
+    let mut pixels = Vec::with_capacity(size[0] * size[1]);
+    for row in px
+        .chunks_exact(w.max(1) as usize)
+        .take(y1 as usize)
+        .skip(y0 as usize)
+    {
+        let rgb = |&p: &u32| Color32::from_rgb((p >> 16) as u8, (p >> 8) as u8, p as u8);
+        pixels.extend(row[x0 as usize..x1 as usize].iter().map(rgb));
+    }
+    ColorImage::new(size, pixels)
 }
 
 fn button(b: PointerButton) -> Option<Button> {
@@ -315,18 +575,15 @@ fn other_finger(ui: &Ui, card: &mut LemonCard, response: &Response, rect: Rect, 
 }
 
 /// This frame's pointer input to the editor shown in `rect` (`k` editor pixels per point); `hovered`: the pointer is
-/// on it, with nothing over it. Nothing while another finger holds the editor ([`other_finger`]). A long press on the
-/// editor ([`gesture::is_long`], in the calm zone) is sent as a right click (`Input::Down` with [`Button::Right`]),
-/// which opens the editor's own menu (Reset, …) on the widget under the finger, as a secondary click does on the
-/// desktop.
-fn forward(ui: &Ui, card: &mut LemonCard, rect: Rect, k: f32, hovered: bool, m: &Metrics) {
+/// on it, with nothing over it. Nothing while another finger holds the editor ([`other_finger`]).
+fn forward(ui: &Ui, card: &mut LemonCard, rect: Rect, k: f32, hovered: bool) {
     let editor = card.editor;
     if card.finger.is_some() {
         return;
     }
     let px = |p: Pos2| ((p.x - rect.left()) * k, (p.y - rect.top()) * k);
     let (events, now, held) = ui.input(|i| (i.events.clone(), i.time, i.modifiers));
-    let send = |e: Input, md: Modifiers| embed::input(editor, e, mods(md));
+    let send = |e: Input, m: Modifiers| embed::input(editor, e, mods(m));
     for event in events {
         match event {
             Event::PointerMoved(p) => {
@@ -376,8 +633,6 @@ fn forward(ui: &Ui, card: &mut LemonCard, rect: Rect, k: f32, hovered: bool, m: 
                     }
                 }
                 (card.pressed, card.last, card.over) = (Some(btn), pos, true);
-                card.long_menu = false;
-                card.long_cancel = false;
             }
             Event::PointerButton {
                 button: b,
@@ -386,11 +641,10 @@ fn forward(ui: &Ui, card: &mut LemonCard, rect: Rect, k: f32, hovered: bool, m: 
                 ..
             } if card.pressed.is_some() && card.pressed == button(b) => {
                 let btn = card.pressed.take().expect("held");
-                // The long press's right click that opened no modal (a menu's answer replays it when one did; the
-                // left up after a long press repeats the one sent with the right click, harmlessly).
-                if card.long_menu {
+                // A long press's right click that opened no modal ends with this release; the left up repeats the one
+                // sent with the right click, harmlessly.
+                if std::mem::take(&mut card.long_menu) {
                     send(Input::Up { btn: Button::Right }, modifiers);
-                    card.long_menu = false;
                 }
                 send(Input::Up { btn }, modifiers);
             }
@@ -412,49 +666,260 @@ fn forward(ui: &Ui, card: &mut LemonCard, rect: Rect, k: f32, hovered: bool, m: 
             _ => {}
         }
     }
-    // A long press on the editor is a right click: once per press, held [`gesture::LONG_PRESS_S`] in the calm zone
-    // about where it went down. Where it lands on a widget with a menu (a knob, a fader), the editor asks for the
-    // menu ([`embed::modal`]); where it lands on nothing, the click is paired on release.
-    if card.pressed == Some(Button::Left) && !card.long_menu && !card.long_cancel {
-        let (origin, pos, start, now_s, second_finger) = ui.input(|i| {
-            (
-                i.pointer.press_origin(),
-                i.pointer.latest_pos(),
-                i.pointer.press_start_time(),
-                i.time,
-                i.multi_touch().is_some(),
-            )
-        });
-        if let (Some(origin), Some(pos), Some(start)) = (origin, pos, start)
-            && rect.contains(origin)
-        {
-            let held_s = now_s - start;
-            if second_finger || gesture::left_calm(origin, Some(pos), m.u(1.0)) {
-                // A second finger, or the calm zone left before its long press: never a menu (as [`gesture::press`]
-                // cancels it).
-                card.long_cancel = true;
-            } else if gesture::is_long(held_s) {
-                let (x, y) = px(origin);
-                send(
-                    Input::Down {
-                        x,
-                        y,
-                        btn: Button::Right,
-                        dbl: false,
-                    },
-                    held,
-                );
-                // The left press is released with it: where the right click opened a menu, its answer replays the
-                // right click only, and a cancelled menu replays nothing — either way no up would reach the left press.
-                send(Input::Up { btn: Button::Left }, held);
-                card.long_menu = true;
-            } else {
-                // Wake when the long press comes due, as [`gesture::press`] does.
-                ui.ctx()
-                    .request_repaint_after_secs((gesture::LONG_PRESS_S - held_s) as f32);
+}
+
+/// The virtual mouse's click while a menu or type-in box shows ([`trackpad`]): its cursor (points), and whether a
+/// floating button clicked there this frame.
+#[derive(Clone, Copy, Debug)]
+struct PadPointer {
+    pos: Pos2,
+    click: bool,
+}
+
+/// The virtual mouse's frame: a finger anywhere on its area ([`set_pad_area`]) moves its cursor over the editor in
+/// `rect` (`k` editor pixels per point), [`Pad::cursor`]. `deliver`: the editor takes it (no menu or type-in box
+/// shows); else the cursor moves over the screen and a floating button's press is a click there, which it returns,
+/// for the menu.
+///
+/// - A finger on the pad only moves the cursor (by [`PAD_SPEED`] times the finger's move, less when zoomed), hovering
+///   what it passes over. It never clicks: no tap, long press, double tap or tap and press does anything.
+/// - Only the floating buttons click ([`set_buttons`]): Left and Right press and release their button at the cursor,
+///   held as long as the finger is (so another finger on the pad drags with the button down: a knob turns, or the
+///   cursor moves with the button held); over a menu or type-in box either is a click. A finger on their grip moves
+///   them ([`take_buttons_moved`]).
+/// - The wheel turns at the cursor.
+///
+/// The steps are read from the frame's own events, each finger by its id (a touch, or the mouse), in order: a button
+/// press and lift in the same frame still clicks, and a finger on a button does not disturb the one on the pad.
+fn trackpad(ui: &Ui, card: &mut LemonCard, rect: Rect, k: f32, m: &Metrics, deliver: bool) -> bool {
+    use eframe::egui::TouchPhase;
+    let editor = card.editor;
+    let Some(fraction) = card.pad.cursor else {
+        return false;
+    };
+    let mut clicked = false;
+    let mut at = rect.min + fraction * rect.size();
+    // Back on the editor once a menu that let it out is gone.
+    if deliver {
+        at = at.clamp(rect.min, rect.max);
+    }
+    let px = |p: Pos2| ((p.x - rect.left()) * k, (p.y - rect.top()) * k);
+    let (held, now, none_down, lost, events) = ui.input(|i| {
+        (
+            i.modifiers,
+            i.time,
+            !i.pointer.any_down() && !i.any_touches(),
+            focus_lost(i),
+            i.events.clone(),
+        )
+    });
+    let send = |e: Input| embed::input(editor, e, mods(held));
+    // Every touch is a finger of its own; the mouse's primary button one more, in frames without touches (egui's
+    // integrations repeat the first touch as the pointer).
+    let touches = events.iter().any(|e| matches!(e, Event::Touch { .. }));
+    let steps: Vec<Finger> = (events.iter())
+        .filter_map(|e| match *e {
+            Event::Touch { id, phase, pos, .. } => Some(match phase {
+                TouchPhase::Start => Finger::Down(id.0, pos),
+                TouchPhase::Move => Finger::Move(id.0, pos),
+                TouchPhase::End | TouchPhase::Cancel => Finger::Up(id.0, pos),
+            }),
+            _ if touches => None,
+            Event::PointerMoved(pos) => Some(Finger::Move(MOUSE, pos)),
+            Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                ..
+            } => Some(match pressed {
+                true => Finger::Down(MOUSE, pos),
+                false => Finger::Up(MOUSE, pos),
+            }),
+            _ => None,
+        })
+        .collect();
+    let area = card.pad.area.unwrap_or(rect);
+    let keep_out = card.pad.keep_out.clone();
+    let buttons = card.pad.buttons;
+    let on_pad = |o: Pos2| area.contains(o) && !keep_out.iter().any(|r| r.contains(o));
+    // Zoomed in, the finger moves the cursor less: the editor under it moves as far as the finger on the screen.
+    let speed = PAD_SPEED * view(card, rect).width() / rect.width().max(1e-3);
+    // The cursor stays on the editor, or while a menu shows, on the pad (a menu may stand out of the editor).
+    let bounds = if deliver { rect } else { area.union(rect) };
+    // The pad's finger at `p`: the cursor follows once it leaves its calm zone.
+    let move_to = |card: &mut LemonCard, at: &mut Pos2, p: Pos2| {
+        let Some((_, origin, _)) = card.pad.down else {
+            return;
+        };
+        let pad = &mut card.pad;
+        if !pad.moved && gesture::left_calm(origin, Some(p), m.u(0.4)) {
+            pad.moved = true;
+        }
+        let d = p - pad.last;
+        pad.last = p;
+        if !pad.moved || d == Vec2::ZERO {
+            return;
+        }
+        if card.pressed.is_some() && embed::locked(editor) {
+            send(Input::Delta {
+                dx: d.x * speed * k,
+                dy: d.y * speed * k,
+            });
+        } else {
+            *at = (*at + d * speed).clamp(bounds.min, bounds.max);
+            if deliver {
+                let (x, y) = px(*at);
+                send(Input::Move { x, y });
+                card.over = true;
+            }
+        }
+    };
+    // The pad's finger lifts: it clicks nothing.
+    let release = |card: &mut LemonCard| {
+        card.pad.down = None;
+        card.pad.others.clear();
+    };
+    for step in steps {
+        match step {
+            Finger::Down(f, p) => {
+                // The floating buttons first: Left, Right, then their grip.
+                let hit = buttons.and_then(|b| b.iter().position(|r| r.contains(p)));
+                if let Some(b) = hit {
+                    if card.pad.held[b].is_some() {
+                        continue;
+                    }
+                    card.pad.held[b] = Some(f);
+                    if b == 2 {
+                        card.pad.grip_last = p;
+                        continue;
+                    }
+                    let btn = if b == 0 { Button::Left } else { Button::Right };
+                    if !deliver {
+                        clicked = true;
+                    } else if !(btn == Button::Left && card.pressed.is_some()) {
+                        let (x, y) = px(at);
+                        send(Input::Down {
+                            x,
+                            y,
+                            btn,
+                            dbl: false,
+                        });
+                        card.pad.sent[b] = true;
+                        if btn == Button::Left {
+                            card.pressed = Some(Button::Left);
+                        }
+                    }
+                    continue;
+                }
+                if !on_pad(p) {
+                    continue;
+                }
+                if card.pad.down.is_some() {
+                    // A second finger on the pad: the first goes on moving the cursor.
+                    card.pad.others.push(f);
+                    continue;
+                }
+                let pad = &mut card.pad;
+                (pad.down, pad.last, pad.moved) = (Some((f, p, now)), p, false);
+            }
+            Finger::Move(f, p) => {
+                if card.pad.held[2] == Some(f) {
+                    card.pad.grip_moved += p - card.pad.grip_last;
+                    card.pad.grip_last = p;
+                } else if card.pad.down.is_some_and(|d| d.0 == f) {
+                    move_to(card, &mut at, p);
+                }
+            }
+            Finger::Up(f, p) => {
+                if let Some(b) = card.pad.held.iter().position(|&h| h == Some(f)) {
+                    card.pad.held[b] = None;
+                    if b == 2 {
+                        card.pad.grip_moved += p - card.pad.grip_last;
+                    } else if std::mem::take(&mut card.pad.sent[b]) {
+                        let btn = if b == 0 { Button::Left } else { Button::Right };
+                        send(Input::Up { btn });
+                        if btn == Button::Left {
+                            card.pressed = None;
+                        }
+                    }
+                } else if card.pad.down.is_some_and(|d| d.0 == f) {
+                    move_to(card, &mut at, p);
+                    release(card);
+                } else {
+                    card.pad.others.retain(|&o| o != f);
+                }
             }
         }
     }
+    // A lift that never came (the focus went, or a frame without the card took it): every finger is let go.
+    if lost || none_down {
+        if card.pad.down.is_some() {
+            release(card);
+        }
+        for b in 0..3 {
+            card.pad.held[b] = None;
+            if b < 2 && std::mem::take(&mut card.pad.sent[b]) {
+                let btn = if b == 0 { Button::Left } else { Button::Right };
+                send(Input::Up { btn });
+                if btn == Button::Left {
+                    card.pressed = None;
+                }
+            }
+        }
+        card.pad.others.clear();
+    }
+    for event in events {
+        if let Event::MouseWheel {
+            unit,
+            delta,
+            modifiers,
+        } = event
+            && deliver
+        {
+            let notches = match unit {
+                MouseWheelUnit::Point => delta.y / WHEEL_POINTS,
+                MouseWheelUnit::Line | MouseWheelUnit::Page => delta.y,
+            };
+            let (x, y) = px(at);
+            embed::input(editor, Input::Wheel { x, y, notches }, mods(modifiers));
+        }
+    }
+    if rect.width() > 0.0 && rect.height() > 0.0 {
+        card.pad.cursor = Some((at - rect.min) / rect.size());
+    }
+    clicked
+}
+
+/// The virtual mouse's arrow, its tip at `tip`: white, outlined in black, [`ARROW_U`] tall.
+fn arrow(painter: &egui::Painter, tip: Pos2, m: &Metrics) {
+    use eframe::egui::{Shape, Stroke, epaint::PathShape};
+    // The classic arrow on a grid 19 tall: its outline, and the convex pieces that fill it.
+    const OUTLINE: [(f32, f32); 7] = [
+        (0.0, 0.0),
+        (0.0, 16.0),
+        (4.0, 12.5),
+        (7.0, 19.0),
+        (9.5, 18.0),
+        (6.5, 11.5),
+        (11.5, 11.5),
+    ];
+    let s = m.u(ARROW_U) / 19.0;
+    let at = |&(x, y): &(f32, f32)| tip + vec2(x, y) * s;
+    let pieces: [&[(f32, f32)]; 4] = [
+        &[(0.0, 0.0), (0.0, 16.0), (4.0, 12.5)],
+        &[(0.0, 0.0), (4.0, 12.5), (6.5, 11.5)],
+        &[(0.0, 0.0), (6.5, 11.5), (11.5, 11.5)],
+        &[(4.0, 12.5), (7.0, 19.0), (9.5, 18.0), (6.5, 11.5)],
+    ];
+    for piece in pieces {
+        let points = piece.iter().map(at).collect();
+        // A hairline of the fill closes the seams between the pieces.
+        let seam = Stroke::new(0.5, Color32::WHITE);
+        painter.add(Shape::convex_polygon(points, Color32::WHITE, seam));
+    }
+    let points = OUTLINE.iter().map(at).collect();
+    let stroke = Stroke::new((1.5 * s).max(1.0), Color32::BLACK);
+    painter.add(PathShape::closed_line(points, stroke));
 }
 
 /// One level of an open menu: the menu, its layout, its top left in editor pixels, the row under the pointer, and its
@@ -500,6 +965,8 @@ impl Level {
 struct MenuUi {
     shown: (i32, i32, MenuView),
     levels: Vec<Level>,
+    /// The editor's scale it shows at (editor pixels per menu unit).
+    scale: f32,
     opened: f64,
     moved: bool,
 }
@@ -511,11 +978,12 @@ fn show_menu(
     ctx: &egui::Context,
     id: Id,
     card: &mut LemonCard,
-    rect: Rect,
+    lens: Lens,
     k: f32,
     at: (i32, i32),
     menu: MenuView,
     scale: f32,
+    pad: Option<PadPointer>,
 ) {
     let editor = card.editor;
     let now = ctx.input(|i| i.time);
@@ -527,24 +995,33 @@ fn show_menu(
         card.menu = Some(MenuUi {
             shown: key,
             levels: vec![root],
+            scale,
             opened: now,
             moved: false,
         });
     }
     let m = card.menu.as_mut().expect("just set");
+    m.scale = scale;
     let screen = ctx.content_rect();
-    // A level's rect in points, kept on the screen.
+    let rect = lens.rect;
+    // A level's rect in points, through the zoom, kept on the screen.
     let place = |l: &Level| {
-        let size = l.size(scale) / k;
         let min = rect.min + l.at / k;
-        let min = min.min(screen.max - size).max(screen.min);
-        Rect::from_min_size(min, size)
+        let r = Rect::from_min_max(lens.show(min), lens.show(min + l.size(scale) / k));
+        let min = r.min.min(screen.max - r.size()).max(screen.min);
+        Rect::from_min_size(min, r.size())
     };
-    // A finger's lift takes the pointer away in its own frame: where it was is where it lifted.
-    let pointer = ctx.input(|i| i.pointer.interact_pos());
-    let editor_px = |p: Pos2, l: &Level| l.at + (p - place(l).min) * k;
+    // A finger's lift takes the pointer away in its own frame: where it was is where it lifted. With the virtual mouse,
+    // its cursor is the pointer and its taps the clicks (each a new one: it may pick at once).
+    let pointer = match pad {
+        Some(pad) => Some(pad.pos),
+        None => ctx.input(|i| i.pointer.interact_pos()),
+    };
+    // Editor pixels per screen point.
+    let kz = k / lens.z();
+    let editor_px = |p: Pos2, l: &Level| l.at + (p - place(l).min) * kz;
     if let Some(p) = pointer {
-        m.moved |= ctx.input(|i| i.pointer.delta() != Vec2::ZERO);
+        m.moved |= pad.is_some() || ctx.input(|i| i.pointer.delta() != Vec2::ZERO);
         // The deepest level under the pointer takes the hover; a row with a submenu opens it.
         if let Some(depth) = (0..m.levels.len())
             .rev()
@@ -572,6 +1049,10 @@ fn show_menu(
         let escape = i.consume_key(Modifiers::NONE, Key::Escape);
         (i.pointer.any_pressed(), i.pointer.any_released(), escape)
     });
+    let (pressed, released) = match pad {
+        Some(pad) => (pad.click, pad.click),
+        None => (pressed, released),
+    };
     let inside = pointer.is_some_and(|p| m.levels.iter().any(|l| place(l).contains(p)));
     if escape || (pressed && !inside) {
         card.menu = None;
@@ -620,7 +1101,7 @@ fn show_menu(
             );
             let mut px = vec![0u32; (size.x * size.y) as usize];
             canvas.copy_to_xrgb(&mut px);
-            let img = image(&px, size.x as u32, size.y as u32);
+            let img = image(&px, size.x as u32, (0, 0, size.x as u32, size.y as u32));
             match &mut l.texture {
                 Some((t, h)) => {
                     t.set(img, TextureOptions::LINEAR);
@@ -636,8 +1117,10 @@ fn show_menu(
         }
         let r = place(l);
         if let Some((t, _)) = &l.texture {
+            // Above the full-screen editor (a `Foreground` area), which a press on it (a tap moving the virtual
+            // mouse) would otherwise raise over the menu.
             Area::new(id.with(("menu", d)))
-                .order(Order::Foreground)
+                .order(crate::ui::popup::ORDER)
                 .fixed_pos(r.min)
                 .show(ctx, |ui| {
                     ui.allocate_rect(r, Sense::click_and_drag());
@@ -655,11 +1138,12 @@ fn type_in(
     ctx: &egui::Context,
     id: Id,
     card: &mut LemonCard,
-    rect: Rect,
+    lens: Lens,
     k: f32,
     at: (i32, i32),
     text: String,
     scale: f32,
+    pad: Option<PadPointer>,
 ) {
     let editor = card.editor;
     let fresh = card.typed.is_none();
@@ -667,12 +1151,14 @@ fn type_in(
     let opening = card.typing_press;
     card.typing_press = (fresh || opening) && down;
     let typed = card.typed.get_or_insert(text);
-    let width = TYPE_IN_W * scale / k;
-    let min = rect.min + vec2(at.0 as f32, at.1 as f32) / k;
+    // Through the zoom, as wide as it shows on the editor (within the screen).
+    let screen = ctx.content_rect();
+    let width = (TYPE_IN_W * scale / k * lens.z()).min(screen.width() * 0.9);
+    let min = lens.show(lens.rect.min + vec2(at.0 as f32, at.1 as f32) / k);
     let field = id.with("type in");
     let (mut done, mut cancel) = (false, false);
     let shown = Area::new(id.with("type in area"))
-        .order(Order::Foreground)
+        .order(crate::ui::popup::ORDER)
         .fixed_pos(min)
         .show(ctx, |ui| {
             let mut r = ui.add(TextEdit::singleline(typed).id(field).desired_width(width));
@@ -684,18 +1170,26 @@ fn type_in(
                 state.cursor.set_char_range(Some(all));
                 state.store(ui.ctx(), field);
             }
-            // On Android the native text dialog is the keyboard (eframe's IME is off there), so the box alone
-            // would show no keys.
+            // Issue #91: Android has no keyboard for an egui field; its text editor types the value (the Lemon Slicer's
+            // BPM and BEATS have no other way in on a phone), and its OK is this field's Enter.
             crate::android_text::edit(&mut r, typed, usize::MAX);
             done = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-            cancel = ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
-                || (r.lost_focus() && !done && !fresh && !opening);
+            let escape = ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+            // With the virtual mouse a finger anywhere moves its cursor: the box keeps the focus, and only a click
+            // of the cursor outside it (or Escape) cancels.
+            if pad.is_some() && r.lost_focus() && !done && !escape {
+                r.request_focus();
+            }
+            cancel = escape || (pad.is_none() && r.lost_focus() && !done && !fresh && !opening);
         })
         .response
         .rect;
-    let outside = ctx.input(|i| {
-        i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !shown.contains(p))
-    });
+    let outside = match pad {
+        Some(pad) => pad.click && !shown.contains(pad.pos),
+        None => ctx.input(|i| {
+            i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !shown.contains(p))
+        }),
+    };
     if done {
         let text = card.typed.take().unwrap_or_default();
         embed::answer(editor, Some(Answer::Text(text)));
@@ -781,7 +1275,6 @@ mod tests {
                 ..Default::default()
             };
             let (card, (channel, module), name) = (&mut self.card, self.ids, self.name);
-            let m = Metrics::from_pixels_per_point(1.0, DEFAULT_UI_SCALE);
             let full = self.full;
             let _ = self.ctx.run(input, |ctx| {
                 CentralPanel::default().frame(Frame::NONE).show(ctx, |ui| {
@@ -791,6 +1284,7 @@ mod tests {
                         Some(screen) => fit(screen, shown_size(Some(card), sampler)),
                         None => Rect::from_min_size(Pos2::ZERO, vec2(width, 500.0)),
                     };
+                    let m = Metrics::from_pixels_per_point(1.0, DEFAULT_UI_SCALE);
                     assert!(show(ui, content, channel, module, sampler, card, &m));
                 });
             });
@@ -838,6 +1332,139 @@ mod tests {
         rig.tap(at + vec2(6.0, 3.0));
         rig.frame(vec![]);
         assert_eq!(last(&plugins::idle()), Some(default));
+    }
+
+    /// A second finger, as Android reports one: the touch alone.
+    fn second(phase: TouchPhase, pos: Pos2) -> Vec<Event> {
+        vec![Event::Touch {
+            device_id: TouchDeviceId(1),
+            id: TouchId(2),
+            phase,
+            pos,
+            force: None,
+        }]
+    }
+
+    /// The virtual mouse: a drag moves its cursor by the finger's move (and turns no knob); a tap, a double tap, a tap
+    /// then a drag and a long press on the pad click nothing; the floating Left button held while another finger drags
+    /// on the pad turns the knob under the cursor.
+    #[test]
+    fn the_virtual_mouse_drives_the_editor_at_its_cursor() {
+        let mut rig = Rig::new("Lemon Chorus");
+        set_mouse(&mut rig.card, true);
+        assert!(mouse_on(&rig.card));
+        // The whole screen is the pad, as full screen's, but for the floating buttons.
+        let left = Rect::from_min_size(pos2(700.0, 500.0), vec2(40.0, 40.0));
+        let right = Rect::from_min_size(pos2(745.0, 500.0), vec2(40.0, 40.0));
+        let grip = Rect::from_min_size(pos2(700.0, 545.0), vec2(85.0, 10.0));
+        let pill = left.union(right).union(grip);
+        set_pad_area(&mut rig.card, Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)), vec![pill]);
+        set_buttons(&mut rig.card, Some([left, right, grip]));
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(rig.card.size.0 as f32, 500.0));
+        let rect = Rect::from_min_size(rect.min, vec2(rect.width(), body_height(rig.card.size, rect.width())));
+        let cursor = |rig: &Rig| rect.min + rig.card.pad.cursor.expect("on") * rect.size();
+        // The cursor onto the Delay tile (`lemon_small_fx::chorus`: x 8…166, y 8…54), the finger far from it.
+        let tile = pos2(87.0, 31.0);
+        let from = pos2(300.0, 150.0);
+        let _ = plugins::idle();
+        let start = cursor(&rig);
+        let to = from + (tile - start) / PAD_SPEED;
+        rig.frame(finger(TouchPhase::Start, from));
+        for k in 1..=4 {
+            rig.frame(finger(TouchPhase::Move, from + (to - from) * k as f32 / 4.0));
+        }
+        rig.frame(finger(TouchPhase::End, to));
+        assert!(cursor(&rig).distance(tile) < 1.0, "{:?}", cursor(&rig));
+        assert!(plugins::idle().is_empty(), "a move turns nothing");
+        let (at, fraction) = (cursor(&rig), rig.card.pad.cursor);
+        // A tap, a double tap, a tap then a press that drags up, a long press: nothing.
+        rig.tap(from);
+        rig.tap(from);
+        rig.tap(from);
+        rig.frame(finger(TouchPhase::Start, from));
+        for y in [130.0, 100.0, 60.0] {
+            rig.frame(finger(TouchPhase::Move, pos2(from.x, y)));
+        }
+        rig.frame(finger(TouchPhase::End, pos2(from.x, 60.0)));
+        rig.frame(finger(TouchPhase::Start, from));
+        for _ in 0..12 {
+            rig.frame(finger(TouchPhase::Move, from));
+        }
+        rig.frame(finger(TouchPhase::End, from));
+        rig.frame(vec![]);
+        assert!(plugins::idle().is_empty(), "the pad clicks nothing");
+        assert_eq!(embed::modal(rig.card.editor), None, "no menu");
+        // Back onto the tile (the drag up moved the cursor), then Left held and a second finger dragging up: the knob
+        // turns.
+        rig.card.pad.cursor = fraction;
+        assert!(cursor(&rig).distance(at) < 1.0, "{:?}", cursor(&rig));
+        let _ = plugins::idle();
+        rig.frame(finger(TouchPhase::Start, left.center()));
+        rig.frame(second(TouchPhase::Start, from));
+        for y in [130.0, 100.0, 60.0] {
+            rig.frame(second(TouchPhase::Move, pos2(from.x, y)));
+        }
+        rig.frame(second(TouchPhase::End, pos2(from.x, 60.0)));
+        rig.frame(finger(TouchPhase::End, left.center()));
+        assert!(plugins::idle().iter().any(|m| m.gesture == 1), "the knob turned");
+        set_mouse(&mut rig.card, false);
+        assert!(!mouse_on(&rig.card));
+    }
+
+    /// The virtual mouse's tap clicks nothing, even when its press and lift come in the same frame; the floating Left
+    /// button clicks at the cursor, its press and lift in one frame too.
+    #[test]
+    fn only_the_left_button_clicks_at_the_cursor() {
+        let mut rig = Rig::new("Lemon Sampler");
+        let editor = rig.card.editor;
+        set_mouse(&mut rig.card, true);
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+        let left = Rect::from_min_size(pos2(700.0, 500.0), vec2(40.0, 40.0));
+        let right = Rect::from_min_size(pos2(745.0, 500.0), vec2(40.0, 40.0));
+        let grip = Rect::from_min_size(pos2(700.0, 545.0), vec2(85.0, 10.0));
+        let pill = left.union(right).union(grip);
+        set_pad_area(&mut rig.card, screen, vec![pill]);
+        set_buttons(&mut rig.card, Some([left, right, grip]));
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(rig.card.size.0 as f32, 500.0));
+        let rect = Rect::from_min_size(rect.min, vec2(rect.width(), body_height(rig.card.size, rect.width())));
+        let cursor = |rig: &Rig| rect.min + rig.card.pad.cursor.expect("on") * rect.size();
+        // Time stretching's `Mode` list (`view::sample_tab`): the cursor onto it.
+        let mode = centre(view::rr(456.0, 548.0, 102.0, 122.0));
+        let from = pos2(300.0, 150.0);
+        let to = from + (mode - cursor(&rig)) / PAD_SPEED;
+        rig.frame(finger(TouchPhase::Start, from));
+        for k in 1..=4 {
+            rig.frame(finger(TouchPhase::Move, from + (to - from) * k as f32 / 4.0));
+        }
+        rig.frame(finger(TouchPhase::End, to));
+        assert!(cursor(&rig).distance(mode) < 1.0, "{:?}", cursor(&rig));
+        for _ in 0..5 {
+            rig.frame(vec![]);
+        }
+        // A tap on the pad, a quick one (press and lift in one frame) and a double tap: no click.
+        rig.tap(from);
+        let mut quick = finger(TouchPhase::Start, from);
+        quick.extend(finger(TouchPhase::End, from));
+        rig.frame(quick);
+        rig.tap(from);
+        for _ in 0..5 {
+            rig.frame(vec![]);
+        }
+        assert_eq!(embed::modal(editor), None, "the pad clicked");
+        // The Left button, pressed and lifted in one frame.
+        let mut quick = finger(TouchPhase::Start, left.center());
+        quick.extend(finger(TouchPhase::End, left.center()));
+        rig.frame(quick);
+        rig.frame(vec![]);
+        assert!(matches!(embed::modal(editor), Some(Modal::Menu { .. })), "Left clicked");
+        assert!(dismiss(&rig.card));
+        rig.frame(vec![]);
+        // The grip moves the buttons.
+        rig.frame(finger(TouchPhase::Start, grip.center()));
+        rig.frame(finger(TouchPhase::Move, grip.center() - vec2(100.0, 50.0)));
+        rig.frame(finger(TouchPhase::End, grip.center() - vec2(100.0, 50.0)));
+        assert_eq!(take_buttons_moved(&mut rig.card), vec2(-100.0, -50.0));
+        assert!(cursor(&rig).distance(mode) < 1.0, "the grip moves no cursor");
     }
 
     /// Issue #68: full screen, the editor fills the screen as far as its aspect allows, centred, painted at that scale
@@ -952,15 +1579,18 @@ mod tests {
         );
     }
 
-    /// A long press on a knob is a right click: the editor's menu (Reset, …) opens at the knob, and a quick tap
-    /// does not. The lift of the press that opened it does not pick; a press outside cancels.
+    /// PR #87: a long press on a knob is a right click: the editor's menu (Reset, …) opens at the knob, and a quick tap
+    /// does not. The lift of the press that opened it does not pick; a press outside cancels; a press that moves on
+    /// before its long press is a drag, never a menu.
     #[test]
     fn a_long_press_on_a_knob_opens_its_menu_but_a_tap_does_not() {
         let mut rig = Rig::new("Lemon Sampler");
         let editor = rig.card.editor;
         // The sample page's `START OFFSET` knob, in editor pixels (the card shows the view cropped).
-        let knob = pos2(45.0 - view::CROP_X as f32, 286.0 - view::CROP_Y as f32);
-        // A tap: down, up 0.1 s later — no menu.
+        let knob = pos2(
+            45.0 - view::CROP_X as f32,
+            view::y(286.0) - view::CROP_Y as f32,
+        );
         rig.tap(knob);
         rig.frame(vec![]);
         assert!(embed::modal(editor).is_none(), "a tap opens no menu");
@@ -978,28 +1608,25 @@ mod tests {
             "the long press opened the knob's menu"
         );
         assert!(rig.card.menu.is_some(), "the card shows it");
-        // Lifting the finger that opened it does not pick the row under it.
         rig.frame(finger(TouchPhase::End, knob));
         rig.frame(vec![]);
         assert!(
             matches!(embed::modal(editor), Some(Modal::Menu { .. })),
             "the lift left the menu open"
         );
-        // A press outside cancels it.
         rig.tap(pos2(700.0, 550.0));
         rig.frame(vec![]);
         assert_eq!(embed::modal(editor), None, "the outside press cancelled");
-        // A long press elsewhere but moving on opens nothing: the finger left the calm zone before 300 ms.
+        for _ in 0..4 {
+            rig.frame(vec![]);
+        }
         rig.frame(finger(TouchPhase::Start, knob));
         rig.frame(finger(TouchPhase::Move, knob + vec2(30.0, 0.0)));
         for _ in 0..4 {
             rig.frame(vec![]);
         }
         rig.frame(finger(TouchPhase::End, knob + vec2(30.0, 0.0)));
-        assert!(
-            embed::modal(editor).is_none(),
-            "a moved press is a drag, not a menu"
-        );
+        assert!(embed::modal(editor).is_none(), "a moved press is a drag");
     }
 
     /// A text field the editor opens a type-in for at a press (Lemon Formula Controller's

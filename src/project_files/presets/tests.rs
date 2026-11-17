@@ -301,7 +301,7 @@ fn only_the_preset_saves_own_events_finish_it() {
     let failed = |detail: &str| FileEvent::Failed(SAVE_FAILED, detail.into());
     // While no song save waits, a failed save is the preset's, whatever it names.
     assert!(files.is_preset_event(&failed("disk full")));
-    files.saving = Some((PathBuf::from("Beat.flm"), None, Song::default()));
+    files.saving = Some((PathBuf::from("Beat.flm"), None, Song::default(), false));
     assert!(!files.is_preset_event(&failed("Beat.flm: disk full")));
     assert!(!files.is_preset_event(&failed("disk full")));
     assert!(files.is_preset_event(&failed("Lead.flmrack: disk full")));
@@ -640,4 +640,42 @@ fn save_drumset_writes_the_kit_into_my_drumsets_and_asks_before_writing_over_one
         std::slice::from_ref(&path)
     );
     assert_eq!(read(&files).slots.len(), 2);
+}
+
+/// A plugin module's `Save preset` writes its plugin's state as a plugin preset (`.ospreset`) in `My Presets/<plugin>`,
+/// proposing the plugin's name while the module has no preset; the file reads back as a state preset of that plugin.
+#[test]
+fn a_plugin_modules_preset_is_its_plugins_state_in_my_presets_under_the_plugin() {
+    use crate::song::plugin::{PLUGIN_EFFECT, PluginRef};
+    let (mut files, mem) = web();
+    let mut module = ModuleInstance::new(PLUGIN_EFFECT, 3);
+    module.file.plugin = Some(Box::new(PluginRef {
+        format: "clap".into(),
+        id: "org.openstudio.lemon-chorus".into(),
+        name: "Lemon Chorus".into(),
+        state: std::sync::Arc::from(&b"\x01state\x00"[..]),
+        ..PluginRef::default()
+    }));
+    let source = PresetSource::Module(module);
+    assert_eq!(source.kind(), PresetKind::Plugin);
+    files.ask_preset(source, 1);
+    assert_eq!(
+        files.take_overlay(),
+        Some(Overlay::PresetDialog {
+            name: "Lemon Chorus".into(),
+            kind: PresetKind::Plugin,
+        })
+    );
+    assert!(files.save_preset("Wide"));
+    assert_eq!(files.poll(&mut Song::default()), None);
+    let path = PathBuf::from("My Presets/Lemon Chorus/Wide.ospreset");
+    assert_eq!(mem.0.borrow().saves, [(path.clone(), false)]);
+    let bytes = files.read_user_file(&path).unwrap();
+    let preset = crate::plugins::presets::read(&path, &bytes).unwrap();
+    assert_eq!(preset.plugin, "org.openstudio.lemon-chorus");
+    assert_eq!(preset.name, "Wide");
+    assert_eq!(
+        preset.body,
+        crate::plugins::presets::Body::State(b"\x01state\x00".to_vec())
+    );
 }

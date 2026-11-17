@@ -23,7 +23,7 @@ use crate::metrics::{FontSize, Metrics};
 use crate::settings::Settings;
 use crate::theme::DISABLED_ALPHA;
 use crate::ui::buttons::{
-    boxed_circle_button, close_x, filled_circle_button, outline_circle_button,
+    boxed_circle_button, filled_circle_button, outline_circle_button,
 };
 use crate::ui::popup::{PopupItem, PopupResult};
 use crate::ui::scroller::{Axis, Scroller, Y, Zones};
@@ -45,14 +45,17 @@ pub(crate) use file_ops::rename_shadowed_folders;
 pub use file_ops::reveal;
 pub(crate) use file_ops::{
     CONVERTING, FILE_MANAGER, FileActions, MenuState, Opt, Step, delete, options_menu,
+    shortcut_item,
 };
 pub use library::{MemoryLibrary, SONGS_FOLDER, SongEntry, SongLibrary};
 #[cfg(not(target_arch = "wasm32"))]
 pub use library::{NativeLibrary, app_data_dir, songs_dir, user_dir};
-pub use project::{ProjectInfo, TEMPO_RANGE, duration, link_url, meta_secs, meta_time, tempo_step};
-pub use songs::Sort;
+pub use project::{
+    ProjectInfo, TEMPO_RANGE, duration, link_url, meta_secs, meta_time, tempo_step, thousands,
+};
 pub(crate) use songs::bin_crumb;
 pub use songs::visible;
+pub use songs::{SongsPreview, Sort};
 
 // Sizes in U.
 const PANEL_W: f32 = 20.0;
@@ -77,7 +80,15 @@ const HINT_ALPHA: f32 = 0.3;
 
 /// The version shown after the app name.
 pub fn version() -> String {
-    env!("CARGO_PKG_VERSION").to_owned()
+    // An Android APK workflow build shows its number too: its updates go by it (`update::BUILD`).
+    #[cfg(not(target_arch = "wasm32"))]
+    let build = crate::update::BUILD;
+    #[cfg(target_arch = "wasm32")]
+    let build: Option<&str> = None;
+    match build {
+        Some(n) => format!("{} (build {n})", env!("CARGO_PKG_VERSION")),
+        None => env!("CARGO_PKG_VERSION").to_owned(),
+    }
 }
 
 /// The main menu's tabs, in strip order.
@@ -115,8 +126,10 @@ impl Tab {
 /// metadata texts it edits in [`ProjectInfo`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum MainMenuAction {
-    /// Close the menu: the close X, a click outside the panel, or Escape.
+    /// Close the menu: a click outside the panel, or Escape.
     Close,
+    /// Quit the app: asks [`quit_question`](crate::ui::views::main_menu::quit_question).
+    Quit,
     /// SONGS `New` (or its menu's `Empty`), then the Song options dialog's `OK`: a new empty song with these options.
     NewSong(crate::ui::song_options::SongOptions),
     /// A template picked from SONGS `New`'s menu: a new untitled song from the `.songtmpl` at this path, in
@@ -138,8 +151,6 @@ pub enum MainMenuAction {
     Unzip(std::path::PathBuf),
     /// PROJECT `-` / `+`: the new tempo in BPM, already kept in [`TEMPO_RANGE`].
     SetTempo(f64),
-    /// PROJECT `Samplerate:` dropdown: the project's new sample rate in Hz, one of [`crate::song::SAMPLE_RATES`].
-    SetSampleRate(u32),
     /// PROJECT `Reset` next to the time spent. The app asks, then sets it to 0.
     ResetTimeSpent,
     /// PROJECT `Hide` next to the time spent. The app asks, then sets it to −1 (META@256).
@@ -172,6 +183,13 @@ pub enum MainMenuAction {
     ImportTheme,
     /// PROJECT `View project versions` (#69): the versions window.
     ViewVersions,
+    /// SONGS: a tap previews the audio file at this path (#106, #123). Decode it for the sample strip
+    /// ([`SongsPreview::decoded`]), which plays it.
+    Preview(std::path::PathBuf),
+    /// SONGS `Send to playlist` (#106): each of these audio files on a new audio track, its clip at the playhead.
+    SendToPlaylist(Vec<std::path::PathBuf>),
+    /// PROJECT Performance `Clear`: the app's counters start from zero (#124).
+    ClearPerformance,
 }
 
 /// The Help menu's links, after `What's new`: the project's own pages.
@@ -276,6 +294,11 @@ impl MainMenu {
         self.songs.folder()
     }
 
+    /// SONGS' preview of an audio file (#106).
+    pub fn songs_preview(&mut self) -> &mut SongsPreview {
+        &mut self.songs.preview
+    }
+
     /// The answer to [`MainMenuAction::ConfirmDelete`]'s question: `yes` deletes for good. Returns a failure's
     /// [`MainMenuAction::Message`].
     pub fn delete_answered(
@@ -290,6 +313,12 @@ impl MainMenu {
     /// open song's file to follow ([`ProjectFiles::path_moved`](crate::project_files::ProjectFiles::path_moved)).
     pub fn take_moves(&mut self) -> Vec<(std::path::PathBuf, Option<std::path::PathBuf>)> {
         self.songs.take_moves()
+    }
+
+    /// SONGS on the root's folder that holds the render `file` (`My Tracks`), `file` current: the render message's
+    /// `Open My Tracks` (#72). The caller opens the menu on SONGS.
+    pub fn show_render(&mut self, file: &std::path::Path, library: &dyn SongLibrary) {
+        self.songs.show_render(file, library);
     }
 
     /// Paints the menu over `ui`'s rect (the screen) and handles its input. `library` feeds the SONGS tab (whose file
@@ -375,11 +404,11 @@ impl MainMenu {
         ui.painter()
             .rect_filled(header, 0.0, c.module_fill.to_color32());
 
-        // Header: `Help` in a 2 U cell at the left, the close X in one at the right, and between them, centred as a
+        // Header: `Help` in a 2 U cell at the left, `Quit` in one at the right, and between them, centred as a
         // group, the logo, our name and the version. The header itself is no button.
         let cell =
             |left: f32| Rect::from_x_y_ranges(left..=left + m.u(HEADER_CELL), header.y_range());
-        let (help, close) = (cell(header.left()), cell(header.right() - m.u(HEADER_CELL)));
+        let (help, quit) = (cell(header.left()), cell(header.right() - m.u(HEADER_CELL)));
         // `Help`: plain text, opening the Help menu.
         text_label(
             ui,
@@ -393,14 +422,31 @@ impl MainMenu {
         if crate::ui::focus::interact(ui, help, id.with("Help"), Sense::click()).clicked() {
             self.help_menu = Some(help.center());
         }
-        let surface = (c.module_fill.to_color32(), 0.375);
-        if close_x(ui, cx, id.with("close"), close, surface, CLOSE_ICON).clicked() {
-            action = Some(MainMenuAction::Close);
+        let quit_response = crate::ui::focus::interact(ui, quit, id.with("Quit"), Sense::click());
+        if crate::ui::buttons::hovered(ui, &quit_response) {
+            let r = 0.375 * quit.width().min(quit.height());
+            (ui.painter()).circle_filled(
+                quit.center(),
+                r,
+                crate::ui::buttons::hover_lit(c.module_fill.to_color32()),
+            );
+        }
+        text_label(
+            ui,
+            cx,
+            quit,
+            "Quit",
+            FontSize::Pt10,
+            Align2::CENTER_CENTER,
+            text,
+        );
+        if quit_response.clicked() {
+            action = Some(MainMenuAction::Quit);
         }
         self.title(
             ui,
             cx,
-            header.with_min_x(help.right()).with_max_x(close.left()),
+            header.with_min_x(help.right()).with_max_x(quit.left()),
         );
         if let Some(at) = self.help_menu {
             let picked = help_menu(ui.ctx(), cx, id.with("help_menu"), at);

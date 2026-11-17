@@ -42,6 +42,9 @@ pub struct State {
     /// Issue #68: the Lemon card (channel, instance id) whose editor shows full screen ([`super::lemon_editor`]): the
     /// overlays set it each frame.
     pub(crate) full: Option<(usize, i32)>,
+    /// Issue #98: a card's ◀ or ▶, as (channel id, instance id, −1 or 1), for the overlays to load next frame
+    /// ([`super::preset_picker::step_preset`]).
+    pub(crate) step: Option<(i32, i32, i32)>,
 }
 
 impl State {
@@ -167,6 +170,10 @@ pub fn show(
     let mut ui = ui.new_child(UiBuilder::new().id(("rack", channel)).max_rect(rect));
     state.panel.covered = app.covered;
     state.panel.middle_c_is_c4 = app.middle_c_is_c4;
+    let place = app.settings.rack_tab_place;
+    state.panel.tab_y = crate::ui::main_screen::rack_tab_pill(&app.regions, place, app.cx.m)
+        .center()
+        .y;
     state.panel.lemon_full = state.full;
     // The input row's (an Audio Record channel's): the arm button with multitrack on, the meter while the input is open.
     state.panel.multitrack = app.settings.multitrack_recording;
@@ -213,7 +220,10 @@ pub fn show(
         });
     }
     let channel_id = ch.id;
-    if !actions.params.is_empty() || actions.minimized || actions.settings {
+    if let Some((id, by)) = actions.step_preset {
+        state.step = Some((channel_id, id, by));
+    }
+    if !actions.params.is_empty() || actions.minimized || actions.settings || actions.preset_loaded {
         app.channel_param_edited();
     }
     for change in actions.params {

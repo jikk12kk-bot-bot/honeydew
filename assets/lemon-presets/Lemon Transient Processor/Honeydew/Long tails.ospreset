@@ -1,0 +1,12 @@
+OSPRESET 1
+plugin=Lemon Transient Processor	id=clap:org.openstudio.lemon-transient-processor	format=clap	body=params
+# Honeydew's own preset (tools/lemon_presets.py).
+Attack = 70
+Drive = 0
+Release = 140
+Gain = 76
+Attack shape = 1
+Release shape = 2
+Split frequency = 80
+Split balance = 80
+Processing = 1

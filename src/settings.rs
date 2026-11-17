@@ -12,6 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::displayer::DisplayerSettings;
 use crate::metrics::{DEFAULT_UI_SCALE, UI_SCALE_FACTORS, UI_SCALE_RANGE};
 use crate::midi::device::ANY;
 use crate::theme::{Theme, builtin_themes, theme_by_id};
@@ -61,13 +62,8 @@ pub fn migrate_legacy_keys(storage: &mut dyn eframe::Storage) {
 /// driver modes `Standard` and `Multitrack` instead.
 #[cfg(desktop)]
 pub const SOUND_MODES: [(u8, &str); 2] = [(0, "STANDARD"), (1, "MULTITRACK")];
-/// FL Studio Mobile's Android `Sound mode:` items, in its menu order: `FAST` (smallest buffer, lowest latency, most
-/// CPU/dropout risk), `SAFE` and `ULTRASAFE` (larger buffers, fewer glitches, more latency), and `NATIVE` (the
-/// device/OS default, recommended on Android 9+). A mode changes only the output buffering and latency — the
-/// rendered audio is exactly the same in every mode.
 #[cfg(not(desktop))]
-pub const SOUND_MODES: [(u8, &str); 4] =
-    [(1, "FAST"), (0, "SAFE"), (2, "ULTRASAFE"), (3, "NATIVE")];
+pub const SOUND_MODES: [(u8, &str); 1] = [(3, "NATIVE")];
 
 /// Buffer-size slider positions. Zero keeps the audio device's native/default buffer;
 /// positive values are targets that the backend clamps to the device's supported range.
@@ -119,14 +115,45 @@ pub fn save_mcp_token(token: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(desktop))]
+/// The phones keep the MCP token in the app's private data folder (our own addition: the app serves MCP itself
+/// there).
+#[cfg(mobile)]
+pub fn mcp_token_path() -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "android")]
+    let base = crate::android::data_dir()?;
+    #[cfg(target_os = "ios")]
+    let base = crate::ios::data_dir()?;
+    Some(base.join("control-token"))
+}
+
+#[cfg(mobile)]
+pub fn load_mcp_token() -> Option<String> {
+    let token = std::fs::read_to_string(mcp_token_path()?)
+        .ok()?
+        .trim()
+        .to_owned();
+    (!token.is_empty()).then_some(token)
+}
+
+#[cfg(mobile)]
+pub fn save_mcp_token(token: &str) -> std::io::Result<()> {
+    let path = mcp_token_path().ok_or_else(|| std::io::Error::other("no app data folder"))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, token)
+}
+
+#[cfg(not(any(desktop, mobile)))]
 pub fn load_mcp_token() -> Option<String> {
     None
 }
 
-#[cfg(not(desktop))]
+#[cfg(not(any(desktop, mobile)))]
 pub fn save_mcp_token(_token: &str) -> std::io::Result<()> {
-    Err(std::io::Error::other("MCP token storage is desktop-only"))
+    Err(std::io::Error::other(
+        "MCP token storage is not available here",
+    ))
 }
 
 #[cfg(desktop)]
@@ -150,6 +177,10 @@ pub struct Settings {
     pub mcp_enabled: bool,
     #[serde(rename = "mcpPort")]
     pub mcp_port: u16,
+    /// MCP's `Allow over Wi-Fi` (our own key): the server listens on every network, not only on this device
+    /// (localhost). Off by default.
+    #[serde(rename = "mcpWifi")]
+    pub mcp_wifi: bool,
     #[serde(skip)]
     pub mcp_token: String,
     /// The selected output buffer target: an index into [`BUFFER_SIZES`]. Zero keeps the device default.
@@ -161,11 +192,11 @@ pub struct Settings {
     /// `Sound mode:`, a stored id from [`SOUND_MODES`], selecting the platform's audio mode.
     #[serde(rename = "soundModeAndr")]
     pub sound_mode: u8,
-    /// `Enable audio recording latency compensation`: the toggle as stored, `None` while unset. Its meaning is
-    /// inverted: compensation is on exactly when the toggle is OFF, and an unset key shows the toggle ON but
-    /// compensates ([`crate::recording::recorder::compensates`]).
-    #[serde(rename = "reclatency")]
-    pub latency_compensation: Option<bool>,
+    /// `Enable audio recording latency compensation` (our own key): ON compensates. Honeydew change (#129, #130): the
+    /// earlier `reclatency` toggle compensated while OFF or unset; a load moves it here once, keeping whether it
+    /// compensated ([`migrate_keys`]). On by default, as the earlier unset key compensated.
+    #[serde(rename = "recLatencyCompensation")]
+    pub latency_compensation: bool,
     /// `Enable multitrack recording`. Stored only.
     #[serde(rename = "multitrackrec")]
     pub multitrack_recording: bool,
@@ -210,10 +241,6 @@ pub struct Settings {
     /// `Continuous scrolling during playback`.
     #[serde(rename = "continuousScroll")]
     pub continuous_scroll: bool,
-    /// `Show hidden tracks` (our own key): the playlist shows the tracks `Hide track` hid, dimmed. Off by default. The
-    /// fork has neither the row nor `Hide track`, and a song reads its hidden tracks back shown (`flm::read`).
-    #[serde(rename = "showHiddenTracks")]
-    pub show_hidden_tracks: bool,
     /// `Show CPU and RAM meters`.
     #[serde(rename = "showHardwareMeters")]
     pub hardware_meters: bool,
@@ -292,25 +319,14 @@ pub struct Settings {
     /// default.
     #[serde(rename = "sampleMemoryLimit")]
     pub sample_memory_limit: u8,
+    /// `Sample rate:` (our own key): the rate playback opens the output at and renders use, one of
+    /// [`crate::song::SAMPLE_RATES`], or 0 (`Device`, the default): the output's own rate, which renders use too. A
+    /// setting, not the project's: songs do not keep it.
+    #[serde(rename = "sampleRate")]
+    pub sample_rate: u32,
     /// `Screen orientation:` (our own key; #41, Android only): an index into [`ORIENTATIONS`], `Auto` (0) by default.
     #[serde(rename = "screenOrientation")]
     pub screen_orientation: u8,
-    /// The bottom editors' close ribbon's place (our own key): the sideways offset a drag gave it, in U from where it
-    /// opens (left of the logo, else in from the editor's right edge), kept over restarts. 0 by default; the drag
-    /// keeps it inside the editor's band ([`crate::ui::split::ribbon`]).
-    #[serde(rename = "editorRibbonShift")]
-    pub editor_ribbon_shift: f32,
-    /// The channel rack's edge tab's place (our own key): the offset a drag gave it, in U from where it opens
-    /// (centred on the content area), kept over restarts. 0 by default; the drag keeps the tab inside the content
-    /// area ([`crate::ui::main_screen::MainScreen::corner_buttons`]).
-    #[serde(rename = "rackTabShift")]
-    pub rack_tab_shift: f32,
-    /// The editors' graph-lane tab's place (our own key): the sideways offset a drag gave it, in U from where each
-    /// editor opens it (the piano roll's key column's right edge, the drum editors' 1.4 U in from the left), kept over
-    /// restarts. 0 by default; the drag keeps the tab inside the editor
-    /// ([`crate::ui::graph_lane::GraphLane::tab_below`]).
-    #[serde(rename = "graphTabShift")]
-    pub graph_tab_shift: f32,
     /// The song file open at the last exit (our own key; #58), which the next start opens again; ""
     /// for none.
     #[serde(rename = "lastSong")]
@@ -318,6 +334,10 @@ pub struct Settings {
     /// A start is opening [`Self::last_song`]: still set at the next start, that one was cut short, and it opens no song.
     #[serde(rename = "interruptedWhenLoadingSong")]
     pub interrupted_loading: bool,
+    /// The piano roll's `Generate` panel as it was last left (our own key): its ten choices
+    /// ([`crate::ui::piano_roll::generate::Panel::to_prefs`]), empty until it first opens.
+    #[serde(rename = "pianoRollGenerate")]
+    pub generate_panel: Vec<u32>,
     /// The editors' grid size (our own key; #53): `Auto` by default, the snap menus' `Grid` columns pick it.
     #[serde(rename = "gridSize")]
     pub grid_size: GridSize,
@@ -341,7 +361,70 @@ pub struct Settings {
     /// the base APK asks once, then leaves the download to UPDATES and Settings `Install sound library…`.
     #[serde(rename = "soundsAsked")]
     pub sounds_asked: bool,
+    /// `Plugin editor resolution:` (our own key): the share of the screen's pixels, in percent, one of
+    /// [`EDITOR_RESOLUTIONS`], that the full-screen plugin editor is painted at; less paints faster (landscape, the
+    /// virtual mouse's zoom) and shows softer. 100 by default.
+    #[serde(rename = "pluginEditorResolution")]
+    pub plugin_editor_resolution: u8,
+    /// `Show performance overlay` (our own key; #89): a small counter of the frames a second, their time and the
+    /// audio's load over every screen (`ui::performance::overlay`). Off by default.
+    #[serde(rename = "performanceOverlay")]
+    pub performance_overlay: bool,
+    /// Where a drag left the performance overlay (our own key): its top-left corner as a share of the room the window
+    /// leaves it, across and down, so that it stays on screen at any size; `None` before any, the bottom-right corner.
+    #[serde(
+        rename = "performanceOverlayAt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub performance_overlay_at: Option<[f32; 2]>,
+    /// The bottom editors' close ribbon's place (our own key; PR #87): the sideways offset a drag gave it, in U from
+    /// where it opens (left of the logo, else in from the editor's right edge), kept over restarts. 0 by default; the
+    /// drag keeps it inside the editor's band ([`crate::ui::split::ribbon`]).
+    #[serde(rename = "editorRibbonShift")]
+    pub editor_ribbon_shift: f32,
+    /// The channel rack's edge tab's old place (our own key; PR #87), in U from its old home. Unused since 0.5.3
+    /// ([`Self::rack_tab_place`] replaces it, not converted); kept so the key still reads.
+    #[serde(rename = "rackTabShift")]
+    pub rack_tab_shift: f32,
+    /// The editors' graph-lane tab's place (our own key; PR #87): the sideways offset a drag gave it, in U from where
+    /// each editor opens it (the piano roll's key column's right edge, the drum editors' 1.4 U in from the left), kept
+    /// over restarts. 0 by default; the drag keeps the tab inside the editor
+    /// ([`crate::ui::graph_lane::GraphLane::tab_below`]).
+    #[serde(rename = "graphTabShift")]
+    pub graph_tab_shift: f32,
+    /// `Keyboard in front of pickers` (our own key): while only side pickers are open, the keyboard panel (its bar,
+    /// strip and keys) stays in front of them and live, and they end above it ([`crate::ui::front_panel`]). On by
+    /// default; off, they cover it.
+    #[serde(rename = "pickerKeys")]
+    pub picker_keys: bool,
+    /// The channel rack's edge tab's place (our own key, 0.5.3): where a drag left it, as a share of the
+    /// space the content area leaves it down the screen's right edge, 0 at the top, 1 at the bottom, kept over restarts
+    /// and resizes. 0.5 (centred) by default ([`crate::ui::rack::rack_tab`]).
+    #[serde(rename = "rackTabPlace")]
+    pub rack_tab_place: f32,
+    /// PROJECT's `Write tags on export` (our own key; #139): an audio render writes the song's title, author and other
+    /// tag fields into the file ([`crate::project_files::export::tags`]). On by default.
+    #[serde(rename = "writeTagsOnExport")]
+    pub write_tags: bool,
+    /// The folder shortcuts the user added in the browsers (our own key), each as `<scope>|<folder>`: the browsers that
+    /// list it, then its path in the user folder ([`crate::ui::shortcuts::scoped`]). None by default.
+    #[serde(rename = "folderShortcuts", skip_serializing_if = "Vec::is_empty")]
+    pub folder_shortcuts: Vec<String>,
+    /// The browsers' default folder shortcuts the user removed (our own key), each as `<scope>|<folder>`
+    /// ([`crate::ui::shortcuts::scoped`]). None by default.
+    #[serde(rename = "hiddenShortcuts", skip_serializing_if = "Vec::is_empty")]
+    pub hidden_shortcuts: Vec<String>,
+    /// The Displayer (our own key): its image or video, how it shows, and the MP4 render's options. It belongs to no
+    /// song ([`crate::displayer`]).
+    #[serde(
+        rename = "displayer",
+        skip_serializing_if = "DisplayerSettings::is_default"
+    )]
+    pub displayer: DisplayerSettings,
 }
+
+/// `Plugin editor resolution:`'s items, in percent.
+pub const EDITOR_RESOLUTIONS: [u8; 5] = [100, 85, 70, 50, 35];
 
 /// `Project version size limit:`'s items, in MB.
 pub const VERSION_SIZE_LIMITS: [u32; 7] = [64, 128, 256, 512, 1024, 2048, 4096];
@@ -361,11 +444,12 @@ impl Default for Settings {
             multi_core: false,
             mcp_enabled: false,
             mcp_port: MCP_DEFAULT_PORT,
+            mcp_wifi: false,
             mcp_token: String::new(),
             low_latency: 0,
             background_audio: false,
             sound_mode: DEFAULT_SOUND_MODE,
-            latency_compensation: None,
+            latency_compensation: true,
             multitrack_recording: false,
             count_in: true,
             rec_metronome: true,
@@ -380,7 +464,6 @@ impl Default for Settings {
             middle_c_is_c4: false,
             range_labels: true,
             continuous_scroll: false,
-            show_hidden_tracks: false,
             hardware_meters: true,
             lock_pads: true,
             last_audio_format: ExportFormat::Wav.id(),
@@ -402,18 +485,29 @@ impl Default for Settings {
             velocity_snap: ValueSnap::OFF,
             pan_snap: ValueSnap::OFF,
             sample_memory_limit: 0,
+            sample_rate: 0,
             screen_orientation: 0,
-            editor_ribbon_shift: 0.0,
-            rack_tab_shift: 0.0,
-            graph_tab_shift: 0.0,
             last_song: String::new(),
             interrupted_loading: false,
             grid_size: GridSize::Auto,
+            generate_panel: Vec::new(),
             version_size_limit: 256,
             audio_input: String::new(),
             check_updates: true,
             sounds_mobile_data: false,
             sounds_asked: false,
+            plugin_editor_resolution: 100,
+            performance_overlay: false,
+            performance_overlay_at: None,
+            editor_ribbon_shift: 0.0,
+            rack_tab_shift: 0.0,
+            graph_tab_shift: 0.0,
+            picker_keys: true,
+            rack_tab_place: 0.5,
+            write_tags: true,
+            folder_shortcuts: Vec::new(),
+            hidden_shortcuts: Vec::new(),
+            displayer: DisplayerSettings::default(),
         }
     }
 }
@@ -473,6 +567,10 @@ impl Settings {
         if !(0.0..=1.0).contains(&s.metronome_level) {
             s.metronome_level = d.metronome_level;
         }
+        if !(0.0..=1.0).contains(&s.rack_tab_place) {
+            s.rack_tab_place = d.rack_tab_place;
+        }
+        s.displayer.sanitize();
         // A a height must be a size, which the panel then keeps within its range.
         for (h, default) in [
             (&mut s.preferred_kbd_size, d.preferred_kbd_size),
@@ -511,13 +609,28 @@ impl Settings {
         if usize::from(s.sample_memory_limit) >= crate::sample_cache::MEMORY_LIMITS.len() {
             s.sample_memory_limit = d.sample_memory_limit;
         }
+        if s.sample_rate != 0 && !crate::song::SAMPLE_RATES.contains(&s.sample_rate) {
+            s.sample_rate = d.sample_rate;
+        }
         if usize::from(s.screen_orientation) >= ORIENTATIONS.len() {
             s.screen_orientation = d.screen_orientation;
         }
         if !VERSION_SIZE_LIMITS.contains(&s.version_size_limit) {
             s.version_size_limit = d.version_size_limit;
         }
+        if !EDITOR_RESOLUTIONS.contains(&s.plugin_editor_resolution) {
+            s.plugin_editor_resolution = d.plugin_editor_resolution;
+        }
         s
+    }
+
+    /// The full-screen plugin editor's resolution as a factor of the screen's pixels (`Plugin editor resolution:`).
+    pub fn editor_resolution(&self) -> f32 {
+        let percent = match EDITOR_RESOLUTIONS.contains(&self.plugin_editor_resolution) {
+            true => self.plugin_editor_resolution,
+            false => 100,
+        };
+        f32::from(percent) / 100.0
     }
 
     /// The theme in use: [`Self::custom_theme`]'s, else the built-in one `theme` names.
@@ -582,6 +695,14 @@ fn migrate_keys(fields: &mut Map<String, Value>) {
         && !fields.contains_key("demoSongsVersion")
     {
         fields.insert("demoSongsVersion".into(), DEMO_SONGS_VERSION.into());
+    }
+    // Honeydew change (#129, #130): the earlier inverted latency toggle, which compensated unless TRUE, becomes the
+    // ON-compensates one, compensation kept.
+    if let Some(toggle) = fields.remove("reclatency")
+        && !fields.contains_key("recLatencyCompensation")
+    {
+        let compensates = toggle != Value::Bool(true);
+        fields.insert("recLatencyCompensation".into(), compensates.into());
     }
 }
 
@@ -786,6 +907,7 @@ mod tests {
             multi_core: !d.multi_core,
             mcp_enabled: !d.mcp_enabled,
             mcp_port: 57999,
+            mcp_wifi: !d.mcp_wifi,
             mcp_token: String::new(),
             low_latency: if d.low_latency == 0 { 1 } else { 0 },
             background_audio: !d.background_audio,
@@ -793,7 +915,7 @@ mod tests {
                 .get(1)
                 .map(|&(id, _)| id)
                 .unwrap_or(d.sound_mode),
-            latency_compensation: Some(false),
+            latency_compensation: !d.latency_compensation,
             multitrack_recording: !d.multitrack_recording,
             count_in: !d.count_in,
             rec_metronome: !d.rec_metronome,
@@ -808,7 +930,6 @@ mod tests {
             middle_c_is_c4: !d.middle_c_is_c4,
             range_labels: !d.range_labels,
             continuous_scroll: !d.continuous_scroll,
-            show_hidden_tracks: !d.show_hidden_tracks,
             hardware_meters: !d.hardware_meters,
             lock_pads: !d.lock_pads,
             last_audio_format: 5,
@@ -839,18 +960,37 @@ mod tests {
                 grid: crate::ui::automation::value::ValueGrid::Percent(25),
             },
             sample_memory_limit: 3,
+            sample_rate: 48_000,
             screen_orientation: 2,
-            editor_ribbon_shift: -1.5,
-            rack_tab_shift: 2.25,
-            graph_tab_shift: -3.5,
             last_song: "/songs/Beat.flm".into(),
             interrupted_loading: true,
             grid_size: GridSize::Note(16, true),
+            generate_panel: vec![2, 7, 0, 0, 1, 1, 0, 0, 0, 0],
             version_size_limit: 4096,
             audio_input: "USB".into(),
             check_updates: !d.check_updates,
             sounds_mobile_data: !d.sounds_mobile_data,
             sounds_asked: !d.sounds_asked,
+            plugin_editor_resolution: 50,
+            performance_overlay: !d.performance_overlay,
+            performance_overlay_at: Some([0.25, 0.5]),
+            editor_ribbon_shift: -1.5,
+            rack_tab_shift: 2.25,
+            graph_tab_shift: -3.5,
+            picker_keys: !d.picker_keys,
+            rack_tab_place: 0.25,
+            write_tags: !d.write_tags,
+            folder_shortcuts: vec!["Songs|My Samples/Drums".into()],
+            hidden_shortcuts: vec!["SuperSaw|My Presets/SuperSaw".into()],
+            displayer: crate::displayer::DisplayerSettings {
+                source: crate::displayer::Source::Video,
+                video: "/videos/clip.mp4".into(),
+                start: 1.5,
+                looped: false,
+                display: crate::displayer::Display::Background,
+                window: Some([0.1, 0.2, 0.5, 0.4]),
+                ..Default::default()
+            },
         }
     }
 
@@ -861,8 +1001,9 @@ mod tests {
         assert!(
             d.ghost_notes && d.range_labels && d.hardware_meters && d.count_in && d.rec_metronome
         );
-        // The latency toggle is unset: shown ON, and it compensates.
-        assert_eq!(d.latency_compensation, None);
+        assert!(d.picker_keys);
+        // The latency toggle is ON: it compensates.
+        assert!(d.latency_compensation);
         // The other toggles are off.
         assert!(!d.multi_core && d.low_latency == 0 && !d.background_audio);
         assert!(!d.multitrack_recording);
@@ -914,18 +1055,27 @@ mod tests {
         assert_eq!(Settings::load(&stored("[1, 2]")), Settings::default());
     }
 
+    /// Honeydew change (#129, #130): the latency toggle is ON while it compensates. The earlier inverted `reclatency`
+    /// (compensating while FALSE or unset) moves to its own key once, compensation kept: shown ON where it ran.
     #[test]
-    fn the_latency_toggle_stores_true_or_false_and_reads_unset_as_none() {
-        // The stored TRUE/FALSE, and no key at all for a fresh install.
+    fn the_inverted_latency_toggle_moves_once_and_keeps_whether_it_compensates() {
         for (json, want) in [
-            (r#"{"reclatency": true}"#, Some(true)),
-            (r#"{"reclatency": false}"#, Some(false)),
-            ("{}", None),
+            (r#"{"reclatency": true}"#, false),
+            (r#"{"reclatency": false}"#, true),
+            ("{}", true),
+            (r#"{"recLatencyCompensation": false}"#, false),
+            // Moved already: the old key, left by an older version, changes nothing.
+            (
+                r#"{"recLatencyCompensation": true, "reclatency": true}"#,
+                true,
+            ),
         ] {
             let s = Settings::load(&stored(json));
             assert_eq!(s.latency_compensation, want, "{json}");
             let mut mem = Mem::default();
             s.save(&mut mem);
+            let saved = mem.0.get(STORAGE_KEY).cloned().unwrap_or_default();
+            assert!(!saved.contains("\"reclatency\""), "{saved}");
             assert_eq!(Settings::load(&mem).latency_compensation, want, "{json}");
         }
     }
@@ -1070,25 +1220,28 @@ mod tests {
                 "lowlatency",
                 "mcpEnabled",
                 "mcpPort",
+                "mcpWifi",
                 "middlec4",
                 "midiApplyNoteEffects",
                 "mtmlevel",
                 "multithreaded",
                 "multitrackrec",
+                "performanceOverlay",
                 "pianoRollPanSnap",
                 "pianoRollVelocitySnap",
+                "pickerKeys",
                 "pluginFolders",
                 "preferredKbdSizeCells",
                 "projectVersionSizeLimit",
+                "rackTabPlace",
                 "rackTabShift",
+                "recLatencyCompensation",
                 "recMetronome",
                 "reccount",
                 "recentKbdSizeCells",
-                "reclatency",
                 "sampleMemoryLimit",
                 "screenOrientation",
                 "showHardwareMeters",
-                "showHiddenTracks",
                 "showKeyNames",
                 "showRangeIndexLabels",
                 "showTwoRows",
@@ -1098,7 +1251,8 @@ mod tests {
                 "soundsOverMobileData",
                 "theme",
                 "uiscalefactor",
-                "whatsNewSeen"
+                "whatsNewSeen",
+                "writeTagsOnExport"
             ]
         );
     }

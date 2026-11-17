@@ -1,7 +1,10 @@
 //! In-app updates (#66), natively: the web is always current. Main menu UPDATES (`ui::main_menu::updates`) shows
 //! [`status`] and starts what follows.
 //!
-//! - **The check** ([`check`]) asks GitHub's API for [`REPO`]'s latest release, unauthenticated: at start while
+//! - **The check** ([`check`]) asks GitHub's API for [`REPO`]'s releases (pre-releases too: [`choose`] takes this
+//!   build's kind, the Android APK workflow's `android-debug-<n>` for a build that has its number ([`BUILD`]), else the
+//!   newest versioned release), with the user's GitHub token when one is set ([`set_token`]: the repository is
+//!   private, and GitHub answers "not found" without one), else unauthenticated: at start while
 //!   `Check for updates automatically` is on, at most once per [`CHECK_EVERY`], and on `Check now`, at most once a
 //!   minute. The answer is kept in the app data folder ([`CACHE`]), so the starts in between show it without asking
 //!   GitHub, which allows 60 requests an hour from an address.
@@ -35,10 +38,18 @@ use crate::content::install::{self, Progress, SHIPPED_RELEASE};
 
 /// This build's GitHub repository, whose releases are its updates: the fork's own (upstream's APKs are another app, with
 /// another signature, and lack the fork's changes).
-pub const REPO: &str = "RememberedA/DqAqW";
-/// Its latest release, in GitHub's API.
-const LATEST: &str = "https://api.github.com/repos/RememberedA/DqAqW/releases/latest";
-/// The repository whose releases hold the sound library (`sounds-<version>`): upstream's, which the fork shares.
+pub const REPO: &str = "jikk12kk-bot-bot/honeydew";
+/// Its releases, newest first, pre-releases too (the Android APK workflow's builds are pre-releases), in GitHub's API.
+const RELEASES: &str = "https://api.github.com/repos/jikk12kk-bot-bot/honeydew/releases?per_page=30";
+/// This build's number: the Android APK workflow's run number, its release `android-debug-<n>` (the workflow sets
+/// `HONEYDEW_BUILD`). `None` for any other build, which updates from the versioned releases.
+pub const BUILD: Option<&str> = option_env!("HONEYDEW_BUILD");
+/// The user's GitHub token, in the app data folder ([`set_token`]): on the device only.
+pub const TOKEN_FILE: &str = "github-token";
+/// What GitHub's API answers in: JSON, and a release asset's file.
+const JSON: &str = "application/vnd.github+json";
+const OCTETS: &str = "application/octet-stream";
+/// The repository whose releases hold the sound library (`sounds-<version>`): upstream's, which this fork shares.
 pub const SOUNDS_REPO: &str = "daijro/honeydew";
 /// Its sound library releases' tags (`sounds-<version>`), each made when its release is published.
 const SOUNDS_TAGS: &str =
@@ -65,6 +76,10 @@ pub struct Release {
     pub html_url: String,
     #[serde(default)]
     pub assets: Vec<Asset>,
+    #[serde(default)]
+    pub prerelease: bool,
+    #[serde(default)]
+    pub draft: bool,
 }
 
 /// One of a release's downloads.
@@ -72,19 +87,101 @@ pub struct Release {
 pub struct Asset {
     pub name: String,
     pub browser_download_url: String,
+    /// The asset in GitHub's API: with a token and `Accept: application/octet-stream`, its file, which a private
+    /// repository's `browser_download_url` does not give without a browser's login.
+    #[serde(default)]
+    pub url: String,
     #[serde(default)]
     pub size: u64,
 }
 
+/// This build's number ([`BUILD`]).
+fn build_number() -> Option<u64> {
+    BUILD.and_then(|b| b.trim().parse().ok())
+}
+
+/// The run number of an Android APK workflow release's tag (`android-debug-<n>`).
+fn debug_number(tag: &str) -> Option<u64> {
+    tag.strip_prefix("android-debug-")?.parse().ok()
+}
+
+/// Version `a` is older than `b`: as numbers, a debug build's `build <n>` by its number.
+fn older_version(a: &str, b: &str) -> bool {
+    let build = |v: &str| v.strip_prefix("build ")?.trim().parse::<u64>().ok();
+    match (build(a), build(b)) {
+        (Some(a), Some(b)) => a < b,
+        _ => install::older(a, b),
+    }
+}
+
+/// The release this build updates from among `all` (newest first, as GitHub lists them): a numbered build
+/// ([`BUILD`]) takes the highest-numbered `android-debug-<n>`, any other build the newest versioned release that is
+/// no pre-release. Drafts never.
+fn choose(all: Vec<Release>) -> Option<Release> {
+    let all = all.into_iter().filter(|r| !r.draft);
+    match build_number() {
+        Some(_) => all
+            .filter(|r| debug_number(&r.tag_name).is_some())
+            .max_by_key(|r| debug_number(&r.tag_name)),
+        None => all
+            .filter(|r| !r.prerelease && debug_number(&r.tag_name).is_none())
+            .next(),
+    }
+}
+
+/// The token read from its file once, then as [`set_token`] last set it.
+static TOKEN: Mutex<Option<Option<String>>> = Mutex::new(None);
+
+/// The user's GitHub token, when one is set.
+pub fn token() -> Option<String> {
+    let mut held = TOKEN.lock().unwrap_or_else(|e| e.into_inner());
+    let read = || {
+        let text = fs::read_to_string(data_dir()?.join(TOKEN_FILE)).ok()?;
+        let text = text.trim().to_owned();
+        (!text.is_empty()).then_some(text)
+    };
+    held.get_or_insert_with(read).clone()
+}
+
+/// Keeps `token` (trimmed; empty removes it) in the app data folder, readable by this app only, for the checks and
+/// downloads from then on. The kept answer goes: it is what the old token could see.
+pub fn set_token(token: &str) -> io::Result<()> {
+    let token = token.trim().to_owned();
+    let dir = data_dir().ok_or(io::ErrorKind::NotFound)?;
+    fs::create_dir_all(&dir)?;
+    let path = dir.join(TOKEN_FILE);
+    if token.is_empty() {
+        let _ = fs::remove_file(&path);
+    } else {
+        crate::project_files::write_atomic(&path, token.as_bytes())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    let _ = fs::remove_file(dir.join(CACHE));
+    *TOKEN.lock().unwrap_or_else(|e| e.into_inner()) = Some((!token.is_empty()).then_some(token));
+    Ok(())
+}
+
 impl Release {
-    /// Its version: the tag without its `v`.
-    pub fn version(&self) -> &str {
-        self.tag_name.trim_start_matches('v')
+    /// Its version: the tag without its `v`; an Android APK workflow build's `build <n>`.
+    pub fn version(&self) -> String {
+        match debug_number(&self.tag_name) {
+            Some(n) => format!("build {n}"),
+            None => self.tag_name.trim_start_matches('v').to_owned(),
+        }
     }
 
-    /// It is newer than this build.
+    /// It is newer than this build: a numbered build ([`BUILD`]) by its number, any other by its version. A
+    /// numbered build never takes a versioned release, nor the other way round (another app, another signature).
     pub fn newer(&self) -> bool {
-        install::older(env!("CARGO_PKG_VERSION"), self.version())
+        match (build_number(), debug_number(&self.tag_name)) {
+            (Some(this), Some(n)) => n > this,
+            (None, None) => install::older(env!("CARGO_PKG_VERSION"), &self.version()),
+            _ => false,
+        }
     }
 
     /// This build's download of it ([`pick`]).
@@ -118,6 +215,13 @@ fn platform() -> Option<&'static str> {
 /// The download for `platform` among `assets` of the release tagged `tag`: Android's base APK (else the one with the
 /// sounds); the AppImage when this is one (`appimage`); else the archive without sounds, `.tar.gz` or `.zip`.
 fn pick<'a>(assets: &'a [Asset], tag: &str, platform: &str, appimage: bool) -> Option<&'a Asset> {
+    // An Android APK workflow build: its debug APK, the base one first (`honeydew-android-<version>-arm-base-debug.apk`).
+    if platform == "android" && debug_number(tag).is_some() {
+        let apk = |end: &str| {
+            (assets.iter()).find(|a| a.name.starts_with("honeydew-android-") && a.name.ends_with(end))
+        };
+        return apk("-arm-base-debug.apk").or_else(|| apk("-arm-debug.apk"));
+    }
     let version = tag.trim_start_matches('v');
     let names = match platform {
         "android" => vec![
@@ -292,7 +396,9 @@ pub fn check(auto: bool) {
         return;
     }
     thread::spawn(move || {
-        let found = api::<Release>(LATEST);
+        let found = api::<Vec<Release>>(RELEASES).and_then(|all| {
+            choose(all).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no release"))
+        });
         // The sound library's own releases: a failure keeps the one this build ships with.
         #[derive(Deserialize)]
         struct Tag {
@@ -319,7 +425,7 @@ pub fn check(auto: bool) {
                 Ok(release) => (s.latest, s.check_failed) = (Some(release), None),
                 // GitHub's answer for a repository without a release yet.
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                    s.check_failed = Some(format!("{REPO} has no release yet."));
+                    s.check_failed = Some(format!("{REPO} has no release for this build yet."));
                 }
                 Err(err) => s.check_failed = Some(err.to_string()),
             }
@@ -333,7 +439,8 @@ fn api<T: serde::de::DeserializeOwned>(url: &str) -> io::Result<T> {
     fs::create_dir_all(&dir)?;
     let file = dir.join(format!("{CACHE}.part"));
     let _ = fs::remove_file(&file);
-    get(url, &file, &|_| ())?;
+    let token = token();
+    get_with(url, &file, &|_| (), token.as_deref().map(|t| (t, JSON)))?;
     let bytes = fs::read(&file);
     let _ = fs::remove_file(&file);
     serde_json::from_slice(&bytes?).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
@@ -344,12 +451,12 @@ fn api<T: serde::de::DeserializeOwned>(url: &str) -> io::Result<T> {
 pub fn announce() -> Option<String> {
     let version = with(|s| {
         let latest = s.latest.as_ref().filter(|r| r.newer())?;
-        let version = latest.version().to_owned();
+        let version = latest.version();
         (s.announced != version).then(|| s.announced.clone_from(&version))?;
         Some(version)
     })?;
     let mut kept = cache().unwrap_or_default();
-    if !kept.announced.is_empty() && !install::older(&kept.announced, &version) {
+    if !kept.announced.is_empty() && !older_version(&kept.announced, &version) {
         return None;
     }
     kept.announced.clone_from(&version);
@@ -383,9 +490,12 @@ fn fetch_update(asset: &Asset) -> io::Result<String> {
     if fs::metadata(&to).map_or(0, |m| m.len()) != asset.size || asset.size == 0 {
         let _ = fs::remove_file(&to);
         let size = asset.size;
-        get(&asset.browser_download_url, &to, &|n| {
-            with(|s| s.update = Job::Running(n, size));
-        })?;
+        let grown = |n| with(|s| s.update = Job::Running(n, size));
+        // A private repository's file comes from the API, with the token.
+        match token().filter(|_| !asset.url.is_empty()) {
+            Some(token) => get_with(&asset.url, &to, &grown, Some((token.as_str(), OCTETS)))?,
+            None => get(&asset.browser_download_url, &to, &grown)?,
+        }
     }
     if asset.size != 0 && fs::metadata(&to)?.len() != asset.size {
         let _ = fs::remove_file(&to);
@@ -603,9 +713,15 @@ fn network_allowed() -> io::Result<()> {
 /// Downloads `url` into `to`, going on from the bytes `to` holds, telling `grown` its size as it grows. A failure is
 /// tried again after [`RETRIES`], but without a network or a file there. Blocks: call it on a worker.
 pub fn get(url: &str, to: &Path, grown: &dyn Fn(u64)) -> io::Result<()> {
+    get_with(url, to, grown, None)
+}
+
+/// [`get`], with `auth` (a GitHub token, and the `Accept` to ask with) sent to `url`'s host only, never to where it
+/// redirects (a release asset's storage).
+fn get_with(url: &str, to: &Path, grown: &dyn Fn(u64), auth: Option<(&str, &str)>) -> io::Result<()> {
     let mut waits = RETRIES.into_iter();
     loop {
-        let err = match transfer(url, to, grown) {
+        let err = match transfer(url, to, grown, auth) {
             Ok(()) => return Ok(()),
             Err(err) => err,
         };
@@ -624,7 +740,7 @@ fn size_of(path: &Path) -> u64 {
 
 /// One try of [`get`]: `curl`, its exit code read as the error.
 #[cfg(not(target_os = "android"))]
-fn transfer(url: &str, to: &Path, grown: &dyn Fn(u64)) -> io::Result<()> {
+fn transfer(url: &str, to: &Path, grown: &dyn Fn(u64), auth: Option<(&str, &str)>) -> io::Result<()> {
     use std::io::Read;
     use std::process::{Command, Stdio};
     let mut curl = Command::new("curl");
@@ -639,6 +755,10 @@ fn transfer(url: &str, to: &Path, grown: &dyn Fn(u64)) -> io::Result<()> {
             "--speed-time",
             "60",
         ])
+        // curl sends an `Authorization` header to the first host only, not on to a redirect's.
+        .args(auth.into_iter().flat_map(|(token, accept)| {
+            ["-H".to_owned(), format!("Authorization: Bearer {token}"), "-H".to_owned(), format!("Accept: {accept}")]
+        }))
         .args(["--continue-at", "-", "--output"])
         .arg(to)
         .arg(url)
@@ -676,9 +796,10 @@ fn transfer(url: &str, to: &Path, grown: &dyn Fn(u64)) -> io::Result<()> {
 
 /// One try of [`get`]: `HoneydewActivity.download`, on a thread of its own while this one tells the size.
 #[cfg(target_os = "android")]
-fn transfer(url: &str, to: &Path, grown: &dyn Fn(u64)) -> io::Result<()> {
+fn transfer(url: &str, to: &Path, grown: &dyn Fn(u64), auth: Option<(&str, &str)>) -> io::Result<()> {
     let (url, path) = (url.to_owned(), to.to_string_lossy().into_owned());
-    let worker = thread::spawn(move || crate::android::download(&url, &path));
+    let (token, accept) = auth.map_or((String::new(), String::new()), |(t, a)| (t.to_owned(), a.to_owned()));
+    let worker = thread::spawn(move || crate::android::download_with(&url, &path, &token, &accept));
     while !worker.is_finished() {
         grown(size_of(to));
         thread::sleep(Duration::from_millis(100));
@@ -728,7 +849,7 @@ mod tests {
         assert!(!release(&format!("v{this}")).newer());
         assert!(release("v999.0.0").newer() && !release("v0.0.1").newer());
         // 0.4.10 is newer than 0.4.9: numbers, not text.
-        assert!(install::older("0.4.9", release("v0.4.10").version()));
+        assert!(install::older("0.4.9", &release("v0.4.10").version()));
 
         let names = [
             "honeydew-v0.4.10-linux-x86_64.tar.gz",

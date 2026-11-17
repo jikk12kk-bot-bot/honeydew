@@ -7,7 +7,7 @@ use eframe::egui::{Id, Rect};
 
 use super::rack_wiring::{
     BROWSER, DW, PICKER, browser_row, click_row, close_picker, instance_id, layout, pick_keys,
-    picker_row, preset_button, types, with_dw_files, with_effects, worker_done,
+    picker_root, picker_row, preset_button, types, with_dw_files, with_effects, worker_done,
 };
 use super::*;
 use crate::audio_engine::slicer::detects_here;
@@ -72,7 +72,8 @@ fn an_instrument_pick_is_silent_then_a_touch_on_its_row_plays_the_x_note_on_its_
     let id = instance_id(&rig, 1, 0);
     let steps = rig.app.history.steps();
     rig.click_id(preset_button(1, id));
-    picker_row(&mut rig, 0);
+    // The shortcut `MiniSynth`, then the preset.
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     // The first tap only loads it.
     assert_eq!(rig.app.song.channels[1].rack.modules[0].params[1], 0.25);
@@ -95,6 +96,42 @@ fn an_instrument_pick_is_silent_then_a_touch_on_its_row_plays_the_x_note_on_its_
 }
 
 #[test]
+fn a_cards_arrows_step_round_its_presets_folder_with_no_undo_step() {
+    // Issue #98 (Honeydew addition): ◀ and ▶ beside a card's preset name load the folder's previous and next preset,
+    // round and round, each as a pick of it loads.
+    let mut rig = with_bass();
+    let mut lead = ModuleInstance::new(0, 0);
+    lead.params[1] = 0.75;
+    let path = Path::new("My Presets/MiniSynth/Lead.flmpst");
+    let bytes = crate::flm::write_preset(&lead).unwrap();
+    rig.app.files.keep_user_file(path, bytes);
+    let id = instance_id(&rig, 1, 0);
+    rig.click_id(preset_button(1, id));
+    // The shortcut `MiniSynth`, then the preset.
+    picker_row(&mut rig, 1);
+    picker_row(&mut rig, 0);
+    close_picker(&mut rig);
+    rig.take();
+    let steps = rig.app.history.steps();
+    let card = Id::new(("rack", 1_usize)).with(("rack card", id));
+    for (arrow, name, value) in [
+        ("Next preset", "Lead", 0.75),
+        ("Next preset", "Bass", 0.25),
+        ("Previous preset", "Lead", 0.75),
+    ] {
+        rig.click_id(card.with(arrow));
+        rig.frame(vec![]);
+        let module = &rig.app.song.channels[1].rack.modules[0];
+        assert_eq!(
+            (module.file.preset_name.as_str(), module.params[1]),
+            (name, value)
+        );
+        assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
+    }
+    assert_eq!(rig.app.history.steps(), steps);
+}
+
+#[test]
 fn effect_presets_never_audition_a_tap_on_the_picked_row_picks_it_again() {
     let mut rig = with_effects(&[6]);
     let id = instance_id(&rig, 2, 0);
@@ -111,7 +148,8 @@ fn a_tap_outside_closes_the_picker_and_reaches_nothing_under_it() {
     let mut rig = with_bass();
     let id = instance_id(&rig, 1, 0);
     rig.click_id(preset_button(1, id));
-    picker_row(&mut rig, 0);
+    // The shortcut `MiniSynth`, then the preset.
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     rig.take();
     // The rack's `+`, under the backdrop: the picker closes at once, and no Modules browser opens.
@@ -128,7 +166,8 @@ fn closing_while_a_note_is_held_releases_it() {
     let mut rig = with_bass();
     let id = instance_id(&rig, 1, 0);
     rig.click_id(preset_button(1, id));
-    picker_row(&mut rig, 0);
+    // The shortcut `MiniSynth`, then the preset.
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     let bass = row(&mut rig, 0);
     rig.take();
@@ -272,7 +311,7 @@ fn new_clip_on_an_empty_audio_track_cell_opens_a_picker_whose_browse_is_one_clip
         panic!("{:?}", rig.overlays());
     };
     assert_eq!((channel, lane), (1, 0));
-    picker_row(&mut rig, 0);
+    // The shortcut `My Samples`.
     picker_row(&mut rig, 1);
     // The first pick makes the clip: one undo step; the strip plays it.
     picker_row(&mut rig, 0);
@@ -322,7 +361,7 @@ fn a_pad_sample_pick_stays_open_plays_on_the_preview_and_reloads_the_same_new_pa
         channel: 1,
         pad: None,
     }));
-    picker_row(&mut rig, 0);
+    // The shortcut `My Samples`.
     picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     let open = Overlay::SamplePicker {
@@ -359,7 +398,7 @@ fn pad_picker() -> Rig {
         channel: 1,
         pad: Some(0),
     }));
-    picker_row(&mut rig, 0);
+    // The shortcut `My Samples`.
     picker_row(&mut rig, 1);
     rig.take();
     rig
@@ -433,7 +472,7 @@ fn a_pad_picks_str1_streams_its_first_8192_frames_with_the_pick_and_the_rest_on_
         channel: 1,
         pad: Some(0),
     }));
-    picker_row(&mut rig, 0);
+    // The shortcut `My Samples`.
     picker_row(&mut rig, 1);
     let renders = rig.app.audio.samples.renders();
     rig.take();
@@ -530,7 +569,7 @@ fn on_the_desktop_the_worker_reads_the_picked_file() {
         channel: 1,
         pad: Some(0),
     }));
-    picker_row(&mut rig, 0);
+    // The shortcut `My Samples`.
     picker_row(&mut rig, 1);
     let hold = crate::ui::views::preset_picker::WORKER_HOLD
         .lock()
@@ -578,7 +617,8 @@ fn a_slicer_pick_of_an_audio_file_loads_names_it_and_shows_the_sample_strip_neve
     rig.take();
     let id = instance_id(&rig, 2, 0);
     rig.click_id(preset_button(2, id));
-    picker_row(&mut rig, 0);
+    // The shortcut `Slicer`.
+    picker_row(&mut rig, 1);
     // The loop decodes on the worker. Meanwhile its row pulses and the strip names it, with no waveform and
     // no preview; nothing is loaded yet.
     let before = rig.app.song.channels[2].rack.modules[0].clone();
@@ -663,7 +703,8 @@ fn a_three_osc_shape_from_its_preset_picker_builds_its_table_on_the_worker() {
     rig.take();
     let id = instance_id(&rig, 2, 0);
     rig.click_id(preset_button(2, id));
-    picker_row(&mut rig, 0);
+    // The shortcut `3xOsc`.
+    picker_row(&mut rig, 1);
     let hold = crate::ui::views::preset_picker::WORKER_HOLD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -713,7 +754,8 @@ fn a_later_slicer_loop_replaces_one_still_loading() {
     rig.slide_rack();
     let id = instance_id(&rig, 2, 0);
     rig.click_id(preset_button(2, id));
-    picker_row(&mut rig, 0);
+    // The shortcut `Slicer`.
+    picker_row(&mut rig, 1);
     rig.take();
     let hold = crate::ui::views::preset_picker::WORKER_HOLD
         .lock()
@@ -748,6 +790,41 @@ fn a_later_slicer_loop_replaces_one_still_loading() {
     assert_eq!(decodes_here(), 0);
 }
 
+/// Issue #109: the DW Sampler's sample name is the quick way to swap its sample. Its `My Files` is the whole user
+/// folder, and its picker opens in `My Samples`, then at the sample it plays.
+#[test]
+fn a_dw_samplers_picker_opens_in_my_samples_then_at_its_samples_folder() {
+    let mut rig = with_dw_files();
+    for path in [
+        "My Samples/Clap.wav",
+        "My Samples/Drums/Kick.wav",
+        "My Recordings/Take.wav",
+    ] {
+        rig.app.files.keep_user_file(Path::new(path), wav(4410));
+    }
+    let id = instance_id(&rig, DW, 0);
+    rig.click_id(preset_button(DW, id));
+    row(&mut rig, 0);
+    assert!(rig.painted("Clap") && rig.painted("Drums"), "in My Samples");
+    // `Drums` (folders first), then `Kick`, which loads.
+    picker_row(&mut rig, 0);
+    picker_row(&mut rig, 0);
+    worker_done(&mut rig);
+    let module = &rig.app.song.channels[DW].rack.modules[0];
+    assert_eq!(module.file.preset_name, "Kick");
+    let blob = module.file.custom_data.as_deref().unwrap_or_default();
+    assert!(blob.windows(25).any(|w| w == b"My Samples/Drums/Kick.wav"));
+    close_picker(&mut rig);
+    // Again: at its folder.
+    rig.click_id(preset_button(DW, id));
+    row(&mut rig, 0);
+    assert!(rig.painted("Kick") && !rig.painted("Clap"));
+    rig.click_id(Id::new(PICKER).with("back"));
+    rig.click_id(Id::new(PICKER).with("back"));
+    rig.frame(vec![]);
+    assert!(rig.painted("My Samples") && rig.painted("My Recordings"));
+}
+
 #[test]
 fn a_later_pick_on_the_ui_thread_replaces_a_pick_still_loading() {
     // `Keys` (a DW program, on the worker), then `Default` (at once): `Keys` must not land over it.
@@ -758,8 +835,8 @@ fn a_later_pick_on_the_ui_thread_replaces_a_pick_still_loading() {
     pick_keys(&mut rig);
     rig.frame(vec![]);
     assert!(rig.app.slots.preset_picker.loading());
-    // Back to the root (`My Files`, `My Instruments`), then `Default`, which loads on the UI thread at once.
-    rig.click_id(Id::new(PICKER).with("back"));
+    // Back to the root (`My Files`, the shortcut `DW Sampler`), then `Default`, which loads on the UI thread at once.
+    picker_root(&mut rig);
     picker_row(&mut rig, 2);
     let last = rig.app.song.channels[DW].rack.modules[0].clone();
     assert!(
@@ -793,7 +870,8 @@ fn a_slicer_preset_pick_shows_no_sample_strip() {
     rig.take();
     let id = instance_id(&rig, 2, 0);
     rig.click_id(preset_button(2, id));
-    picker_row(&mut rig, 0);
+    // The shortcut `Slicer`, then the preset.
+    picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     worker_done(&mut rig);
     rig.frame(vec![]);
@@ -910,7 +988,7 @@ fn add_drums_new_pad_and_an_empty_cell_browses_later_pick_are_changes() {
         channel: 1,
         pad: None,
     }));
-    picker_row(&mut rig, 0);
+    // The shortcut `My Samples`.
     picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     assert!(rig.app.files.modified(), "Add Drum's pad");
@@ -926,11 +1004,50 @@ fn add_drums_new_pad_and_an_empty_cell_browses_later_pick_are_changes() {
     let new_clip = rig.ctx.read_response(egui::Id::new("clip_insert").with(0));
     rig.click(new_clip.expect("the insert menu").rect.center());
     rig.frame(vec![]);
-    picker_row(&mut rig, 0);
+    // The shortcut `My Samples`.
     picker_row(&mut rig, 1);
     picker_row(&mut rig, 0);
     assert_eq!(rig.app.song.channels[1].lanes[0].clips.len(), 1);
     rig.app.files.saved();
     picker_row(&mut rig, 1);
     assert!(rig.app.files.modified(), "the browse's later pick");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_modules_picker_reopens_where_it_was_left_while_the_app_runs() {
+    // Issue #131: in the folder and at the scroll it was left at, for this module (each its own: the first opening of
+    // another is at its own file).
+    let home = super::songs_archive::Home::new("picker-place");
+    let user = home.0.join("user");
+    let deep = user.join("My Presets/MiniSynth/Leads/Deep");
+    std::fs::create_dir_all(&deep).unwrap();
+    let bytes = crate::flm::write_preset(&ModuleInstance::new(0, 0)).unwrap();
+    for i in 0..40 {
+        std::fs::write(deep.join(format!("P{i:02}.flmpst")), &bytes).unwrap();
+    }
+    let mut rig = Rig::with_synth();
+    rig.app.files = without_factory(ProjectFiles::on_disk(&user));
+    rig.open_rack(1);
+    rig.slide_rack();
+    let id = instance_id(&rig, 1, 0);
+    rig.click_id(preset_button(1, id));
+    // The shortcut `MiniSynth`, `Leads`, `Deep`, then the list dragged to its end.
+    picker_row(&mut rig, 1);
+    for _ in 0..2 {
+        picker_row(&mut rig, 0);
+    }
+    let list = row(&mut rig, 0).center();
+    rig.press(list);
+    rig.drag_to(list - eframe::egui::vec2(0.0, 3000.0));
+    rig.release(list - eframe::egui::vec2(0.0, 3000.0));
+    rig.frame(vec![]);
+    assert!(rig.painted("P39") && !rig.painted("P00"));
+    close_picker(&mut rig);
+    rig.frame(vec![]);
+    rig.click_id(preset_button(1, id));
+    for _ in 0..3 {
+        rig.frame(vec![]);
+    }
+    assert!(rig.painted("P39") && !rig.painted("P00"));
 }

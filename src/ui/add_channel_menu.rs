@@ -11,9 +11,11 @@ pub enum AddChannelPick {
     Kind(ChannelKind),
     /// An installed instrument plugin's `format:id` UID.
     Plugin(&'static str),
+    /// `Folder`: a new track folder ([`crate::song::folders`]), last in the `Channel:` column.
+    Folder,
 }
 
-/// Channel and synth kinds, followed by installed instrument plugins.
+/// Channel kinds and `Folder`, synth kinds, then installed instrument plugins.
 /// No `dot` flags: content tracking is out of scope.
 pub fn add_channel_menu() -> Vec<PopupItem<AddChannelPick>> {
     let column = |col: usize, header: &'static str, kinds: &[ChannelKind]| {
@@ -31,6 +33,8 @@ pub fn add_channel_menu() -> Vec<PopupItem<AddChannelPick>> {
         column(1, "Synth:", &synths),
     ]
     .concat();
+    let folder_row = ChannelKind::ADDABLE.len() + 1;
+    items.push(PopupItem::new(AddChannelPick::Folder, 0, folder_row, "Folder"));
     items.push(PopupItem::header(2, 0, "Plugins:"));
     let bundled = (plugins::builtin::all().iter())
         .filter(|p| p.instrument())
@@ -87,6 +91,7 @@ mod tests {
                 (0, 4, "Effect Track (AUX)"),
                 (0, 5, "Audio Record"),
                 (0, 6, "Rack"),
+                (0, 7, "Folder"),
                 (1, 1, "MiniSynth"),
                 (1, 2, "DW Sampler"),
                 (1, 3, "GMSynth"),
@@ -124,6 +129,7 @@ mod tests {
             )))
         );
         assert_eq!(synth("Rack"), Some(AddChannelPick::Kind(ChannelKind::Rack)));
+        assert_eq!(synth("Folder"), Some(AddChannelPick::Folder));
     }
 
     #[test]

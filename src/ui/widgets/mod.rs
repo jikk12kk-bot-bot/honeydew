@@ -67,14 +67,14 @@ mod toggle;
 
 pub use button::{Button, button};
 pub use fader::CAP_W as FADER_CAP_W;
-pub use fader::{UNITY, fader, fader_track};
+pub use fader::{UNITY, below_cap, fader, fader_track};
 pub use knob::{knob, strip_knob};
 pub use list::{Bar, ItemList, item_list, item_list_index};
 pub use menu_button::menu_button;
 pub use plain::{display_area, separator, text_label};
 pub use slider::{h_slider, v_slider};
 pub use spinner::{spinner, spinner_button, spinner_grid, spinner_index};
-pub use text_toggle::{disc_toggle, text_button, text_toggle};
+pub use text_toggle::{disc_toggle, text_button, text_toggle, value_button};
 pub use toggle::{Pill, pill_toggle, toggle};
 
 /// Height of the label strip at the top and of the value strip at the bottom, in U.
@@ -532,7 +532,11 @@ fn context_menu(
         post(ui, id, |s| s.pressed = true);
     }
     let menu_id = menu_id(id);
-    let long = gesture::long_press(ui, response, cx.m);
+    // A knob or slider waits longer, and any slide cancels it: a finger resting on a fader before it moves slides it.
+    let long = match reset {
+        true => gesture::control_long_press(ui, response, cx.m),
+        false => gesture::long_press(ui, response, cx.m),
+    };
     if response.clicked_by(PointerButton::Secondary) || long {
         let at = response
             .interact_pointer_pos()
@@ -644,7 +648,7 @@ pub use xy_pad::xy_pad;
 
 mod text;
 
-pub use text::{shrink, truncated, truncated_text};
+pub use text::{shrink, truncated, truncated_bold, truncated_text};
 
 /// Whether a toggle or a two-state button bound to `v` is on: for any value but 0, so 0.5 and 0.001 too.
 /// NaN (a corrupt file) is off, as 0 is. The inverted pill swaps the sides, and a tap writes 1 from off and 0 from on.

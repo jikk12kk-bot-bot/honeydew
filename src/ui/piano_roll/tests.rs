@@ -329,20 +329,26 @@ fn quantize_moves_starts_to_the_nearest_grid_line() {
 
 #[test]
 fn legato_extends_each_selected_note_to_the_next_selected_start() {
+    // Honeydew change (#123): the last ones (no later selected start) reach the end of their bar (512 ticks in 4/4),
+    // unless they already end past it.
     let mut events = vec![
         n(0, 16.0, 60),
         n(0, 8.0, 64),
         n(64, 16.0, 62),
+        n(600, 16.0, 66),
+        n(600, 600.0, 67),
         n(200, 16.0, 70),
     ];
-    let sel = vec![true, true, true, false];
-    legato_selected(&mut events, &sel);
+    let sel = vec![true, true, true, true, true, false];
+    legato_selected(&mut events, &sel, 512.0);
     assert_eq!(
         spans(&events),
         [
             (0, 64.0, 60),
             (0, 64.0, 64),
-            (64, 16.0, 62),
+            (64, 536.0, 62),
+            (600, 424.0, 66),
+            (600, 600.0, 67),
             (200, 16.0, 70)
         ]
     );
@@ -1055,8 +1061,6 @@ mod component {
         shapes: Vec<egui::Shape>,
         /// What shows of each filled rect of the last frame (the rect inside its clip), groups flattened.
         visible: Vec<(Rect, egui::Color32)>,
-        /// The graph lane's tab's sideways offset, as the app keeps it (a drag moves it).
-        graph_tab_shift: f32,
     }
 
     impl Rig {
@@ -1090,7 +1094,6 @@ mod component {
                 modifiers: Modifiers::NONE,
                 shapes: Vec::new(),
                 visible: Vec::new(),
-                graph_tab_shift: 0.0,
             };
             rig.frame(vec![]);
             rig.roll.scroll = Some(vec2(0.0, SCROLL_Y));
@@ -1115,19 +1118,12 @@ mod component {
                 theme: &theme,
                 m: &m,
             };
-            let (roll, song, opts, shift) = (
-                &mut self.roll,
-                &mut self.song,
-                self.opts,
-                &mut self.graph_tab_shift,
-            );
+            let (roll, song, opts) = (&mut self.roll, &mut self.song, self.opts);
             let mut last = Vec::new();
             let output = self.ctx.run(raw, |ctx| {
                 egui::CentralPanel::default()
                     .frame(egui::Frame::NONE)
-                    .show(ctx, |ui| {
-                        last = roll.show(ui, RECT, &cx, song, &opts, shift)
-                    });
+                    .show(ctx, |ui| last = roll.show(ui, RECT, &cx, song, &opts));
             });
             for action in std::mem::take(&mut last) {
                 match action {
@@ -1969,7 +1965,7 @@ mod component {
     }
 
     #[test]
-    fn floating_copy_only_copies_and_floating_duplicate_places_the_copies_after_the_selection() {
+    fn floating_copy_places_the_copies_after_the_selection() {
         let mut rig = Rig::new(vec![n(128, 64.0, 70)]);
         rig.select(vec![true]);
         let copy = rig.text("Copy").unwrap();
@@ -1978,10 +1974,6 @@ mod component {
             spans(&super::super::note_clipboard(&rig.ctx)),
             [(128, 64.0, 70)]
         );
-        assert_eq!(spans(rig.events()), [(128, 64.0, 70)], "Copy edits nothing");
-        rig.frame(vec![]);
-        let duplicate = rig.text("Duplicate").unwrap();
-        rig.tap(duplicate);
         assert_eq!(spans(rig.events()), [(128, 64.0, 70), (192, 64.0, 70)]);
         assert_eq!(rig.roll.selected, [false, true]);
         assert_eq!(rig.all, [DONE]);
@@ -2009,7 +2001,7 @@ mod component {
     }
 
     /// The first note's rect in the roll's current view, and where the shared rule puts the floating row over it
-    /// with the finger at `finger` (at U = 32 the 5-button row is 256 × 48, m 6.4).
+    /// with the finger at `finger` (at U = 32 a 4-button row is 204.8 × 48, m 6.4).
     fn shared_row(rig: &Rig, finger: Pos2) -> (Rect, Option<Rect>) {
         let g = rig.roll.geom(GRID.min, 32.0);
         let e = &rig.events()[0];
@@ -2023,7 +2015,7 @@ mod component {
         };
         (
             rect,
-            place_row(&sel, finger, GRID, vec2(256.0, 48.0), 6.4, 1.0),
+            place_row(&sel, finger, GRID, vec2(204.8, 48.0), 6.4, 1.0),
         )
     }
 
@@ -2334,69 +2326,6 @@ mod component {
         assert!(shows(&rig, c6, c.white_key.to_color32()));
     }
 
-    /// Key `72 − row`'s full row in the key column: `C6` (key 72) is the top one and the keys go down in pitch, a row
-    /// 16 points high.
-    fn key_row(row: f32) -> Rect {
-        Rect::from_x_y_ranges(0.0..=48.0, TOP + row * 16.0..=TOP + (row + 1.0) * 16.0)
-    }
-
-    #[test]
-    fn keys_out_of_the_project_scale_take_the_disabled_colours() {
-        // D minor natural, whose tones are C, D, E, F, G, A and B flat (`Rows::dim`). Down from the top row: C6 (72,
-        // a white key and a tone), B5 (71, white, out), B flat 5 (70, black, a tone), A5 (69, white, a tone) and G
-        // sharp 5 (68, black, out).
-        let mut song = Song::default();
-        song.add_channel(ChannelKind::Instrument);
-        let _ = song.channels[1].lanes[0].add_clip(0, 4.0);
-        song.key_root = 2;
-        song.key_scale =
-            scale_to_stored(SCALES.iter().position(|&s| s == "Minor Natural").unwrap());
-        let rig = Rig::with_song(song);
-        let colors = theme_by_id(0).colors;
-        assert!(
-            shows(&rig, key_row(0.0), colors.white_key.to_color32()),
-            "C6, a tone of the scale: {:?}",
-            rig.visible
-        );
-        assert!(
-            shows(&rig, key_row(1.0), colors.white_key_disabled.to_color32()),
-            "B5, out of it: {:?}",
-            rig.visible
-        );
-        assert!(
-            shows(&rig, key_row(2.0), colors.black_key.to_color32()),
-            "B flat 5, a tone of the scale: {:?}",
-            rig.visible
-        );
-        assert!(
-            shows(&rig, key_row(3.0), colors.white_key.to_color32()),
-            "A5, a tone of the scale: {:?}",
-            rig.visible
-        );
-        assert!(
-            shows(&rig, key_row(4.0), colors.black_key_disabled.to_color32()),
-            "G sharp 5, out of it: {:?}",
-            rig.visible
-        );
-    }
-
-    #[test]
-    fn a_chromatic_project_scale_greys_no_key() {
-        // Chromatic reads as C major on the grid, but every key is a tone of it: the column stays plain.
-        let rig = Rig::new(vec![]);
-        let colors = theme_by_id(0).colors;
-        assert!(
-            shows(&rig, key_row(0.0), colors.white_key.to_color32()),
-            "C6: {:?}",
-            rig.visible
-        );
-        assert!(
-            shows(&rig, key_row(2.0), colors.black_key.to_color32()),
-            "B flat 5, a black key: {:?}",
-            rig.visible
-        );
-    }
-
     #[test]
     fn a_c_row_has_a_channel_colour_bar_down_its_left_edge() {
         let rig = Rig::new(vec![]);
@@ -2561,6 +2490,44 @@ mod component {
         rig.tap(empty);
         assert_eq!(rig.events().len(), 2);
         assert_eq!(rig.all, [QUIET]);
+    }
+
+    /// #135: under the Generate panel, a drag on the roll beside it scrolls the roll and a pinch zooms it, the panel
+    /// staying open with its preview; a tap beside it still closes it (#107).
+    #[test]
+    fn a_drag_or_pinch_beside_the_generate_panel_moves_the_roll_and_a_tap_closes_it() {
+        let mut rig = Rig::new(vec![]);
+        rig.roll.open_generate(&rig.ctx);
+        rig.frame(vec![]);
+        rig.frame(vec![]);
+        let open = |rig: &Rig| matches!(rig.roll.menu, Some(super::super::Menu::Generate(_)));
+        assert!(open(&rig));
+        // The panel is at the roll's right edge, from x 706: the grid left of it is outside. Its two bars fit the view,
+        // so the rows scroll.
+        rig.drag(pos2(400.0, 100.0), pos2(380.0, 230.0));
+        assert!(
+            rig.roll.scroll.unwrap().y < SCROLL_Y - 100.0,
+            "{:?}",
+            rig.roll.scroll
+        );
+        assert!(open(&rig), "a drag keeps it open");
+        // A quick pinch whose first finger stays put: no tap.
+        let at = pos2(200.0, 200.0);
+        rig.touch(1.0 / 60.0, TouchPhase::Start, at);
+        rig.second(TouchPhase::Start, at + vec2(200.0, 0.0));
+        rig.second(TouchPhase::Move, at + vec2(264.0, 0.0));
+        rig.second(TouchPhase::End, at + vec2(264.0, 0.0));
+        rig.touch(1.0 / 60.0, TouchPhase::End, at);
+        assert!(rig.roll.beat_u > BEAT_U, "no pinch");
+        assert!(open(&rig), "a pinch keeps it open");
+        rig.tap(pos2(300.0, 200.0));
+        assert!(!open(&rig), "a tap closes it");
+        rig.frame(vec![]);
+        assert!(
+            rig.events().is_empty(),
+            "and edits nothing: {:?}",
+            rig.events()
+        );
     }
 
     #[test]
@@ -2896,7 +2863,7 @@ mod component {
         rig.frame(vec![]);
         rig.tap(rig.text("Select All").unwrap());
         assert_eq!(rig.roll.selected, [true, false]);
-        rig.tap(rig.text("Duplicate").unwrap());
+        rig.tap(rig.text("Copy").unwrap());
         assert_eq!(
             spans(rig.events()),
             [(0, 64.0, 0), (64, 64.0, 200), (64, 64.0, 0)]
@@ -2986,8 +2953,24 @@ mod component {
     #[test]
     fn every_note_menu_item_is_enabled() {
         let items = crate::ui::piano_roll::more_items();
-        assert_eq!(items.len(), 15);
+        assert_eq!(items.len(), 19);
         assert!(items.iter().all(|i| !i.disabled));
+    }
+
+    /// #102, a Honeydew addition: the note menu's `Transpose +1`, `-1`, `+12` and `-12` move the selection, an undo step
+    /// each, and the menu stays open for the next.
+    #[test]
+    fn the_note_menus_transpose_steps_move_the_selection_an_undo_step_each() {
+        let mut rig = Rig::new(vec![n(0, 64.0, 60), n(128, 64.0, 64)]);
+        rig.select(vec![true, false]);
+        rig.tap(rig.text("More...").unwrap());
+        rig.frame(vec![]);
+        rig.tap(rig.text("Transpose +12").unwrap());
+        assert_eq!(keys(&rig), [72, 64]);
+        rig.frame(vec![]);
+        rig.tap(rig.text("Transpose -1").expect("the menu stays open"));
+        assert_eq!(keys(&rig), [71, 64]);
+        assert_eq!(rig.all, [DONE, DONE]);
     }
 
     #[test]
@@ -3164,11 +3147,33 @@ mod component {
         rig.frame(vec![]);
         assert_eq!(rows(&rig), five);
         assert!(rig.all.is_empty());
+        // The key column under Chromatic: every key in range. F5's row (65), 7 rows under C6.
+        let c = theme_by_id(0).colors;
+        let row = |key: u8| {
+            let top = TOP + f32::from(72 - key) * 16.0;
+            Rect::from_x_y_ranges(0.0..=48.0, top..=top + 16.0)
+        };
+        assert!(shows(&rig, row(65), c.white_key.to_color32()));
         rig.tap(rig.text(&five[0]).unwrap());
         assert_eq!(key_lock(&rig), (2, super::stored("Major")));
         assert_eq!(rig.all, [DONE]);
         rig.frame(vec![]);
         assert!(rows(&rig).is_empty(), "the dialog stayed open");
+        // The picked scale shows on the keys as on the keyboard (#77): F is out of D major, F# in.
+        assert!(shows(&rig, row(65), c.white_key_disabled.to_color32()));
+        assert!(shows(&rig, row(66), c.black_key.to_color32()));
+        // With key names on, the scale's keys are named, black ones too; C rows keep their octave label.
+        rig.opts.key_names = true;
+        rig.frame(vec![]);
+        let mut labels = key_labels(&rig);
+        labels.sort_by(|a, b| a.2.top().total_cmp(&b.2.top()));
+        let names: Vec<&str> = labels.iter().map(|l| l.0.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "C6", "B", "A", "G", "F#", "E", "D", "C#", "C5", "B", "A", "G", "F#"
+            ]
+        );
     }
 
     /// The scale-guess result is on the dialog base: screen dim α 0.6, then the floating panel, from the first frame,
@@ -3941,7 +3946,7 @@ mod component {
     fn a_roll_hidden_mid_drag_stops_the_dragged_key_and_closes_the_move_where_it_is() {
         let mut rig = Rig::new(vec![n(128, 64.0, 70)]);
         let to = drag_up_a_row(&mut rig);
-        assert_eq!(rig.roll.hide(), [OFF_71, DONE]);
+        assert_eq!(rig.roll.hide(&mut rig.song), [OFF_71, DONE]);
         assert_eq!(spans(rig.events()), [(128, 64.0, 71)]);
         // Shown again, the release ends nothing more.
         rig.release(to);
@@ -3949,7 +3954,7 @@ mod component {
         assert_eq!(rig.sounds, [(71, Some(0.7))]);
         assert_eq!(rig.all, [EDITED]);
         assert_eq!(spans(rig.events()), [(128, 64.0, 71)]);
-        assert!(rig.roll.hide().is_empty());
+        assert!(rig.roll.hide(&mut rig.song).is_empty());
     }
 
     #[test]
@@ -3966,15 +3971,15 @@ mod component {
         rig.frame(vec![In::PointerMoved(pos2(x, lane_y(1.0)))]);
         rig.frame(vec![In::PointerMoved(pos2(x, v204))]);
         assert_eq!(values(&rig), [(204, 127)]);
-        assert_eq!(rig.roll.hide(), [PianoRollAction::Resync]);
+        assert_eq!(rig.roll.hide(&mut rig.song), [PianoRollAction::Resync]);
         assert_eq!(rig.roll.selected, [false]);
         rig.release(pos2(x, v204));
-        assert!(rig.roll.hide().is_empty());
+        assert!(rig.roll.hide(&mut rig.song).is_empty());
         // Painted and still changed: the final edit.
         rig.frame(vec![In::PointerMoved(pos2(x, v204))]);
         rig.button(pos2(x, v204), PointerButton::Primary, true);
         rig.frame(vec![In::PointerMoved(pos2(x, lane_y(1.0)))]);
-        assert_eq!(rig.roll.hide(), [DONE]);
+        assert_eq!(rig.roll.hide(&mut rig.song), [DONE]);
         rig.release(pos2(x, lane_y(1.0)));
         assert_eq!(values(&rig), [(255, 127)]);
     }
@@ -3989,13 +3994,13 @@ mod component {
             key,
             velocity: None,
         };
-        assert_eq!(rig.roll.hide(), [off(72)]);
+        assert_eq!(rig.roll.hide(&mut rig.song), [off(72)]);
         rig.release(c5);
         assert_eq!(rig.sounds, [(72, Some(crate::app::KEY_VELOCITY))]);
         // A new note sounds for its 150 ms gate: hidden within it, it stops at once, and not again.
         rig.tap(at(256.0, 60));
         assert_eq!(rig.sounds[1..], [(60, Some(1.0))]);
-        assert_eq!(rig.roll.hide(), [off(60)]);
+        assert_eq!(rig.roll.hide(&mut rig.song), [off(60)]);
         rig.frame_after(0.2, vec![]);
         assert_eq!(rig.sounds.len(), 2, "{:?}", rig.sounds);
     }
@@ -4220,7 +4225,6 @@ mod grid {
             light: std::array::from_fn(|k| (48..=72).contains(&k) && white(k)),
             lit: std::array::from_fn(|k| k == 64),
             root: 0,
-            dim: [false; 128],
         }
     }
 
@@ -4329,17 +4333,7 @@ mod grid {
         let past = Rect::from_min_max(pos2(304.0, 48.0), pos2(1170.0, 349.0));
         let events = [n(0, 128.0, 60)];
         let (rects, ..) = painted(1.0, &|p, _, g, cx| {
-            paint_notes(
-                p,
-                g,
-                &events,
-                &[false],
-                &[],
-                Some(past),
-                RED,
-                None,
-                (None, cx),
-            );
+            paint_notes(p, g, &events, &[false], &[], Some(past), RED, cx);
         });
         assert_eq!(
             rects.iter().map(|r| r.1).collect::<Vec<_>>(),

@@ -444,10 +444,25 @@ mod local {
         /// Plugin -> host (`Changed`, `Note`, `Automate`): queued for the host's next tick, which is woken. 1 when a host
         /// is there, 0 otherwise (as unanswered messages on Windows).
         pub fn to_host(&self, cmd: Cmd, arg: isize) -> isize {
-            // Honeydew (vendored change): an embedded editor has no host, but its \"Create automation clip\" is the app's,
-            // queued for it ([`take_host_messages_for`]).
-            let for_app = cfg!(feature = "embed") && cmd == Cmd::Automate;
-            if !self.hosted() && !for_app {
+            // Honeydew (vendored change): with `embed`, Honeydew answers `Automate` from an editor that keeps its own
+            // tab row (#113). The editors run on the thread that hosts them there, which takes it (`take_automate`).
+            #[cfg(feature = "embed")]
+            if cmd == Cmd::Automate {
+                AUTOMATE.with_borrow_mut(|q| q.push((self.parent, arg)));
+                return 1;
+            }
+            // Honeydew (vendored change): and Tesla's `Audio` to the playlist (#117): the file it posted is kept for this
+            // thread (`take_sent`). The other places are not answered.
+            #[cfg(feature = "embed")]
+            if cmd == Cmd::Audio {
+                let ok = AudioTo::from_isize(arg) == AudioTo::Playlist;
+                if ok {
+                    let posted = take_audio().into_iter().map(|(path, _)| path);
+                    SENT.with_borrow_mut(|q| q.extend(posted));
+                }
+                return isize::from(ok);
+            }
+            if !self.hosted() {
                 return 0;
             }
             if let Ok(mut q) = QUEUE.lock() {
@@ -462,6 +477,28 @@ mod local {
 
     static REGISTRY: Mutex<Vec<(u64, Weak<Peer>)>> = Mutex::new(Vec::new());
     static QUEUE: Mutex<Vec<(u64, Cmd, isize)>> = Mutex::new(Vec::new());
+
+    // Honeydew (vendored addition): the editors' `Automate` and the files of their `Audio` to the playlist
+    // (`Peer::to_host`), by thread.
+    #[cfg(feature = "embed")]
+    thread_local! {
+        static AUTOMATE: std::cell::RefCell<Vec<(u64, isize)>> = const { std::cell::RefCell::new(Vec::new()) };
+        static SENT: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Honeydew (vendored addition): the `Automate` this thread's editors sent since the last call, as (the editor's
+    /// host window, parameter index).
+    #[cfg(feature = "embed")]
+    pub fn take_automate() -> Vec<(u64, isize)> {
+        AUTOMATE.with_borrow_mut(std::mem::take)
+    }
+
+    /// Honeydew (vendored addition): the files this thread's editors sent to the playlist since the last call (`Audio`),
+    /// oldest first.
+    #[cfg(feature = "embed")]
+    pub fn take_sent() -> Vec<String> {
+        SENT.with_borrow_mut(std::mem::take)
+    }
     static HOST_WAKER: OnceLock<fn()> = OnceLock::new();
 
     /// Host: how plugins wake its UI loop when they send something.
@@ -472,22 +509,6 @@ mod local {
     /// Host: the plugins' messages since the last call: (editor's host window, command, argument).
     pub fn take_host_messages() -> Vec<(u64, Cmd, isize)> {
         QUEUE.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default()
-    }
-
-    /// Honeydew: the arguments of the `cmd` messages from editor window `parent`, taken; the other messages stay queued.
-    pub fn take_host_messages_for(parent: u64, cmd: Cmd) -> Vec<isize> {
-        let Ok(mut q) = QUEUE.lock() else {
-            return Vec::new();
-        };
-        let mut taken = Vec::new();
-        q.retain(|&(p, c, arg)| {
-            let mine = p == parent && c == cmd;
-            if mine {
-                taken.push(arg);
-            }
-            !mine
-        });
-        taken
     }
 
     /// Host side: a connection to the editor of a Lemon plugin.
@@ -559,10 +580,11 @@ mod local {
 }
 
 #[cfg(not(windows))]
-pub use local::{set_host_waker, take_host_messages, take_host_messages_for, Link, Peer};
-// Honeydew (vendored change): the embedded Lemon editors' `Create automation clip` reaches the app on Windows too.
+pub use local::{set_host_waker, take_host_messages, Link, Peer};
 #[cfg(all(windows, feature = "embed"))]
-pub use local::{take_host_messages_for, Peer};
+pub use local::Peer;
+#[cfg(feature = "embed")]
+pub use local::{take_automate, take_sent};
 
 #[cfg(test)]
 mod tests {

@@ -1,5 +1,7 @@
 //! The PROJECT tab: `Save`, `Save New` and `Quick Render`, then the `Project info`, `Metadata` and `Performance`
 //! sections, scrolling as one page. `View project versions` (#69) ends the Metadata section, before `Performance`.
+//! #139: the Metadata section also has `Album:`, `Genre:`, `Year:` and `Comment:` after `Author:`, and `Write tags on
+//! export` (a setting, not the song's) after the fields: renders write them as tags.
 //!
 //! The tab shows a [`ProjectInfo`] the app fills in. It edits the metadata texts in place and reports everything else
 //! as a [`MainMenuAction`].
@@ -7,10 +9,10 @@
 //! The section headers end in a colon (`Project info:`, `Metadata:`, `Performance:`), and a divider (1 px `text`
 //! α 0.18) sits in the gap above `Metadata:` and `Performance:`.
 //!
-//! The Performance section: the header row, then one block (status line, load bar, graph, footer;
-//! [`crate::ui::performance`]) 2 U in from each side of the page (0.5 U on a page under 20 U wide), 5 U tall. The page
-//! is the menu panel; the tabs' content is inset 0.5 U from it. A request to show the block
-//! ([`ProjectTab::show_performance`], the CPU / RAM labels' tap) scrolls it into view with a 1.5 U margin
+//! Everything is 2 U in from each side of the page (0.5 U on a page under 20 U wide), as SETTINGS' column (#78). The page
+//! is the menu panel; the tabs' content is inset 0.5 U from it. The Performance section: the header row, then one block
+//! (status line, load bar, graph, footer; [`crate::ui::performance`]) across the column, 5 U tall. A request to show the
+//! block ([`ProjectTab::show_performance`], the CPU / RAM labels' tap) scrolls it into view with a 1.5 U margin
 //! ([`scroll_to`]).
 //!
 //! Hide and Lock, from the song's META@256 time spent and META@776 lock:
@@ -18,10 +20,11 @@
 //!   `Hidden`; if the song is also locked, those three rows go.
 //! - `Hide` shows when unlocked with a time spent ≥ 0, `Reset` when unlocked with a time spent > 0.
 //! - When locked, Title, Author and Online link stay but are read-only, the Online link row (label and field) hides
-//!   while the link is empty, and the `Lock metadata forever` button hides.
+//!   while the link is empty, and the `Lock metadata forever` button hides. The tag fields (#139: Album, Genre, Year,
+//!   Comment) lock as the link does.
 //! - `Open` shows whenever the link is non-empty, locked or not.
 
-use eframe::egui::{Align2, Id, Pos2, Rect, TextEdit, Ui, pos2, vec2};
+use eframe::egui::{Align2, Id, Rect, TextEdit, Ui, pos2, vec2};
 
 use super::{
     Circle, CircleStyle, MainMenuAction, PAD, circle_button, light_button, scroll, text_field,
@@ -29,7 +32,6 @@ use super::{
 use crate::metrics::FontSize;
 use crate::ui::UiCtx;
 use crate::ui::performance::{self, Performance};
-use crate::ui::popup::{self, PopupItem};
 use crate::ui::scroller::Scroller;
 use crate::ui::widgets::text_label as label;
 
@@ -47,14 +49,16 @@ const TEMPO_H: f32 = 0.8;
 /// Metadata: the label line over each field, and the field.
 const FIELD_LABEL_H: f32 = 0.75;
 const FIELD_H: f32 = 1.0;
-/// Performance: the header row, the block under it and how far it is in from the page's sides (on a page under
-/// [`WIDE_PAGE`], [`NARROW_INSET`]), the `Hide` and `Reset` discs (diameter 2 × 0.7 U), and the margin the block is
+/// `Write tags on export`'s row, as UPDATES' toggles.
+const TOGGLE_H: f32 = 1.5;
+/// How far the column is in from the page's sides (on a page under [`WIDE_PAGE`], [`NARROW_INSET`]). Performance: the
+/// header row, the block under it, the `Hide` and `Reset` discs (diameter 2 × 0.7 U), and the margin the block is
 /// scrolled into view with.
-const PERFORMANCE_HEADER_H: f32 = 1.3;
-const BLOCK_H: f32 = 5.0;
-const BLOCK_INSET: f32 = 2.0;
+const COLUMN_INSET: f32 = 2.0;
 const WIDE_PAGE: f32 = 20.0;
 const NARROW_INSET: f32 = 0.5;
+const PERFORMANCE_HEADER_H: f32 = 1.3;
+const BLOCK_H: f32 = 5.0;
 const BUTTON_D: f32 = 1.4;
 const SCROLL_MARGIN: f32 = 1.5;
 /// The dividers' alpha (`text`).
@@ -84,6 +88,12 @@ pub struct ProjectInfo {
     pub title: String,
     pub author: String,
     pub link: String,
+    /// #139: `Album:`, `Genre:`, `Year:` and `Comment:` (the song's `HDTg`), and the `Write tags on export` setting.
+    pub album: String,
+    pub genre: String,
+    pub year: String,
+    pub comment: String,
+    pub write_tags: bool,
     /// The song's META@776 lock (`Lock metadata forever` was confirmed): the texts are read-only, and `Hide`, `Reset`
     /// and the lock button are gone.
     pub metadata_locked: bool,
@@ -103,6 +113,11 @@ impl Default for ProjectInfo {
             title: String::new(),
             author: String::new(),
             link: String::new(),
+            album: String::new(),
+            genre: String::new(),
+            year: String::new(),
+            comment: String::new(),
+            write_tags: true,
             metadata_locked: false,
             performance: Performance::default(),
         }
@@ -268,8 +283,6 @@ pub(super) struct ProjectTab {
     content_h: f32,
     /// The Performance block is to be scrolled into view ([`Self::show_performance`]).
     scroll_to_performance: bool,
-    /// The `Samplerate:` dropdown is open, centred here.
-    rate_popup: Option<Pos2>,
 }
 
 impl ProjectTab {
@@ -325,10 +338,18 @@ impl ProjectTab {
         let outer_clip = ui.clip_rect();
         ui.set_clip_rect(outer_clip.intersect(area));
 
+        // The page is the panel: the content, 0.5 U in from it.
+        let page_w = area.width() + m.u(2.0 * PAD);
+        let inset = if page_w < m.u(WIDE_PAGE) {
+            NARROW_INSET
+        } else {
+            COLUMN_INSET
+        };
+        let column = area.shrink2(vec2(m.u(inset - PAD), 0.0));
         let top = area.top() - offset;
         let mut y = top;
         let mut band = |h: f32| {
-            let r = Rect::from_x_y_ranges(area.x_range(), y..=y + m.u(h));
+            let r = Rect::from_x_y_ranges(column.x_range(), y..=y + m.u(h));
             y += m.u(h);
             r
         };
@@ -363,7 +384,7 @@ impl ProjectTab {
             Align2::LEFT_CENTER,
             text,
         );
-        let value_x = area.left() + VALUE_X * area.width();
+        let value_x = column.left() + VALUE_X * column.width();
         let locked = info.metadata_locked;
         let (time, hidden) = (info.time_spent_secs, info.time_spent_secs < 0.0);
         let shown = |v: Option<String>| match hidden {
@@ -382,11 +403,6 @@ impl ProjectTab {
                 shown(info.last_saved_on.map(date)),
             ),
             ("Tempo:", String::new()),
-            (
-                "Samplerate:",
-                info.sample_rate
-                    .map_or_else(|| "-".into(), |r| format!("{} Hz", thousands(r.into()))),
-            ),
         ];
         // Hidden and locked: the three time rows go.
         let time_row = |name: &str| {
@@ -400,7 +416,6 @@ impl ProjectTab {
         let rows = rows
             .into_iter()
             .filter(|(name, _)| !(locked && hidden && time_row(name)));
-        let rate = info.sample_rate.unwrap_or(44_100);
         for (name, value) in rows {
             let row = band(INFO_ROW_H);
             let (left, right) = row.split_left_right_at_x(value_x);
@@ -413,17 +428,15 @@ impl ProjectTab {
                 Align2::LEFT_CENTER,
                 text,
             );
-            if name != "Samplerate:" {
-                label(
-                    ui,
-                    cx,
-                    right,
-                    &value,
-                    FontSize::Pt10,
-                    Align2::LEFT_CENTER,
-                    text,
-                );
-            }
+            label(
+                ui,
+                cx,
+                right,
+                &value,
+                FontSize::Pt10,
+                Align2::LEFT_CENTER,
+                text,
+            );
             match name {
                 "Time spent on project:" => {
                     let d = m.u(BUTTON_D);
@@ -449,12 +462,6 @@ impl ProjectTab {
                         if circle_button(ui, cx, &circle) {
                             action = Some(act);
                         }
-                    }
-                }
-                "Samplerate:" => {
-                    let caption = format!("{} Hz", thousands(rate.into()));
-                    if light_button(ui, cx, id.with("sample_rate"), right, &caption, true) {
-                        self.rate_popup = Some(right.center());
                     }
                 }
                 "Tempo:" => {
@@ -499,10 +506,15 @@ impl ProjectTab {
         for (name, value, limit) in [
             ("Title:", &mut info.title, TEXT_LIMIT),
             ("Author:", &mut info.author, TEXT_LIMIT),
+            ("Album:", &mut info.album, TEXT_LIMIT),
+            ("Genre:", &mut info.genre, TEXT_LIMIT),
+            ("Year:", &mut info.year, TEXT_LIMIT),
+            ("Comment:", &mut info.comment, TEXT_LIMIT),
             ("Online link:", &mut info.link, LINK_LIMIT),
         ] {
             let link = limit == LINK_LIMIT;
-            if link && locked && value.is_empty() {
+            // Locked, an empty field other than Title and Author goes.
+            if !matches!(name, "Title:" | "Author:") && locked && value.is_empty() {
                 continue;
             }
             let line = band(FIELD_LABEL_H);
@@ -542,6 +554,10 @@ impl ProjectTab {
             value.truncate(value.floor_char_boundary(limit));
             band(GAP);
         }
+        let tags = band(TOGGLE_H);
+        let name = "Write tags on export";
+        crate::ui::save_dialog::toggle(ui, cx, id, tags, name, &mut info.write_tags);
+        band(GAP);
         if !locked {
             let lock = band(BUTTON_H);
             let name = "Lock metadata forever";
@@ -559,7 +575,7 @@ impl ProjectTab {
         let gap = band(GAP);
         divider(ui, cx, gap);
 
-        // Performance: the header row, then the block 2 U in from the page's sides.
+        // Performance: the header row, then the block.
         let header = band(PERFORMANCE_HEADER_H);
         label(
             ui,
@@ -570,19 +586,10 @@ impl ProjectTab {
             Align2::LEFT_CENTER,
             text,
         );
-        // The page is the panel: the content, 0.5 U in from it.
-        let page_w = area.width() + m.u(2.0 * PAD);
-        let inset = if page_w < m.u(WIDE_PAGE) {
-            NARROW_INSET
-        } else {
-            BLOCK_INSET
-        };
-        let inset = m.u(inset - PAD);
-        let (left, right) = (area.left() + inset, area.right() - inset);
-        let row = band(BLOCK_H);
-        let block = Rect::from_min_max(pos2(left, row.top()), pos2(right, row.bottom()));
+        let block = band(BLOCK_H);
+        // The block draws a copy: `Clear` goes to the app's own counters (#124).
         if performance::show(ui, cx, block, &info.performance) {
-            info.performance.clear_counters();
+            action = Some(MainMenuAction::ClearPerformance);
         }
 
         self.content_h = y - top;
@@ -594,33 +601,6 @@ impl ProjectTab {
             ui.ctx().request_repaint();
         }
         ui.set_clip_rect(outer_clip);
-        // The `Samplerate:` dropdown, over everything.
-        if let Some(at) = self.rate_popup {
-            let items: Vec<PopupItem<u32>> = crate::song::SAMPLE_RATES
-                .iter()
-                .enumerate()
-                .map(|(i, &r)| PopupItem {
-                    current: r == rate,
-                    ..PopupItem::new(r, 0, i, format!("{} Hz", thousands(r.into())))
-                })
-                .collect();
-            let result = popup::show(
-                &ui.ctx().clone(),
-                id.with("sample_rate"),
-                at,
-                area,
-                &items,
-                cx,
-            );
-            if let Some(r) = result.selected
-                && r != info.sample_rate.unwrap_or(0)
-            {
-                action = Some(MainMenuAction::SetSampleRate(r));
-            }
-            if result.close {
-                self.rate_popup = None;
-            }
-        }
         action
     }
 }

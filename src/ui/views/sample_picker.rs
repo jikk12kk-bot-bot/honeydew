@@ -20,12 +20,15 @@
 //!   listed from code, rendered only when played) and imported content's (`3xOsc Shapes`, `Loop Samples`) when it
 //!   is there, its folders first at the root as every factory folder is. Ours list in index order (a factory folder
 //!   keeps it). The pick sets the module's `CSTM` `PATH`.
+//! - Issue #93: a Slicer's loop and a built-in Lemon plugin's sample
+//!   ([`show_module`]) preview each pick on the sample strip, as a pad's do, and the picker stays open; its close loads
+//!   the last pick.
 //!
 //! Every picker stays open after a pick, which applies once it is decoded and shows the sample strip, playing the file
 //! once on the preview player (not the channel); the X, a click outside or Escape closes it and keeps the last pick. A
-//! pad's or a clip's pick makes no undo step; the audio track's browse makes one, its clip. A module's sample
-//! ([`show_module`]) closes on a pick, as the 3x Osc's custom-sample pick does, with no strip: a final edit; the rack
-//! is not in its step, but a Slicer's AUTO clip is. Playing the sample in the song is the engine's: a slot with a path
+//! pad's or a clip's pick makes no undo step; the audio track's browse makes one, its clip. A 3x Osc's custom sample
+//! closes on a pick, with no strip; a module's sample loads, a final edit, on that close ([`show_module`]): the rack is
+//! not in its step, but a Slicer's AUTO clip is. Playing the sample in the song is the engine's: a slot with a path
 //! plays its file, whatever its folder.
 //!
 //! A pick decodes on the preset picker's worker ([`decode_pick`]), which reads the file from disk on the desktop (the
@@ -34,17 +37,18 @@
 //! follows decodes, renders and slices nothing. Meanwhile the picked row pulses `LOADING...` (as the preset picker's)
 //! and the strip shows the file's name only, its play button, waveform and progress label disabled or hidden; a new
 //! pick replaces the one decoding, whose result is dropped; a close waits for it, drawing nothing and taking every
-//! click (closing never reverts a pick), and so does a module's picker, which closes on its pick. On the web, which has
-//! no threads, the decode runs at the pick and lands in its own frame, as before.
+//! click (closing never reverts a pick), and so does a 3x Osc's custom-sample picker, which closes on its pick. On the
+//! web, which has no threads, the decode runs at the pick and lands in its own frame, as before.
 //!
 //! [`ProjectFiles::sample_library`]: crate::project_files::ProjectFiles::sample_library
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use eframe::egui;
 use honeydew_audio::device::AudioCommand;
-use honeydew_audio::sample::decode;
+use honeydew_audio::sample::{SampleData, decode};
 
 use super::preset_picker::{WORKER_LOST, block, outcome, spawn};
 use super::{AppCtx, Nav, drum_editor};
@@ -91,6 +95,8 @@ pub struct State {
     picked: Option<(PathBuf, Option<f32>)>,
     /// `Replace sample...`'s pick once its picker closed, for the app to confirm.
     pub(crate) replace: Option<Replace>,
+    /// A module's last pick that landed, which its picker's close loads ([`show_module`]).
+    last: Option<(PathBuf, Box<Decoded>)>,
 }
 
 /// `Replace sample...`'s pick ([`show_replace`]): the clip whose sample it replaces, the file and its tempo.
@@ -129,7 +135,7 @@ fn opening(state: &mut State, ui: &egui::Ui) -> bool {
     let pass = ui.ctx().cumulative_pass_nr();
     if state.pass + 1 != pass {
         state.picker = None;
-        (state.made, state.picked) = (None, None);
+        (state.made, state.picked, state.last) = (None, None, None);
         (state.loading, state.closing) = (None, false);
     }
     state.pass = pass;
@@ -259,14 +265,16 @@ enum Shown {
 /// [`ProjectFiles::sample_library`]: `Import` asks for a file, which it lists once it is in. A pick decodes on the
 /// worker (as a 3x Osc table with `shape`), with what it goes `into` (of the song, the file and the files) made ready
 /// there too, its row pulsing, and is [`Shown::Picked`] once it lands. With `strip`, it shows the sample strip, which
-/// plays it on the preview player ([`preview`]) once decoded; without (a module's sample), the picker closes on the
-/// pick, waiting for it.
+/// plays it on the preview player ([`preview`]) once decoded; without (a 3x Osc's custom sample), the picker closes on
+/// the pick, waiting for it. Each picker keeps its own place, by `which` ([`place`]): its first opening is at `start`
+/// (the sample it plays, its row in view), any later one where it was left.
 fn pick(
     state: &mut State,
     ui: &egui::Ui,
     app: &mut AppCtx,
     make: impl FnOnce(&ProjectFiles) -> PresetPicker,
     (strip, shape): (bool, bool),
+    (which, start): (egui::Id, Option<PathBuf>),
     into: impl FnOnce(&Song, &Path, &ProjectFiles) -> Option<PickFor>,
 ) -> Shown {
     let ctx = ui.ctx();
@@ -274,7 +282,16 @@ fn pick(
     let action = match state.closing {
         true => None,
         false => {
-            let picker = state.picker.get_or_insert_with(|| make(files));
+            // Issue #131: a fresh one opens where it was left; its first opening at its file.
+            let picker = state.picker.get_or_insert_with(|| {
+                let mut picker = make(files);
+                let library = files.sample_library();
+                if let Some(file) = start.as_ref().filter(|_| !PresetPicker::kept(ctx, which)) {
+                    picker.reveal(&*library, file);
+                }
+                picker.keep_place(ctx, &*library, which);
+                picker
+            });
             let changes = files.library_changes();
             if std::mem::replace(&mut state.changes, changes) != changes {
                 picker.reload();
@@ -305,7 +322,7 @@ fn pick(
             }
             state.loading = Some((path, done));
             if !strip {
-                // A module's sample closes on the pick, as the 3x Osc's custom-sample pick does.
+                // A 3x Osc's custom sample closes on the pick.
                 close_waiting(state, app.audio);
             }
         }
@@ -369,16 +386,37 @@ pub(super) fn show_strip(picker: &mut PresetPicker, path: &Path, wave: Option<Wa
 
 /// Sends what `picker`'s sample strip asks of the preview player.
 pub(super) fn preview(picker: &mut PresetPicker, audio: &mut AudioLink) {
-    for play in picker.take_plays() {
-        let sample = match play {
-            Play::From(from) => match picker.sample_data() {
-                Some(data) => Some((data, from)),
-                None => continue,
-            },
-            Play::Stop => None,
+    send_plays(picker.take_plays(), picker.sample_data(), audio);
+}
+
+/// Sends a sample strip's `plays` of its sample `data` to the preview player.
+pub(super) fn send_plays(plays: Vec<Play>, data: Option<Arc<SampleData>>, audio: &mut AudioLink) {
+    for play in plays {
+        let sample = match (play, &data) {
+            (Play::From(from), Some(data)) => Some((data.clone(), from)),
+            (Play::From(_), None) => continue,
+            (Play::Stop, _) => None,
         };
         audio.send(AudioCommand::Preview(sample));
     }
+}
+
+/// Decodes the audio file `path` on the worker for a sample strip alone (SONGS' preview, #106), as a pick decodes.
+pub(super) fn decode_file(files: &ProjectFiles, path: &Path) -> Receiver<Decoded> {
+    let (key, read) = (sample_key(files, path), pick_bytes(files, path));
+    spawn(move || decode_pick(key, read(), false, None))
+}
+
+/// The key a sample picker keeps its place by: each pad's, clip's, track's and module's its own (`what` names which,
+/// by the channel's id, which moves never change).
+fn place(what: impl std::hash::Hash) -> egui::Id {
+    egui::Id::new(TITLE).with("place").with(what)
+}
+
+/// The file a sampler slot plays, to open its picker at: a user or content file, or one of our own.
+fn slot_file(files: &ProjectFiles, slot: Option<&SamplerSlot>) -> Option<PathBuf> {
+    let path = slot?.file.path.as_ref()?;
+    files.resolve(path).or_else(|| factory_file(path))
 }
 
 /// The picker closes: its sample stops, and it is dropped, with a pick still decoding.
@@ -391,8 +429,9 @@ fn close(state: &mut State, audio: &mut AudioLink) {
     (state.loading, state.closing) = (None, false);
 }
 
-/// A fresh picker over the user folder, our bundled `Samples` and imported content's `Drum Samples` in `files`,
-/// with `Import` where `files` takes one ([`ProjectFiles::imports_audio`]): into `My Samples`.
+/// A fresh picker over the user folder (`My Samples` its default shortcut), our bundled `Samples` and imported
+/// content's `Drum Samples` in `files`, with `Import` where `files` takes one ([`ProjectFiles::imports_audio`]): into
+/// `My Samples`.
 pub(crate) fn picker(files: &ProjectFiles) -> PresetPicker {
     let user = files.user_dir().map(Path::to_owned);
     let ours = Path::new(ROOT).join(SAMPLES);
@@ -400,6 +439,7 @@ pub(crate) fn picker(files: &ProjectFiles) -> PresetPicker {
         .of_exts(&SAMPLE_EXTS)
         .with_factory(std::iter::once(ours).chain(files.content_folder(DRUM_SAMPLES)))
         .with_import(files.imports_audio())
+        .with_shortcuts([SAMPLES_FOLDER])
 }
 
 /// Draws the picker for `channel`'s pad `pad` (`None`: a new pad, which the first pick adds and later picks reload),
@@ -419,11 +459,12 @@ pub fn show(
     let mut start = None;
     if opening(state, ui) {
         state.kit = kit.cloned();
-        // A pad with a sample opens at its folder, its row in view; an empty pad at the root, and so does a built-in
-        // one-shot, which no folder lists.
-        let path = pad.and_then(|p| kit?.slots.get(usize::from(p))?.file.path.as_ref());
-        start = path.and_then(|p| app.files.resolve(p));
+        // A pad with a sample first opens at its folder, its row in view (a factory kit's pad picked from `Samples`
+        // too); an empty pad at the root, and so does a default-kit one-shot, which no folder lists.
+        let slot = pad.and_then(|p| kit?.slots.get(usize::from(p)));
+        start = slot_file(&*app.files, slot);
     }
+    let which = place(("pad", app.song.channels.get(channel).map(|c| c.id), *pad));
     if kit.is_none() || kit != state.kit.as_ref() {
         close(state, app.audio);
         return Some(Nav::Close);
@@ -435,14 +476,7 @@ pub fn show(
         let row = load_sample(&mut kit, at, path, files)?;
         Some(PickFor::Pad(kit.slots.swap_remove(row)))
     };
-    let make = |files: &ProjectFiles| {
-        let mut picker = picker(files);
-        if let Some(file) = &start {
-            picker.reveal(&*files.sample_library(), file);
-        }
-        picker
-    };
-    let (path, decoded) = match pick(state, ui, app, make, (true, false), slot) {
+    let (path, decoded) = match pick(state, ui, app, picker, (true, false), (which, start), slot) {
         Shown::Open => return None,
         Shown::Closed => return Some(Nav::Close),
         Shown::Picked(path, decoded) => (path, *decoded),
@@ -467,6 +501,15 @@ pub fn show(
     landed(state, app.audio)
 }
 
+/// The factory file a `@R@Built-in/<rel>` shorthand names, `<built-in>/<rel>` ([`content_path`]'s inverse), so a pick of
+/// ours reopens at its folder. `None` for any other path.
+fn factory_file(path: &ContentPath) -> Option<PathBuf> {
+    let relative = crate::project_files::built_in(path)?.replace('\\', "/");
+    let rel = relative.split_once('/')?.1;
+    let file = rel.split('/').fold(PathBuf::from(ROOT), |p, part| p.join(part));
+    (content_path(&file).as_ref() == Some(path)).then_some(file)
+}
+
 /// Draws the picker for the sampler slot of the audio clip `key` (the audio clip editor's sample row icon button), as
 /// [`show`] does for a pad, and gives the slot each pick ([`load_clip_sample`]) with the file's tempo as the decode
 /// reads it; a clip without a slot gets the default one first. No undo step. The X, a click outside, Escape, or the
@@ -478,15 +521,16 @@ pub fn show_clip(
     key: ClipKey,
 ) -> Option<Nav> {
     opening(state, ui);
-    if key.clip(app.song).is_none() {
+    let Some(clip) = key.clip(app.song) else {
         close(state, app.audio);
         return Some(Nav::Close);
-    }
+    };
+    let at = clip_place(app, key, clip.file.sample.as_deref());
     let slot = |song: &Song, path: &Path, files: &ProjectFiles| {
         let clip = key.clip(song)?;
         clip_pick(clip.file.sample.as_deref().cloned(), song, path, files)
     };
-    let (path, decoded) = match pick(state, ui, app, picker, (true, false), slot) {
+    let (path, decoded) = match pick(state, ui, app, picker, (true, false), at, slot) {
         Shown::Open => return None,
         Shown::Closed => return Some(Nav::Close),
         Shown::Picked(path, decoded) => (path, *decoded),
@@ -520,10 +564,11 @@ pub fn show_replace(
     key: ClipKey,
 ) -> Option<Nav> {
     opening(state, ui);
-    if key.clip(app.song).is_none() {
+    let Some(clip) = key.clip(app.song) else {
         close(state, app.audio);
         return Some(Nav::Close);
-    }
+    };
+    let at = clip_place(app, key, clip.file.sample.as_deref());
     let slot = |song: &Song, path: &Path, files: &ProjectFiles| {
         clip_pick(
             key.clip(song)?.file.sample.as_deref().cloned(),
@@ -532,7 +577,7 @@ pub fn show_replace(
             files,
         )
     };
-    let nav = match pick(state, ui, app, picker, (true, false), slot) {
+    let nav = match pick(state, ui, app, picker, (true, false), at, slot) {
         Shown::Open => return None,
         Shown::Closed => Some(Nav::Close),
         Shown::Picked(path, decoded) => {
@@ -648,7 +693,9 @@ pub fn show_track(
         let sample = clip.and_then(|c| c.file.sample.as_deref().cloned());
         clip_pick(sample, song, path, files)
     };
-    let (path, decoded) = match pick(state, ui, app, picker, (true, false), slot) {
+    let which = place(("track", app.song.channels.get(channel).map(|c| c.id), lane));
+    let at = (which, None);
+    let (path, decoded) = match pick(state, ui, app, picker, (true, false), at, slot) {
         Shown::Open => return None,
         Shown::Closed => return Some(Nav::Close),
         Shown::Picked(path, decoded) => (path, *decoded),
@@ -689,13 +736,17 @@ pub fn show_track(
 /// ([`load_pick`], as the preset picker's shape pick), one final song edit: a new engine, which plays it, and no undo
 /// step for the module (the rack is not covered by undo); a Slicer with its AUTO flag on also gets AUTO's clip, an undo
 /// step, into `held` (the channel's piano roll clip) first ([`write_auto_clip`]). `Import` keeps a file in `My Samples`
-/// and stays open, as [`show`]'s. A pick (once it lands), the X, a click outside, Escape, or the module being gone or
-/// now another type close it; only a pick changes the song (a cancelled `Custom` stays, silent without a file). A file
-/// that does not decode shows `Failed to load project file` with its error in the picker's place and changes nothing (a
-/// failure leaves the old table). The app re-keys `channel` when channels move.
+/// and stays open, as [`show`]'s. A 3x Osc's pick (once it lands), the X, a click outside, Escape, or the module being
+/// gone or now another type close it; only a pick changes the song (a cancelled `Custom` stays, silent without a file).
+/// A file that does not decode shows `Failed to load project file` with its error in the picker's place and changes
+/// nothing (a failure leaves the old table). The app re-keys `channel` when channels move.
 ///
 /// Issue #52: a built-in Lemon plugin's editor asks for its sample this way where there is no file dialog (Android, the
 /// browser): its pick or its close answers the editor ([`lemon_pick`]), which opens the file itself.
+///
+/// Issue #93: any other module's picker (a Slicer's, a Lemon plugin's) stays open, each pick playing
+/// once in the sample strip, as a pad's; its close (the X, a click outside, Escape) loads the last pick that landed, as
+/// above: one edit, and one undo step for the whole browse. The module going drops it.
 pub fn show_module(
     state: &mut State,
     ui: &mut egui::Ui,
@@ -713,21 +764,30 @@ pub fn show_module(
         return Some(Nav::Close);
     };
     let make = |files: &ProjectFiles| module_picker(files, type_id);
-    // It closes on a pick, as the 3x Osc's custom-sample pick does, so no sample strip: hidden, it waits for the pick
-    // to land.
+    // A 3x Osc's closes on a pick, so no sample strip: hidden, it waits for the pick to land. Any other previews its
+    // picks in the strip and loads the last one on its close.
     let shape = type_id == three_osc::TYPE_ID;
     let into = |song: &Song, path: &Path, files: &ProjectFiles| {
         slicer_pick(song.find_module(channel, module)?, path, files)
     };
-    let (path, decoded) = match pick(state, ui, app, make, (false, shape), into) {
+    let which = place(("module", app.song.channels.get(channel).map(|c| c.id), module));
+    let (path, decoded) = match pick(state, ui, app, make, (!shape, shape), (which, None), into) {
         Shown::Open => return None,
-        Shown::Closed => {
-            lemon_pick(app, channel, module, None);
-            return Some(Nav::Close);
+        Shown::Picked(path, decoded) if !state.closing => {
+            state.last = Some((path, decoded));
+            return None;
         }
         Shown::Picked(path, decoded) => (path, *decoded),
+        Shown::Closed => match state.last.take() {
+            Some((path, decoded)) => (path, *decoded),
+            None => {
+                lemon_pick(app, channel, module, None);
+                return Some(Nav::Close);
+            }
+        },
     };
     close(state, app.audio);
+    state.last = None;
     // ponytail: the picker decoded the pick for nothing here (the plugin decodes it again); skip that if it ever drags.
     if lemon_pick(app, channel, module, Some(&path)) {
         return Some(Nav::Close);
@@ -777,6 +837,17 @@ fn lemon_pick(app: &mut AppCtx, channel: usize, module: i32, path: Option<&Path>
     let answer = path.map(|p| os_plugkit::embed::Answer::Text(p.to_string_lossy().into_owned()));
     os_plugkit::embed::answer(editor as _, answer);
     true
+}
+
+/// Where the picker of the audio clip `key` (its sample `sample`) keeps its place, and its file to first open at.
+fn clip_place(
+    app: &AppCtx,
+    key: ClipKey,
+    sample: Option<&SamplerSlot>,
+) -> (egui::Id, Option<PathBuf>) {
+    let channel = app.song.channels.get(key.channel).map(|c| c.id);
+    let which = place(("clip", channel, key.lane, key.id));
+    (which, slot_file(&*app.files, sample))
 }
 
 /// A clip's or audio track's pick into its slot (`slot`, the default one when it has none): the slot takes the file
@@ -867,6 +938,7 @@ pub fn module_picker(files: &ProjectFiles, type_id: u16) -> PresetPicker {
         .of_exts(&SAMPLE_EXTS)
         .with_factory(factory)
         .with_import(files.imports_audio())
+        .with_shortcuts([SAMPLES_FOLDER])
 }
 
 /// The shorthand a module's `PATH` takes for the picked file `path`: our own `<built-in>/<rel>` is `@R@Built-in/<rel>`
@@ -1064,17 +1136,57 @@ mod tests {
             picker(files).names_in(&*files.sample_library(), path)
         };
         let files = ProjectFiles::on_disk(&tmp.0);
-        assert_eq!(names(&files, &[]), [MY_FILES]);
+        let kits = ["Dust Kit", "Foundry Kit", "Pocket Kit", "Relay Kit"];
+        assert_eq!(names(&files, &[]), [&[MY_FILES][..], &kits].concat());
         fake_tree(&tmp.0.join(CONTENT_FOLDER));
-        assert_eq!(names(&files, &[]), [MY_FILES, "Kick", "Snare"]);
+        let all = [&[MY_FILES][..], &kits, &["Kick", "Snare"]].concat();
+        assert_eq!(names(&files, &[]), all);
         assert_eq!(names(&files, &["Kick"]), ["Gen Kick"]);
-        assert_eq!(names(&files, &[MY_FILES]), ["My Recordings", "My Samples"]);
+        // `My Files` is the whole user folder: any folder of it, beside the samples' own folders.
+        std::fs::create_dir_all(tmp.0.join("Beats")).unwrap();
+        let mine = names(&files, &[MY_FILES]);
+        for folder in ["Beats", "My Recordings", "My Samples"] {
+            assert!(mine.iter().any(|n| n == folder), "{folder} in {mine:?}");
+        }
         let mut picked = picker(&files);
         picked.names_in(&*files.sample_library(), &["Snare"]);
         let path = picked.path_of("Gen Snare").unwrap();
         let mut kit = kit();
         assert_eq!(load_sample(&mut kit, Some(0), &path, &files), Some(0));
         assert_eq!(kit.slots[0].folder, "Drum Samples/Snare");
+    }
+
+    /// The drumsets' pads list one by one: the `+` add-drum pick of a factory kit's pad adds a pad that plays it, named
+    /// for its kit, and reopens at the kit's folder.
+    #[test]
+    fn the_root_lists_each_factory_kit_whose_pads_pick_alone() {
+        use crate::ui::preset_picker::MY_FILES;
+        // The web: no content folder.
+        let files = ProjectFiles::with_provider(Box::new(MemFiles::default()));
+        let names = |path: &[&str]| picker(&files).names_in(&*files.sample_library(), path);
+        let kits = ["Dust Kit", "Foundry Kit", "Pocket Kit", "Relay Kit"];
+        assert_eq!(names(&[]), [&[MY_FILES][..], &kits].concat());
+        let mut pocket = names(&["Pocket Kit"]);
+        pocket.sort();
+        assert_eq!(pocket, ["Clap", "Closed Hat", "Kick", "Snare"]);
+        let mut picked = picker(&files);
+        picked.names_in(&*files.sample_library(), &["Foundry Kit"]);
+        let path = picked.path_of("Hard Kick").unwrap();
+        let mut kit = kit();
+        let row = load_sample(&mut kit, None, &path, &files).unwrap();
+        let slot = &kit.slots[row];
+        let stored = ContentPath::Shorthand {
+            root: ContentRoot::App,
+            relative: "Built-in/Samples/Foundry Kit/Hard Kick.wav".into(),
+        };
+        assert_eq!(slot.file.path.as_ref(), Some(&stored));
+        assert_eq!(row_lines(slot), ("Foundry Kit", "Hard Kick"));
+        assert_eq!(factory_file(&stored), Some(path.clone()));
+        // It plays the kit's pad, rendered from code with no bytes.
+        let key = sample_key(&files, &path);
+        let decoded = decode_pick(key, Ok(Vec::new()), false, None);
+        let pad = honeydew_audio::builtin_drums::builtin("Built-in/Foundry/Hard Kick").unwrap();
+        assert_eq!(decoded.wave.map(|w| w.data.left.clone()), Some(pad.left));
     }
 
     /// The rows of a 3x Osc's sample picker over `files`, once the folders `path` are opened.

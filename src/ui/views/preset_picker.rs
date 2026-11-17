@@ -5,7 +5,8 @@
 //!   the add-channel `Rack` makes a new Rack channel of them, selected.
 //! - `Load Drumset` (the rack ≡ menu's, the drums track menu's and the drum row menu's, and a new Drums channel's): the
 //!   `Drumsets` picker over `My Drumsets`, `Default`, the built-in kit ([`DrumKit::default_kit`]), and our factory
-//!   kits; a drum kit template replaces the channel's kit.
+//!   kits; a drum kit template replaces the channel's kit. The picker stays open and the audition strip plays the
+//!   kit's pads (#88).
 //! - `ChordSet`: the chord set picker, titled `Chord Sets`, over `My Chord Sets`, `Default` (the built-in `Major` set,
 //!   [`KeyboardState::default`]), our eight sets and the content folder's `Chord Sets`. A pick is parsed
 //!   ([`ChordSet::parse`]) and stored as its normalised JSON, under the file's name, in the song's `KEYB`: one undo
@@ -34,6 +35,12 @@
 //! content folder, else `@L@`) and named, `PRST` included, relative to the root it is in
 //! ([`ProjectFiles::name_module`]).
 //!
+//! A Honeydew addition (#109): every picker's `My Files` is the whole user folder, as the Instruments picker's (only
+//! the files it loads listed), with the folders its files are saved in as default shortcuts ([`crate::ui::shortcuts`]).
+//! A module's picker first opens at the module's file: the DW Sampler's at the user sample (or program) it plays,
+//! picked, else in `My Samples`, where its `Import` keeps a file ([`dw_start`]); any other's at its preset
+//! ([`start_at`]). Later it opens where that module's picker was left.
+//!
 //! The Modules browser's `Instrument` and `Rack Preset` show their lists in the browser's panel
 //! ([`PresetPicker::in_modules`]), Back at their root going back to it ([`State::back_to_modules`]):
 //! - `Instrument` ([`PresetTarget::ModulesInstrument`]): the Instruments picker's content. A pick adds a module of the
@@ -54,15 +61,16 @@
 //! first picks `Close Grand` where the content has it, else our bundled grand piano ([`close_grand`]), as a tap would.
 //!
 //! A load is a final song edit with a new engine: a module's or a rack's preset makes no undo step (the rack and
-//! presets are not covered by undo), a new Rack channel, a drum kit or a chord set one. A module's preset button and a
-//! rack preset opened from the rack keep the picker open after a pick; the others close it ([`stays_open`]). A preset
+//! presets are not covered by undo), a new Rack channel, a drum kit or a chord set one. A module's preset button, a
+//! rack preset opened from the rack and a drum kit keep the picker open after a pick; the others close it
+//! ([`stays_open`]). A preset
 //! that cannot be read or does not fit leaves the song as it was and shows `Failed to load project file`; skipped
 //! modules show `Skipped N incompatible module(s)`. A rack preset with no modules, or a kit with no pads, loads
 //! nothing.
 //!
 //! A module's picker lists its legacy presets too: MiniSynth's `.flms`, GMSynth's `.flgsynth`, 3x Osc's `.fst`
-//! ([`preset_exts`]). The SoundFont Player's lists `.sf2` files, which its own loader takes: its `My SoundFonts` beside
-//! `My Files` ([`PresetPicker::with_root`]) and the content folder's `SoundFonts` as a factory folder. A pick sets the
+//! ([`preset_exts`]). The SoundFont Player's lists `.sf2` files, which its own loader takes: in `My Files` (its
+//! `My SoundFonts` shortcut, [`crate::ui::shortcuts`]) and the content folder's `SoundFonts` as a factory folder. A pick sets the
 //! module's `SF2D` to the file at patch 0 ([`load_pick`]), names the module for it and tells the rack its patches, one
 //! final edit; the patch is picked from the card's patch menu. A file that is no SoundFont shows
 //! `Failed to load project file` with the SoundFont's own error and changes nothing. Every picker offers the file
@@ -79,17 +87,19 @@ use eframe::egui;
 use honeydew_audio::device::AudioCommand;
 
 use super::{AppCtx, Nav, Overlay, rack, sample_picker};
+use crate::audio_engine::samples::dw_program;
 use crate::audio_engine::slicer::write_auto_clip;
 use crate::audio_link::AudioLink;
 use crate::content;
-use crate::flm::chunk::ContentPath;
+use crate::flm::chunk::{ContentPath, ContentRoot};
+use crate::flm::sf2d::Sf2d;
 use crate::panels::cstm::{clear_dw_program, load_dw_program, pick_dw_program};
 use crate::params::{Role, module_spec};
 use crate::project_files::{
-    CHORD_SETS_FOLDER, CHORDS_EXT, DRUM_TEMPLATES, DRUMSET_EXT, DRUMSETS_FOLDER, DWP_EXT, FST_EXT,
+    CHORD_SETS_FOLDER, CHORDS_EXT, DRUM_TEMPLATES, DRUMSET_EXT, DRUMSETS_FOLDER, FST_EXT,
     INSTRUMENTS_FOLDER, LOAD_FAILED, PRESET_EXT, PRESETS_FOLDER, ProjectFiles, RACK_EXT,
-    RACK_PRESETS, RACKS_FOLDER, SAMPLE_EXTS, SFZ_EXT, SOUNDFONT_EXTS, SOUNDFONTS_FOLDER, is_audio,
-    is_sfz, is_soundfont, load_pick, preset_exts, preset_folder,
+    RACK_PRESETS, RACKS_FOLDER, SAMPLE_EXTS, SAMPLES_FOLDER, SF2_EXT, SOUNDFONT_EXTS,
+    SOUNDFONTS_FOLDER, is_audio, is_sfz, is_soundfont, load_pick, preset_exts, preset_folder,
 };
 use crate::sample_cache::{
     Locator, SampleCache, Waveform, WorkerReader, disk_locator, disk_reader, reader,
@@ -98,16 +108,18 @@ use crate::sf2::Preset;
 use crate::song::Rack;
 use crate::song::chords::ChordSet;
 use crate::song::{ChannelKind, DrumKit, KeyboardState, ModuleInstance};
+use crate::ui::drums::PAD_COUNT;
 use crate::ui::modules_browser::{InsertAt, add_module};
 use crate::ui::picker_preview::Sound;
 use crate::ui::preset_picker::categories;
 use crate::ui::preset_picker::{
-    CHORD_SETS_TITLE, DRUMSET_TITLE, INSTRUMENTS_TITLE, PickerAction, PresetPicker, RACK_TITLE,
+    CHORD_SETS_TITLE, DRUMSET_TITLE, INSTRUMENTS_TITLE, PickerAction, Place, PresetPicker, RACK_TITLE,
 };
 use crate::ui::rack::{
     Held, Outcome, PresetTarget, hold_removal, load_rack_into, module_name,
     name_instrument_channel, name_song_channel, takes_instruments,
 };
+use crate::ui::soundfont_picker;
 
 /// The tag of the picker's messages, which only have `OK`.
 pub const TAG: &str = "preset_picker";
@@ -118,9 +130,14 @@ pub const PRESET_FAILED: &str = "Failed to load preset";
 /// The title of the Modules browser's rack preset list.
 pub const CHANNEL_RACKS: &str = "Channel Racks";
 
-/// The open picker. It starts afresh on each opening, however it was last closed: at its root, with the slide-in.
+/// The open picker. It starts afresh on each opening, however it was last closed, with the slide-in; but in the folder
+/// and at the scroll its last opening left (each module's own, each channel's drum kits and racks, the Instruments
+/// picker's...), as the Modules browser opens where it was left ([`State::places`]). A module's first opening is at its
+/// own file ([`start_at`]).
 #[derive(Default)]
 pub struct State {
+    /// Where each picker was left, by [`place_key`]: the next opening of it starts there.
+    places: std::collections::HashMap<String, Place>,
     picker: Option<PresetPicker>,
     /// The egui pass it was last drawn in: a gap means it was closed in between.
     pass: u64,
@@ -146,10 +163,13 @@ pub struct State {
     grand_download: Option<(PathBuf, content::web::Ticket)>,
     /// The web: the [`load_close_grand`]s waiting for theirs, by channel id and module id.
     grand_downloads: Vec<(i32, i32, (PathBuf, content::web::Ticket))>,
-    /// The module the last pick in the Modules browser's Instruments list added, by instance id: the next replaces it.
-    added: Option<i32>,
+    /// The module the last pick of a Modules browser's browse added (in its Instruments list, or in the browser itself:
+    /// issue #123), by instance id: the next pick of either replaces it. The browser's opening clears it.
+    pub(crate) added: Option<i32>,
     /// A list in the Modules browser's place went Back to it: the browser opens again in place, with no slide-in.
     pub(crate) back_to_modules: bool,
+    /// Issue #98: the cards' ◀ / ▶ loading on a worker ([`step_preset`]).
+    steps: Vec<Loading>,
 }
 
 impl State {
@@ -385,8 +405,8 @@ pub(super) fn spawn<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static)
 }
 
 /// Whether a pick in `target`'s picker keeps it open: a module's presets (its preset button), a rack preset opened
-/// from the rack and the Instruments do; the drumsets, the chord sets and a new Rack channel's preset (the playlist's)
-/// close on a pick.
+/// from the rack, the Instruments and (#88) the drumsets do; the chord sets and a
+/// new Rack channel's preset (the playlist's) close on a pick.
 fn stays_open(target: PresetTarget) -> bool {
     matches!(
         target,
@@ -395,6 +415,7 @@ fn stays_open(target: PresetTarget) -> bool {
             | PresetTarget::ModulesRack(_)
             | PresetTarget::Instruments
             | PresetTarget::ModulesInstrument(_)
+            | PresetTarget::Drumset
     )
 }
 
@@ -439,13 +460,19 @@ pub fn show(
         close(state, app, channel);
         return Some(Nav::Close);
     };
+    // A plugin module's picker is its plugin's: its presets' folder ([`crate::plugins::presets::folder`]).
+    let plugin = match target {
+        PresetTarget::Module(id) => (app.song.find_module(channel, id))
+            .and_then(|m| m.file.plugin.as_deref())
+            .map(crate::plugins::presets::folder),
+        _ => None,
+    };
     let pass = ui.ctx().cumulative_pass_nr();
     if state.pass + 1 != pass {
         state.picker = None;
         state.loading = None;
         state.closing = false;
         state.grand_download = None;
-        state.added = None;
     }
     // Its module is now another type (as a card's panel state keys by type): what it lists is not for that one.
     if state
@@ -477,9 +504,14 @@ pub fn show(
     if target != PresetTarget::Instruments {
         state.grand_download = None;
     }
+    let key = place_key(target, module_type, plugin.as_deref(), channel_id);
     if let Some(path) = content::web::picked(&mut state.grand_download, grand) {
         let files = &*app.files;
-        (state.picker).get_or_insert_with(|| picker(files, target, module_type));
+        let places = &state.places;
+        (state.picker).get_or_insert_with(|| {
+            let picker = picker_for(files, target, module_type, plugin.as_deref());
+            remembered(places, picker, &key)
+        });
         let bytes = app.files.preset_library(&categories::EXTS).read(&path);
         let before = app.song.channels.get(channel).map(|c| c.rack.clone());
         let nav = pick_instrument(state, app, ui.ctx(), channel, path, bytes, held);
@@ -531,15 +563,39 @@ pub fn show(
     }
     // The automatic Close Grand's download pulses too.
     let loading = state.loading.is_some() || state.grand_download.is_some();
-    let (exts, top) = (exts(target, module_type), top(target, module_type));
+    let exts = exts(target, module_type);
     let files = &*app.files;
-    let picker = (state.picker).get_or_insert_with(|| picker(files, target, module_type));
+    // Its first opening (nothing remembered for it yet) is at its module's own file ([`start_at`]).
+    let first = state.picker.is_none() && !state.places.contains_key(&key);
+    let places = &state.places;
+    let picker = (state.picker).get_or_insert_with(|| {
+        let picker = picker_for(files, target, module_type, plugin.as_deref());
+        remembered(places, picker, &key)
+    });
+    let open_at = match (first, target) {
+        (true, PresetTarget::Module(id)) => {
+            (app.song.find_module(channel, id)).map_or_else(Vec::new, |m| start_at(files, m))
+        }
+        _ => Vec::new(),
+    };
     if std::mem::replace(&mut state.changes, files.library_changes()) != files.library_changes() {
         picker.reload();
     }
     picker.set_loading(loading);
+    // An instrument's pick (not the Slicer's) auditions once its load call returns.
+    let instrument = module_type
+        .filter(|&t| t != SLICER)
+        .is_some_and(|t| module_spec(t).is_some_and(|s| s.role == Role::Instrument));
     let (ctx, cx) = (ui.ctx(), &app.cx);
-    let shown = app.files.with_preset_files(top, exts, |library| {
+    let shown = app.files.with_preset_files("", exts, |library| {
+        // A fresh picker opens where it was left (`state.places`); its first opening at the module's own file or
+        // folder (#109): the first of them there.
+        let start = open_at.iter().find(|(path, file)| !*file || library.exists(path));
+        match start {
+            Some((file, true)) => picker.reveal(library, file),
+            Some((folder, false)) => picker.open_to(library, folder),
+            None => {}
+        }
         let action = picker.show_mut(ctx, cx, library)?;
         let bytes = match &action {
             PickerAction::Pick(path) => Some(library.read(path)),
@@ -547,6 +603,8 @@ pub fn show(
         };
         Some((action, bytes))
     });
+    // Where it is, for its next opening: kept as it draws, so any close keeps it.
+    state.places.insert(key, picker.place());
     // The file actions may have moved or deleted the song's file or folder (the Instruments picker lists `My Songs`).
     for (from, to) in picker.take_moves() {
         app.files.path_moved(app.song, &from, to.as_deref());
@@ -557,7 +615,13 @@ pub fn show(
         return None;
     };
     if action == PickerAction::Import {
-        if let Some(dir) = module_type.and_then(|t| import_dir(app.files, t)) {
+        if let Some(folder) = &plugin {
+            // A plugin module's: a plugin preset, kept in `My Presets/<plugin>`.
+            if let Some(user) = app.files.user_dir() {
+                let dir = user.join(PRESETS_FOLDER).join(folder);
+                app.files.import_plugin_preset(dir);
+            }
+        } else if let Some(dir) = module_type.and_then(|t| import_dir(app.files, t)) {
             app.files.import_audio(dir);
         }
         return None;
@@ -600,11 +664,9 @@ pub fn show(
         .retain(|l| target != PresetTarget::Module(l.id) || channel_id != Some(l.channel_id));
     (state.grand_downloads)
         .retain(|&(ch, id, _)| target != PresetTarget::Module(id) || channel_id != Some(ch));
+    (state.steps)
+        .retain(|l| target != PresetTarget::Module(l.id) || channel_id != Some(l.channel_id));
     let on_worker = module_type.filter(|t| ON_WORKER.contains(t));
-    // An instrument's pick (not the Slicer's) auditions once its load call returns.
-    let instrument = module_type
-        .filter(|&t| t != SLICER)
-        .is_some_and(|t| module_spec(t).is_some_and(|s| s.role == Role::Instrument));
     let (action, bytes) = match (target, action, bytes, on_worker) {
         (PresetTarget::Module(id), PickerAction::Pick(path), Some(Ok(bytes)), Some(type_id))
             if worker_loads(type_id, &path) =>
@@ -669,12 +731,19 @@ pub fn show(
                 (modules.iter())
                     .any(|m| module_spec(m.type_id).is_some_and(|s| s.role == Role::Instrument))
             };
+            // A plugin effect's preset auditions the instrument before it, as a rack preset does.
             let audition = match target {
+                PresetTarget::Module(_) if plugin.is_some() && !instrument => rack_instrument(),
                 PresetTarget::Module(_) => instrument,
                 _ => rack_instrument(),
             };
             if audition {
                 picker.audition_on();
+            }
+            // A kit auditions its pads, across the row in pad order (#88).
+            let kit = (app.song.channels.get(channel)).and_then(|c| c.drum_kit.as_ref());
+            if let (PresetTarget::Drumset, Some(kit)) = (target, kit) {
+                picker.audition_pads((0..PAD_COUNT).filter_map(|p| kit.pad_note(p)).collect());
             }
             sample_picker::preview(picker, app.audio);
             None
@@ -938,6 +1007,19 @@ pub(crate) fn land_close_grands(
             None => (state.grand_downloads).extend(download.map(|d| (channel_id, id, d))),
         }
     }
+    // Issue #98: a card's ◀ / ▶ lands as its pick would; one that fails flashes.
+    for loading in std::mem::take(&mut state.steps) {
+        let channel = (app.song.channels.iter()).position(|c| c.id == loading.channel_id);
+        match (channel, loading.done.try_recv()) {
+            (Some(_), Err(TryRecvError::Empty)) => state.steps.push(loading),
+            (Some(channel), Ok(done)) => {
+                if finish(app, rack, channel, loading, done, None).is_err() {
+                    app.files.flash(PRESET_FAILED);
+                }
+            }
+            _ => {}
+        }
+    }
     for loading in std::mem::take(&mut state.close_grands) {
         let channels = &app.song.channels;
         let channel = channels.iter().position(|c| c.id == loading.channel_id);
@@ -966,8 +1048,107 @@ pub(crate) fn land_close_grands(
             }
         }
     }
-    if !state.close_grands.is_empty() {
+    if !state.close_grands.is_empty() || !state.steps.is_empty() {
         ctx.request_repaint();
+    }
+}
+
+/// Issue #98 (Honeydew addition): a card's ◀ or ▶ (`by` −1 or 1) on module `id` of the channel with id `channel_id`
+/// loads the previous or next preset of the folder its preset file is in, as the module's picker lists them
+/// ([`PresetPicker::step`]); that file is its preset path in our factory, the content folder or the user folder. It
+/// loads as a pick of it in that picker does: at once ([`load_module`]), or on a worker where that one would, landing
+/// whatever is open ([`land_close_grands`]), a later step on the module replacing it. No undo step, as for a pick: the
+/// rack and presets are not covered by undo. A file that cannot be read or loaded flashes [`PRESET_FAILED`].
+pub(crate) fn step_preset(
+    state: &mut State,
+    app: &mut AppCtx,
+    (channel_id, id, by): (i32, i32, i32),
+) {
+    let Some(channel) = (app.song.channels.iter()).position(|c| c.id == channel_id) else {
+        return;
+    };
+    let Some(module) = app.song.find_module(channel, id) else {
+        return;
+    };
+    let (type_id, target) = (module.type_id, PresetTarget::Module(id));
+    if type_id == SOUNDFONT_PLAYER {
+        return step_soundfont(app, channel, id, by);
+    }
+    let file = Path::new(&module.file.preset_path);
+    let roots = [
+        Some(PathBuf::from(content::ROOT)),
+        app.files.content_dir(),
+        app.files.user_dir().map(Path::to_owned),
+    ];
+    // `Default` has no preset path, so no file.
+    let files: Vec<_> = (roots.into_iter().flatten())
+        .filter(|_| !file.as_os_str().is_empty())
+        .map(|root| root.join(file))
+        .collect();
+    let mut picker = picker(app.files, target, Some(type_id));
+    let exts = exts(target, Some(type_id));
+    let next = app.files.with_preset_files("", exts, |library| {
+        let current = files.into_iter().find(|f| library.exists(f));
+        let path = picker.step(library, current.as_deref(), by)?;
+        Some((library.read(&path), path))
+    });
+    let (bytes, path) = match next {
+        Some((Ok(bytes), path)) => (bytes, path),
+        Some((Err(_), _)) => {
+            app.files.flash(PRESET_FAILED);
+            return;
+        }
+        None => return,
+    };
+    state
+        .steps
+        .retain(|l| (l.channel_id, l.id) != (channel_id, id));
+    if ON_WORKER.contains(&type_id) && worker_loads(type_id, &path) {
+        let module = app.song.find_module(channel, id);
+        let into = module.and_then(|m| sample_picker::slicer_pick(m, &path, app.files));
+        let loading = start(app.files, channel_id, id, type_id, path, bytes, into);
+        state.steps.push(loading);
+    } else if load_module(app, channel, id, Some((&path, &bytes)), None).is_err() {
+        app.files.flash(PRESET_FAILED);
+    }
+}
+
+/// Issue #120: the SoundFont Player's ◀ / ▶ (`by` −1 or 1) on module `id` load the previous or next
+/// SoundFont file (`.sf2`, `.sfz`) of the folder the one it plays is in, round and round, as the SoundFont picker lists
+/// them (its user files by name, the content folder's in index order: [`PresetPicker::step`]); with none, nothing.
+/// Each loads as a pick of it does ([`load_module`]: its `SF2D` at patch 0, the module and channel named for it, no undo
+/// step), unread: the rack reads its patches, and shows the error of one that does not read, as for a SoundFont picker
+/// pick of it, so the arrows never stick on it.
+fn step_soundfont(app: &mut AppCtx, channel: usize, id: i32, by: i32) {
+    let module = app.song.find_module(channel, id);
+    let Some(sf2d) = module.and_then(|m| Sf2d::read(m.file.custom_data.as_deref()?)) else {
+        return;
+    };
+    let Some(file) = app.files.library_path(&sf2d.path) else {
+        return;
+    };
+    let content = matches!(
+        sf2d.path,
+        ContentPath::Shorthand {
+            root: ContentRoot::App,
+            ..
+        }
+    );
+    let folder = file.parent().map(Path::to_owned);
+    let mine = folder.clone().filter(|_| !content);
+    let mut picker = PresetPicker::new(soundfont_picker::TITLE, mine, SF2_EXT, false)
+        .of_exts(&SOUNDFONT_EXTS)
+        .with_factory(folder.filter(|_| content));
+    let library = app.files.preset_library(&SOUNDFONT_EXTS);
+    let next = picker.step(&*library, Some(file.as_path()), by);
+    drop(library);
+    let Some(next) = next else {
+        return;
+    };
+    // A new pick tries the SoundFonts missing before again.
+    app.audio.samples.forget_missing();
+    if load_module(app, channel, id, Some((next.as_path(), &[])), None).is_err() {
+        app.files.flash(PRESET_FAILED);
     }
 }
 
@@ -1180,6 +1361,49 @@ fn finish(
     Ok(0)
 }
 
+/// Where a module's picker first opens, the first of these the library has ([`State`]): a DW Sampler's sample or program
+/// ([`dw_start`]); any other module's preset file, by its preset path in our factory, the content folder or the user
+/// folder. Each with whether it is a file to pick (its folder open, its row in view); none for `Default`.
+fn start_at(files: &ProjectFiles, module: &ModuleInstance) -> Vec<(PathBuf, bool)> {
+    if module.type_id == DW {
+        return dw_start(files, module).into_iter().collect();
+    }
+    let file = Path::new(&module.file.preset_path);
+    if file.as_os_str().is_empty() {
+        return Vec::new();
+    }
+    let roots = [
+        Some(PathBuf::from(content::ROOT)),
+        files.content_dir(),
+        files.user_dir().map(Path::to_owned),
+    ];
+    (roots.into_iter().flatten())
+        .map(|root| (root.join(file), true))
+        .collect()
+}
+
+/// Where a DW Sampler's picker opens (#109: its sample name is the quick way to swap its sample),
+/// with whether it is a file to pick: the sample or program it plays from the user folder, its folder open and its row
+/// in view; else `My Samples`.
+fn dw_start(files: &ProjectFiles, module: &ModuleInstance) -> Option<(PathBuf, bool)> {
+    let user = |p: &ContentPath| {
+        matches!(
+            p,
+            ContentPath::Shorthand {
+                root: ContentRoot::User,
+                ..
+            }
+        )
+    };
+    match dw_program(module)
+        .filter(user)
+        .and_then(|p| files.resolve(&p))
+    {
+        Some(file) => Some((file, true)),
+        None => Some((files.user_dir()?.join(SAMPLES_FOLDER), false)),
+    }
+}
+
 /// The file types the picker for `target` lists: a module's (`module_type`), drum kits or rack presets.
 fn exts(target: PresetTarget, module_type: Option<u16>) -> &'static [&'static str] {
     match (target, module_type) {
@@ -1188,18 +1412,6 @@ fn exts(target: PresetTarget, module_type: Option<u16>) -> &'static [&'static st
         (PresetTarget::ChordSet, _) => &[CHORDS_EXT],
         (_, Some(t)) => preset_exts(t),
         _ => &[RACK_EXT],
-    }
-}
-
-/// The user folder's folder that holds the files of the picker for `target` (a module of type `module_type`, drum kits
-/// or rack presets); the Instruments picker's is the whole user folder (`""`).
-fn top(target: PresetTarget, module_type: Option<u16>) -> &'static str {
-    match (target, module_type) {
-        (PresetTarget::Instruments | PresetTarget::ModulesInstrument(_), _) => "",
-        (PresetTarget::Drumset, _) => DRUMSETS_FOLDER,
-        (PresetTarget::ChordSet, _) => CHORD_SETS_FOLDER,
-        (_, Some(_)) => PRESETS_FOLDER,
-        _ => RACKS_FOLDER,
     }
 }
 
@@ -1216,73 +1428,112 @@ fn built_in_folder(target: PresetTarget, module_type: Option<u16>) -> Option<Pat
     Some(Path::new(content::ROOT).join(folder))
 }
 
-/// A fresh picker for `target` (a module of type `module_type`, a drum kit or a rack), over the user's folder, our own
-/// bank ([`built_in_folder`]) and the factory folders in `files`.
+/// A fresh picker for `target` (a module of type `module_type`, a drum kit or a rack), over the whole user folder
+/// (`My Files`, as the DW Sampler's, #109), our own bank ([`built_in_folder`]) and the factory folders in `files`, with
+/// the folder its files are saved in as its default shortcut ([`crate::ui::shortcuts`]): a module's `My Presets/<module>` (the DW
+/// Sampler's `My Instruments` too, the SoundFont Player's `My SoundFonts`), `My Drumsets`, `My Chord Sets`, `My Racks`.
 fn picker(files: &ProjectFiles, target: PresetTarget, module_type: Option<u16>) -> PresetPicker {
     let exts = exts(target, module_type);
     let ours = built_in_folder(target, module_type);
+    let user = files.user_dir().map(Path::to_owned);
     let picker = match (target, module_type) {
         (PresetTarget::Instruments | PresetTarget::ModulesInstrument(_), _) => {
             let index = categories::index(&*files.preset_library(exts), &instrument_sources(files));
-            PresetPicker::new(
-                INSTRUMENTS_TITLE,
-                files.user_dir().map(Path::to_owned),
-                exts[0],
-                false,
-            )
-            .of_exts(exts)
-            .instruments(index)
+            PresetPicker::new(INSTRUMENTS_TITLE, user, exts[0], false)
+                .of_exts(exts)
+                .instruments(index)
+                .with_shortcuts([PRESETS_FOLDER, INSTRUMENTS_FOLDER])
         }
         (_, Some(t)) => {
-            // `My Files` is the whole user folder, as the Instruments picker's is: `My Presets/<module>` and the
-            // other `My …` folders are folders in it.
-            let picker = PresetPicker::new(
-                module_name(t),
-                files.user_dir().map(Path::to_owned),
-                exts[0],
-                true,
-            )
-            .of_exts(exts)
-            .of_type(t)
-            .with_factory(ours.into_iter().chain(files.factory_presets(t)))
-            .with_import(import_dir(files, t).is_some());
-            // The SoundFont Player's `.sf2` files are in `My SoundFonts`, beside `My Files`; the DW Sampler's programs
-            // (`.dwp`, `.sfz`) in `My Instruments`, where archives and the instrument builder put them.
-            match t {
-                SOUNDFONT_PLAYER => {
-                    picker.with_root(SOUNDFONTS_FOLDER, files.soundfonts_dir(), &SOUNDFONT_EXTS)
-                }
-                DW => {
-                    let dir = files.user_dir().map(|u| u.join(INSTRUMENTS_FOLDER));
-                    picker.with_root(INSTRUMENTS_FOLDER, dir, &[DWP_EXT, SFZ_EXT])
-                }
-                _ => picker,
-            }
+            // The DW Sampler's programs (`.dwp`, `.sfz`) are in `My Instruments`, where archives and the instrument
+            // builder put them; the SoundFont Player's `.sf2` files in `My SoundFonts`.
+            let own = preset_folder(t).map(|f| format!("{PRESETS_FOLDER}/{f}"));
+            let more = match t {
+                DW => Some(INSTRUMENTS_FOLDER),
+                SOUNDFONT_PLAYER => Some(SOUNDFONTS_FOLDER),
+                _ => None,
+            };
+            PresetPicker::new(module_name(t), user, exts[0], true)
+                .of_exts(exts)
+                .of_type(t)
+                .with_factory(ours.into_iter().chain(files.factory_presets(t)))
+                .with_import(import_dir(files, t).is_some())
+                .with_shortcuts(own.into_iter().chain(more.map(str::to_owned)))
         }
-        (PresetTarget::Drumset, _) => {
-            PresetPicker::new(DRUMSET_TITLE, files.drumsets_dir(), exts[0], true)
-                .with_factory(ours.into_iter().chain(files.content_folder(DRUM_TEMPLATES)))
-        }
+        (PresetTarget::Drumset, _) => PresetPicker::new(DRUMSET_TITLE, user, exts[0], true)
+            .with_factory(ours.into_iter().chain(files.content_folder(DRUM_TEMPLATES)))
+            .with_shortcuts([DRUMSETS_FOLDER]),
         // The content folder's `Chord Sets` is named as our factory folder is.
-        (PresetTarget::ChordSet, _) => {
-            PresetPicker::new(CHORD_SETS_TITLE, files.chord_sets_dir(), exts[0], true).with_factory(
-                ours.into_iter()
-                    .chain(files.content_folder(content::CHORD_SETS)),
-            )
-        }
+        (PresetTarget::ChordSet, _) => PresetPicker::new(CHORD_SETS_TITLE, user, exts[0], true)
+            .with_factory(ours.into_iter().chain(files.content_folder(content::CHORD_SETS)))
+            .with_shortcuts([CHORD_SETS_FOLDER]),
         _ => {
             let title = match target {
                 PresetTarget::ModulesRack(_) => CHANNEL_RACKS,
                 _ => RACK_TITLE,
             };
-            PresetPicker::new(title, files.racks_dir(), exts[0], false)
+            PresetPicker::new(title, user, exts[0], false)
                 .with_factory(files.content_folder(RACK_PRESETS))
+                .with_shortcuts([RACKS_FOLDER])
         }
     };
     match in_modules(target) {
         Some(_) => picker.in_modules(),
         None => picker,
     }
+}
+
+/// The key of a picker's [`Place`] in [`State::places`]: what it lists (the target's kind, the module type, the
+/// plugin) and which one it is: a module's picker per module (`Module`'s instance id, on the channel with id
+/// `channel_id`), `Load Drumset`'s and `Load Rack preset`'s per channel. Two SuperSaws keep their own places.
+fn place_key(
+    target: PresetTarget,
+    module_type: Option<u16>,
+    plugin: Option<&str>,
+    channel_id: Option<i32>,
+) -> String {
+    let kind = format!("{target:?}");
+    let kind = kind.split('(').next().unwrap_or_default();
+    let which = match target {
+        PresetTarget::Module(id) => format!("{channel_id:?}/{id}"),
+        PresetTarget::RackReplace | PresetTarget::Drumset => format!("{channel_id:?}"),
+        _ => String::new(),
+    };
+    format!("{kind}/{module_type:?}/{plugin:?}/{which}")
+}
+
+/// `picker` opening where it was left, by its [`place_key`] `key`.
+fn remembered(
+    places: &std::collections::HashMap<String, Place>,
+    mut picker: PresetPicker,
+    key: &str,
+) -> PresetPicker {
+    if let Some(place) = places.get(key) {
+        picker.restore(place.clone());
+    }
+    picker
+}
+
+/// [`picker`], for a plugin module (`plugin`: its presets' folder, [`crate::plugins::presets::folder`]): titled by its
+/// plugin, over the user's folder (`My Presets/<plugin>`, its default shortcut, holds what its `Save preset` writes)
+/// and the plugin's presets in our factory (`Presets/<plugin>`, a built-in Lemon plugin's). Anything else: [`picker`].
+fn picker_for(
+    files: &ProjectFiles,
+    target: PresetTarget,
+    module_type: Option<u16>,
+    plugin: Option<&str>,
+) -> PresetPicker {
+    let (Some(folder), Some(t), PresetTarget::Module(_)) = (plugin, module_type, target) else {
+        return picker(files, target, module_type);
+    };
+    let exts = exts(target, module_type);
+    let ours = Path::new(content::ROOT).join(content::PRESETS).join(folder);
+    PresetPicker::new(folder, files.user_dir().map(Path::to_owned), exts[0], true)
+        .of_exts(exts)
+        .of_type(t)
+        .with_factory([ours])
+        .with_import(files.user_dir().is_some())
+        .with_shortcuts([format!("{PRESETS_FOLDER}/{folder}")])
 }
 
 /// The error when a new channel would pass the channel-id limit ([`crate::song::CHANNEL_ID_LIMIT`]): the add-channel
@@ -1300,13 +1551,16 @@ pub(crate) fn channel_limit_message() -> Overlay {
     }
 }
 
-/// Where `Import` keeps a file for module type `t`'s picker: the module's user folder, when the picker lists audio
-/// files (the DW Sampler's, the Slicer's, 3x Osc's) and `files` takes an import ([`ProjectFiles::imports_audio`]).
+/// Where `Import` keeps a file for module type `t`'s picker: the module's user folder (the DW Sampler's `My Samples`,
+/// where its picker opens), when the picker lists audio files (the DW Sampler's, the Slicer's, 3x Osc's) and `files`
+/// takes an import ([`ProjectFiles::imports_audio`]).
 fn import_dir(files: &ProjectFiles, t: u16) -> Option<PathBuf> {
     let audio = preset_exts(t).contains(&SAMPLE_EXTS[0]);
-    files
-        .presets_dir(t)
-        .filter(|_| audio && files.imports_audio())
+    let dir = match t {
+        DW => files.user_dir().map(|u| u.join(SAMPLES_FOLDER)),
+        _ => files.presets_dir(t),
+    };
+    dir.filter(|_| audio && files.imports_audio())
 }
 
 /// The `Skipped N incompatible module(s)` message of `n` modules skipped, `None` for none.
@@ -1347,10 +1601,30 @@ fn load_into(
     instruments: bool,
 ) -> Result<usize, String> {
     let files: &ProjectFiles = app.files;
+    let channel_id = app.song.channels.get(channel).map_or(0, |c| c.id);
     let Some(module) = (app.song.channels.get_mut(channel)).and_then(|c| c.rack.get_mut(id)) else {
         return Ok(0);
     };
+    // A plugin module's preset, or a plugin preset (Lemon Reverb's, Lemon Limiter's).
+    let plugin_preset = pick.is_some_and(|(path, _)| {
+        (path.extension()).is_some_and(|e| e.eq_ignore_ascii_case(crate::plugins::presets::EXT))
+    });
     let name = match pick {
+        _ if module.file.plugin.is_some() || plugin_preset => {
+            load_plugin_preset(module, channel_id, pick)?;
+            match pick {
+                Some((path, _)) => {
+                    files.name_module(module, path);
+                    module.file.preset_name.clone()
+                }
+                None => {
+                    let file = &mut module.file;
+                    file.preset_name = crate::ui::preset_picker::DEFAULT.to_owned();
+                    (file.category, file.preset_path, file.source_path, file.provenance) = Default::default();
+                    String::new()
+                }
+            }
+        }
         None => {
             module.load_default();
             String::new()
@@ -1375,6 +1649,60 @@ fn load_into(
     app.files.song_changed();
     app.pick_loaded();
     Ok(0)
+}
+
+/// Loads plugin preset `pick` (its path and bytes; `None`: `Default`) into `module` on the channel with id
+/// `channel_id` ([`crate::plugins::presets`]): into a plugin module's running plugin ([`crate::plugins::load_preset`]),
+/// or as Lemon Reverb's or Lemon Limiter's params ([`crate::plugins::presets::native_params`]). A plugin's `Default` is
+/// its factory `Default` preset, else every parameter at its default. A preset of another plugin, a file that is no
+/// preset or a plugin that is not running loads nothing.
+fn load_plugin_preset(
+    module: &mut ModuleInstance,
+    channel_id: i32,
+    pick: Option<(&Path, &[u8])>,
+) -> Result<(), String> {
+    use crate::plugins::presets::{self, Body, Preset};
+    let preset = match pick {
+        Some((path, bytes)) => Some(presets::read(path, bytes).ok_or("The file is not a plugin preset.")?),
+        None => None,
+    };
+    let plugin = module.file.plugin.as_deref().map(|p| (p.id.clone(), presets::folder(p)));
+    let Some((plugin_id, name)) = plugin else {
+        // Lemon Reverb or Lemon Limiter.
+        let Some(preset) = preset else {
+            module.load_default();
+            return Ok(());
+        };
+        let ours = presets::native_plugin(module.type_id);
+        if !ours.is_some_and(|id| id.eq_ignore_ascii_case(&preset.plugin)) {
+            return Err(format!("The preset is for another plugin ({}).", preset.plugin));
+        }
+        let params = presets::native_params(module.type_id, &preset).ok_or("The preset does not fit the module.")?;
+        // All but Enable, which a preset leaves as it is.
+        for (param, value) in module.params.iter_mut().zip(params).skip(1) {
+            *param = value;
+        }
+        return Ok(());
+    };
+    let preset = match preset {
+        Some(p) if !p.plugin.eq_ignore_ascii_case(&plugin_id) => {
+            return Err(format!("The preset is for another plugin than {name} ({}).", p.plugin));
+        }
+        Some(p) => p,
+        None => (presets::of(&plugin_id).into_iter())
+            .find(|p| p.category.is_empty() && p.name == crate::ui::preset_picker::DEFAULT)
+            .cloned()
+            .unwrap_or(Preset {
+                plugin: plugin_id,
+                category: String::new(),
+                name: crate::ui::preset_picker::DEFAULT.to_owned(),
+                body: Body::Params(Vec::new()),
+            }),
+    };
+    match crate::plugins::load_preset(channel_id, module, &preset) {
+        true => Ok(()),
+        false => Err(format!("{name} is not running, or did not take the preset.")),
+    }
 }
 
 /// An instrument's preset `name` (of module type `type_id`) is its channel's ([`name_song_channel`]; an Instruments pick
@@ -1582,17 +1910,10 @@ mod tests {
         assert_eq!(module(0, &["Keys"]), ["Gen Keys"]);
         // Reverb 2 lists the `Reverb` folder's presets right at its root.
         assert_eq!(module(32, &[]), [MY_FILES, DEFAULT, "Gen Hall"]);
-        // DW Sampler: `My Instruments` beside `My Files`, then both DirectWave folders, the `EXP` one's after; a
-        // program without its sample folder.
+        // DW Sampler: both DirectWave folders, the `EXP` one's after; a program without its sample folder.
         assert_eq!(
             module(1, &[]),
-            [
-                MY_FILES,
-                "My Instruments",
-                DEFAULT,
-                "Guitar",
-                "Synth Bass EXP"
-            ]
+            [MY_FILES, DEFAULT, "Guitar", "Synth Bass EXP"]
         );
         assert_eq!(module(1, &["Guitar"]), ["Gen Guitar"]);
         assert_eq!(module(33, &["Sliced Drums"]), ["Gen Loop"]);
@@ -1651,10 +1972,11 @@ mod tests {
         let dw = |path: &[&str]| names(&files, PresetTarget::Module(2), Some(1), path);
         assert_eq!(dw(&["Essential Pianos EXP"]), ["Close Grand"]);
         assert_eq!(dw(&["WA Production Selection EXP", "Kicks"]), ["Kick 1"]);
-        // The user's own folder beside their preset is theirs: it lists.
-        assert_eq!(dw(&[MY_FILES]), ["my grand", "My Grand"]);
+        // The user's own folder beside their preset is theirs: it lists. `My Files` is the whole user folder (#109).
+        let presets = [MY_FILES, "My Presets", "DW Sampler"];
+        assert_eq!(dw(&presets), ["my grand", "My Grand"]);
         // An `.sfz` is a program too, beside the `.dwp`s, its sample folder left out: in My Files and in My
-        // Instruments, the root beside it.
+        // Instruments, its shortcut.
         put(&mine.join("Pad.sfz"), b"<region> sample=Pad/a.wav");
         put(&mine.join("Pad/a.wav"), b"RIFF");
         let instruments = tmp.0.join("My Instruments");
@@ -1664,8 +1986,8 @@ mod tests {
         );
         put(&instruments.join("Strings/C4.wav"), b"RIFF");
         put(&instruments.join("Keys.dwp"), b"DwPr");
-        assert_eq!(dw(&[MY_FILES]), ["my grand", "My Grand", "Pad"]);
-        assert_eq!(dw(&["My Instruments"]), ["Keys", "Strings"]);
+        assert_eq!(dw(&presets), ["my grand", "My Grand", "Pad"]);
+        assert_eq!(dw(&[MY_FILES, "My Instruments"]), ["Keys", "Strings"]);
     }
 
     /// The imported content tree holds about 4,000 files. A picker reads one folder when it opens, so a frame never
@@ -2127,7 +2449,7 @@ mod tests {
             .collect();
         assert_eq!(rows, expected);
         assert_eq!(
-            names(&files, PresetTarget::ChordSet, None, &[MY_FILES]),
+            names(&files, PresetTarget::ChordSet, None, &[MY_FILES, "My Chord Sets"]),
             ["Mine"]
         );
         // The search keeps the rows whose name holds the query, in the root too.
@@ -2149,21 +2471,18 @@ mod tests {
 
     #[test]
     fn a_modules_or_a_racks_picker_stays_open_on_a_pick_and_the_others_close() {
-        // The module preset button, a rack preset opened from the rack and the Modules browser's lists stay open; the
-        // drumsets, the chord sets and a new Rack channel's preset (the playlist's) close.
+        // The module preset button, a rack preset opened from the rack, the Modules browser's lists and the drumsets
+        // (#88) stay open; the chord sets and a new Rack channel's preset (the playlist's) close.
         for target in [
             PresetTarget::Module(2),
             PresetTarget::RackReplace,
             PresetTarget::ModulesRack(InsertAt::End),
             PresetTarget::ModulesInstrument(InsertAt::End),
+            PresetTarget::Drumset,
         ] {
             assert!(stays_open(target), "{target:?}");
         }
-        for target in [
-            PresetTarget::Drumset,
-            PresetTarget::ChordSet,
-            PresetTarget::NewChannel(None),
-        ] {
+        for target in [PresetTarget::ChordSet, PresetTarget::NewChannel(None)] {
             assert!(!stays_open(target), "{target:?}");
         }
     }
@@ -2202,7 +2521,7 @@ mod tests {
         let mut files = ProjectFiles::on_disk(&tmp.0);
         let target = PresetTarget::Instruments;
         let (user, mine) = (Some(tmp.0.clone()), Some(tmp.0.join("Mine")));
-        files.with_preset_files(top(target, None), exts(target, None), |lib| {
+        files.with_preset_files("", exts(target, None), |lib| {
             let listed = lib.list(Some(&tmp.0)).unwrap();
             let refused = |step| matches!(step, Step::Changed(Err(_)));
             for place in places {
@@ -2257,7 +2576,7 @@ mod tests {
             put(&tmp.0.join(SONGS_FOLDER).join("A.flm"), b"a");
             put(&tmp.0.join("My Presets/GMSynth/A.flmpst"), b"a");
             let mut files = ProjectFiles::on_disk(&tmp.0);
-            files.with_preset_files(top(target, None), exts(target, None), |lib| {
+            files.with_preset_files("", exts(target, None), |lib| {
                 let path = bin.join(picked);
                 let parent = path.parent().unwrap().to_owned();
                 let listed = lib.list(Some(&parent)).unwrap();
@@ -2281,6 +2600,7 @@ mod tests {
         }
     }
 
+    /// Its `My Files` is the whole user folder, `My Chord Sets` in it.
     #[test]
     fn the_chord_set_picker_is_titled_and_lists_my_chord_sets_in_the_user_folder_on_disk() {
         let tmp = Temp::new("chord-top");
@@ -2291,17 +2611,16 @@ mod tests {
         put(&dir.join("Mine.chords"), b"{}");
         put(&dir.join("Other.txt"), b"x");
         let target = PresetTarget::ChordSet;
-        assert_eq!(top(target, None), "My Chord Sets");
         assert_eq!(picker(&files, target, None).root_title(), "Chord Sets");
         let wanted = exts(target, None);
-        let listed = files.with_preset_files(top(target, None), wanted, |library| {
+        let listed = files.with_preset_files("", wanted, |library| {
             let rows = library.list(Some(&dir)).unwrap();
             (
                 library.root().map(Path::to_owned),
                 rows.into_iter().map(|e| e.name).collect::<Vec<_>>(),
             )
         });
-        assert_eq!(listed, (Some(dir), vec!["Mine.chords".to_owned()]));
+        assert_eq!(listed, (Some(tmp.0.clone()), vec!["Mine.chords".to_owned()]));
     }
 
     #[test]

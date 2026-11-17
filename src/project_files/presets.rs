@@ -41,6 +41,8 @@ pub const PRESET_EXT: &str = "flmpst";
 pub const RACK_EXT: &str = "flmrack";
 pub const DRUMSET_EXT: &str = "tmpl";
 pub const CHORDS_EXT: &str = "chords";
+/// A plugin preset's ([`crate::plugins::presets`]).
+pub const OSPRESET_EXT: &str = crate::plugins::presets::EXT;
 /// The name the chord set dialog proposes.
 pub const CUSTOM_CHORD_SET: &str = "Custom Chord Set";
 /// The legacy preset types a module's picker also lists: MiniSynth's and GMSynth's.
@@ -68,6 +70,10 @@ pub fn preset_exts(type_id: u16) -> &'static [&'static str] {
         33 => &[PRESET_EXT, "wav", "flac", "mp3", "ogg"],
         39 => &[PRESET_EXT, super::FST_EXT, "wav", "flac", "mp3", "ogg"],
         52 => &[PRESET_EXT, super::SF2_EXT, super::SFZ_EXT],
+        // Lemon Reverb and Lemon Limiter take their Lemon plugins' presets too; a plugin module takes plugin presets
+        // only ([`crate::plugins::presets`]).
+        honeydew_audio::lemon::REVERB | honeydew_audio::lemon::LIMITER => &[PRESET_EXT, OSPRESET_EXT],
+        crate::song::plugin::PLUGIN_INSTRUMENT | crate::song::plugin::PLUGIN_EFFECT => &[OSPRESET_EXT],
         _ => &[PRESET_EXT],
     }
 }
@@ -77,6 +83,8 @@ pub fn preset_exts(type_id: u16) -> &'static [&'static str] {
 pub enum PresetKind {
     /// A card's `Save preset`.
     Module,
+    /// A plugin module's card's `Save preset`: a plugin preset of its state ([`crate::plugins::presets::write_state`]).
+    Plugin,
     /// The rack's `Save Rack preset`.
     Rack,
     /// A drums channel's `Save Drumset`.
@@ -91,7 +99,7 @@ impl PresetKind {
     /// The dialog's title.
     pub fn title(self) -> &'static str {
         match self {
-            Self::Module => "Save preset",
+            Self::Module | Self::Plugin => "Save preset",
             Self::Rack => "Save Rack preset",
             Self::Drumset => "Save Drumset",
             Self::Sample => "New sample name",
@@ -103,6 +111,7 @@ impl PresetKind {
     pub fn format(self) -> &'static str {
         match self {
             Self::Module => "Sound Module Preset (.flmpst)",
+            Self::Plugin => "Plugin Preset (.ospreset)",
             Self::Rack => "Rack Preset (.flmrack)",
             Self::Drumset => "Drumset (.tmpl)",
             Self::Sample => "Audio Wave (.wav)",
@@ -113,6 +122,7 @@ impl PresetKind {
     fn ext(self) -> &'static str {
         match self {
             Self::Module => PRESET_EXT,
+            Self::Plugin => OSPRESET_EXT,
             Self::Rack => RACK_EXT,
             Self::Drumset => DRUMSET_EXT,
             Self::Sample => "wav",
@@ -142,6 +152,7 @@ pub enum PresetSource {
 impl PresetSource {
     pub fn kind(&self) -> PresetKind {
         match self {
+            Self::Module(m) if m.file.plugin.is_some() => PresetKind::Plugin,
             Self::Module(_) => PresetKind::Module,
             Self::Rack { .. } => PresetKind::Rack,
             Self::Drumset { .. } => PresetKind::Drumset,
@@ -195,7 +206,14 @@ impl ProjectFiles {
 
     fn dir_of(&self, source: &PresetSource) -> Option<PathBuf> {
         match source {
-            PresetSource::Module(module) => self.presets_dir(module.type_id),
+            PresetSource::Module(module) => match module.file.plugin.as_deref() {
+                // A plugin module's: `My Presets/<plugin>`.
+                Some(plugin) => {
+                    let folder = crate::plugins::presets::folder(plugin);
+                    Some(self.user.as_ref()?.join(PRESETS_FOLDER).join(folder))
+                }
+                None => self.presets_dir(module.type_id),
+            },
             PresetSource::Rack { .. } => self.racks_dir(),
             PresetSource::Drumset { .. } => self.drumsets_dir(),
             PresetSource::ChordSet(_) => self.chord_sets_dir(),
@@ -205,9 +223,16 @@ impl ProjectFiles {
     /// Opens the preset dialog for `source`, from the channel with id `channel`, after the frame, proposing a free
     /// name: the module's preset name (its folder's while it is `Default`), or the rack's or kit's channel name.
     pub fn ask_preset(&mut self, source: PresetSource, channel: i32) {
+        let plugin_folder = match &source {
+            PresetSource::Module(module) => module.file.plugin.as_deref().map(crate::plugins::presets::folder),
+            _ => None,
+        };
         let base = match &source {
             PresetSource::Module(module) => match module.file.preset_name.trim() {
-                "" | "Default" => preset_folder(module.type_id).unwrap_or_default(),
+                "" | "Default" => match &plugin_folder {
+                    Some(folder) => folder.as_str(),
+                    None => preset_folder(module.type_id).unwrap_or_default(),
+                },
                 name => name,
             },
             PresetSource::Rack { name, .. } | PresetSource::Drumset { name, .. } => name.trim(),
@@ -282,7 +307,12 @@ impl ProjectFiles {
             PresetSource::Module(mut module) => {
                 module.name_preset(&path, self.user.as_deref().unwrap_or(Path::new("")));
                 let card = (channel, module.instance_id);
-                (crate::flm::write_preset(&module), Some(card))
+                // A plugin module's is its plugin's state (brought up to date as the dialog opened).
+                let bytes = match module.file.plugin.as_deref() {
+                    Some(plugin) => Ok(crate::plugins::presets::write_state(plugin, &plugin.state)),
+                    None => crate::flm::write_preset(&module),
+                };
+                (bytes, Some(card))
             }
             PresetSource::Rack { modules, .. } => (crate::flm::write_rack(&modules), None),
             PresetSource::Drumset { kit, .. } => (crate::flm::write_drumset(&kit), None),

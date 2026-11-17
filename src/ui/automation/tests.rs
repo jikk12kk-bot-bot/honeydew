@@ -702,28 +702,6 @@ fn copy_fills_the_clipboard_and_delete_removes_the_selection_in_one_edit() {
     assert_eq!((rig.selected(), rig.edits), (vec![false; 2], 1));
 }
 
-/// `Duplicate`, last in the row: a lone point's copy a snap step on (a beat here), the copy the selection, in one edit.
-#[test]
-fn duplicate_puts_a_copy_of_the_selection_right_after_it_in_one_edit() {
-    let pts = [p(0, 0), p(256, 32767), p(448, 0)];
-    let mut rig = Rig::new(&pts);
-    rig.ed.snap = Snap {
-        on: true,
-        mode: crate::ui::piano_roll::SnapMode::Beat,
-        ..Default::default()
-    };
-    rig.tap(touch(pts[1]));
-    let duplicate = rig.text_at("Duplicate").expect("Duplicate");
-    let delete = rig.text_at("Delete").expect("Delete");
-    assert!(delete.x < duplicate.x, "Delete before Duplicate");
-    rig.tap(duplicate);
-    assert_eq!(rig.points(), [pts[0], pts[1], p(384, 32767), pts[2]]);
-    assert_eq!(
-        (rig.selected(), rig.edits),
-        (vec![false, false, true, false], 1)
-    );
-}
-
 #[test]
 fn a_long_press_shows_paste_where_the_finger_is_and_paste_lands_the_earliest_point_on_the_snapped_beat()
  {
@@ -1104,9 +1082,9 @@ fn a_vertical_pinch_zooms_the_values_a_drag_there_moves_finer_and_a_level_one_zo
     rig.pinch(at, vec2(0.0, 70.0), vec2(0.0, 140.0));
     let rows = rig.view().rows;
     assert_eq!((rows, rig.view().beat_w), ([31.5, 63.5], before.beat_w));
-    // The axis labels the values at its ticks in the range shown: 12.5 % apart (25 % at 1×).
+    // The axis is a ruler (#135) over the range shown, 25 … 75 %: labelled every 10 % (5 % would be under 1.5 U).
     let names: Vec<String> = rig.texts(ink).into_iter().map(|l| l.0).collect();
-    assert_eq!(names, ["75", "62", "50", "37", "25"]);
+    assert_eq!(names, ["30", "40", "50", "60", "70"]);
     // 22 points down on the point are 11 rows on screen, 5.5 of the range's (11 at 1×).
     rig.drag(touch(q), &[vec2(0.0, 22.0)]);
     let want = (32767.0 - 5.5 * f64::from(MAX) / 126.0).round() as u16;

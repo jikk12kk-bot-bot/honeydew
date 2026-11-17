@@ -44,9 +44,9 @@ use crate::ui::buttons::{close_x, outline_circle_button};
 use crate::ui::picker_preview::{Audition, STRIP_H, SampleStrip};
 use crate::ui::popup::{PopupItem, PopupResult};
 use crate::ui::preset_picker::{modal, natural};
-use crate::ui::search_bar::{self, RowLook, SearchBar};
+use crate::ui::search_bar::{self, Mark, RowLook, SearchBar};
 use crate::ui::widgets::{shrink, truncated};
-use crate::ui::{Finger, UiCtx, anim, fingers, focus, focus_lost};
+use crate::ui::{Finger, UiCtx, anim, fingers, focus, focus_lost, scroller};
 use honeydew_audio::lemon;
 
 use Entry::Module as M;
@@ -131,84 +131,25 @@ impl Row {
     }
 }
 
-/// Lemon Studio's built-in plugins ([`crate::plugins::builtin`]), on every platform, each
-/// listed after the module it is Lemon's counterpart of (as Lemon Reverb and Lemon Limiter are), by CLAP id. One not
-/// here goes into its section ([`section_of`]) by name.
-const COUNTERPARTS: &[(&str, Entry)] = &[
-    ("org.openstudio.open-3x-osc", Entry::Synth(S::ThreeXOsc)),
-    ("org.openstudio.open-sampler", Entry::Synth(S::DwSampler)),
-    ("org.openstudio.open-parametric-eq-2", M(3)),
-    ("org.openstudio.lemon-filter", M(9)),
-    ("org.openstudio.lemon-chorus", M(11)),
-    ("org.openstudio.lemon-flanger", M(13)),
-    ("org.openstudio.lemon-phaser", M(14)),
-    // Under the Slicer, so that the two slicers read as two.
-    ("org.openstudio.lemon-slicer", Entry::Synth(S::Slicer)),
-];
-
-/// The name a section's entry sorts by when a built-in plugin goes in by name: a plugin listed after its counterpart
-/// sorts as that counterpart, so that the pair stays together.
-fn sort_name(entry: &Entry) -> &'static str {
-    let counterpart = |p: &PluginEntry| {
-        let of = COUNTERPARTS
-            .iter()
-            .find(|(id, _)| p.uid.strip_prefix("clap:") == Some(*id));
-        of.map(|(_, of)| of.name())
-    };
-    match entry {
-        Entry::Plugin(p) => counterpart(p).unwrap_or(p.name),
-        e => e.name(),
-    }
-}
-
-/// The section a built-in plugin goes into, by its CLAP features: an instrument into SYNTH, an effect by what it does
-/// as the sections' modules (distortion is LEVEL's, as Distortion and Waveshaper), else MISC (modulation, pitch,
-/// analyzers, utilities). `stereo` is a CLAP channel layout, not the Stereoizer's kind.
-fn section_of(plugin: &crate::plugins::builtin::Builtin) -> &'static str {
-    let has = |kinds: &[&str]| (plugin.desc.features.iter()).any(|f| kinds.contains(&f.as_str()));
-    if plugin.instrument() {
-        "SYNTH"
-    } else if has(&["delay", "reverb"]) {
-        "ECHO"
-    } else if has(&[
-        "compressor",
-        "limiter",
-        "gate",
-        "expander",
-        "transient-shaper",
-        "distortion",
-        "restoration",
-    ]) {
-        "LEVEL"
-    } else if has(&["equalizer", "filter"]) {
-        "FILTER"
-    } else {
-        "MISC"
-    }
-}
-
-/// The Modules sections: [`SECTIONS`] with the built-in plugins in theirs.
+/// The Modules sections: [`SECTIONS`], then Lemon Studio's built-in plugins ([`crate::plugins::builtin`]), on every
+/// platform, in their own, LEMON STUDIO (#86): the instruments, then the effects, each by name.
 fn sections() -> Vec<(Option<&'static str>, Vec<Entry>)> {
-    let mut sections: Vec<_> = (SECTIONS.iter())
-        .map(|&(header, entries)| (header, entries.to_vec()))
-        .collect();
-    for plugin in crate::plugins::builtin::all() {
-        let header = Some(section_of(plugin));
-        let Some((_, entries)) = sections.iter_mut().find(|(h, _)| *h == header) else {
-            continue;
-        };
-        let after = (COUNTERPARTS.iter().find(|(id, _)| *id == plugin.clap_id()))
-            .and_then(|(_, of)| entries.iter().position(|e| e == of));
-        let by_name = || (entries.iter()).position(|e| natural(sort_name(e), plugin.name).is_gt());
-        let at = (after.map(|i| i + 1).or_else(by_name)).unwrap_or(entries.len());
-        let entry = Entry::Plugin(PluginEntry {
+    let mut lemon: Vec<_> = (crate::plugins::builtin::all().iter())
+        .map(|plugin| PluginEntry {
             uid: plugin.uid,
             name: plugin.name,
             instrument: plugin.instrument(),
-        });
-        entries.insert(at, entry);
-    }
-    sections
+        })
+        .collect();
+    lemon.sort_by(|a, b| (b.instrument.cmp(&a.instrument)).then_with(|| natural(a.name, b.name)));
+    let lemon = (
+        Some("LEMON STUDIO"),
+        lemon.into_iter().map(Entry::Plugin).collect(),
+    );
+    (SECTIONS.iter())
+        .map(|&(header, entries)| (header, entries.to_vec()))
+        .chain([lemon])
+        .collect()
 }
 
 /// The Modules sections, in order. The first group has no header. Ids by display name; where a name is shared
@@ -268,6 +209,7 @@ const SECTIONS: [(Option<&str>, &[Entry]); 7] = [
             M(26),
             M(11),
             M(13),
+            M(honeydew_audio::half_time::HALF_TIME),
             M(honeydew_audio::modulator::MODULATOR),
             M(4),
             M(14),
@@ -474,7 +416,6 @@ const BUTTON_APART: f32 = 0.25;
 const BUTTON_LABEL_PT: u8 = 8;
 /// Left padding of the title and the name field's text (a row's own is [`search_bar::paint_row`]'s).
 const PAD_X: f32 = 0.5;
-const SCROLLBAR_W: f32 = 0.15;
 /// Icon size factor of the close X (as the transport's), and of the ≡ button's icon (as SONGS').
 const CLOSE_ICON: f32 = 0.7;
 const MENU_ICON: f32 = 0.6;
@@ -487,8 +428,7 @@ const TAIL_K: usize = 5;
 const CRUMB_TAIL_K: usize = 40;
 /// The Back arrow's icon size factor.
 const BACK_ICON: f32 = 0.7;
-/// `text` alphas: the scrollbar thumb, a section header's band (disabled rows: [`DISABLED_ALPHA`]).
-const SCROLLBAR_ALPHA: f32 = 0.5;
+/// `text` alpha of a section header's band (disabled rows: [`DISABLED_ALPHA`]).
 const SECTION_ALPHA: f32 = 0.05;
 /// Every row's name: folders and items alike, one size in every side browser (the folder rows' FontSize 4); a found
 /// row with a path is the exception ([`search_bar::paint_row`]). A section header's label is FontSize 3.
@@ -500,6 +440,15 @@ const SECTION_PAD: f32 = 0.25;
 /// seconds.
 const FLASH_ALPHA: f32 = 0.6;
 const FLASH_S: f64 = 0.3;
+/// A release flings the list when its last move went further than this (U), as the editors' do (`ui::scroller`).
+const FLING_U: f32 = 0.125;
+/// The fling slows down as v ← 0.96·v a 60 Hz frame: it coasts about 25 times its last move and eases to a stop over a
+/// second or two, as a phone's lists do.
+const FLING_DECAY: f32 = 0.96;
+/// Below this speed (points a 60 Hz frame) the fling stops.
+const FLING_STOP: f32 = 0.05;
+/// A release flings only by a move no older than this: a finger that rested before the lift flings nothing.
+const FLING_STALE_S: f64 = 0.08;
 
 /// What the user did in the browser this frame. Either way the browser is done: drop it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -559,6 +508,17 @@ pub struct ModulesBrowser {
 }
 
 impl ModulesBrowser {
+    /// How far the list is scrolled, in points, to open at again ([`Self::set_scroll`]); `None` while a search filters
+    /// it, whose scroll is not the list's.
+    pub fn scroll(&self) -> Option<f32> {
+        self.panel.search.query().is_empty().then_some(self.panel.scroll_y)
+    }
+
+    /// Opens the list scrolled down `y` points (kept within the list as it draws): where the last browse left it.
+    pub fn set_scroll(&mut self, y: f32) {
+        self.panel.scroll_y = y.max(0.0);
+    }
+
     /// The browser coming back from a list shown in its place (`Instrument`, `Rack Preset`): no slide-in.
     pub fn in_place() -> Self {
         Self {
@@ -582,6 +542,7 @@ impl ModulesBrowser {
                 self.sort = sort;
                 self.panel.refreshed();
                 self.panel.scroll_y = 0.0;
+                self.panel.fling = 0.0;
             }
             if result.close {
                 self.sort_menu = None;
@@ -605,6 +566,7 @@ impl ModulesBrowser {
                     Row::Item(entry) => RowKind::Enabled(entry),
                 },
                 picked: matches!(row, Row::Item(e) if Some(e) == picked),
+                mark: None,
             };
             rows(query, sort, takes).into_iter().map(row).collect()
         })?;
@@ -712,6 +674,8 @@ pub(crate) struct PanelRow<'a, T> {
     /// sits over a picked item row while it is on, and its loading pulse (a `text` fill under `menuFill` text) over a
     /// plain one: a picked row is not inverted while it loads.
     pub picked: bool,
+    /// Its mark at the right end (the pickers' folders and files).
+    pub mark: Option<Mark<'a>>,
 }
 
 /// What the user clicked in the panel this frame.
@@ -746,6 +710,11 @@ pub(crate) struct SidePanel {
     pub auditioned: bool,
     /// How far the list is scrolled up, in points.
     pub scroll_y: f32,
+    /// The list coasting after a fling, in points a 60 Hz frame (as the drag moved it); 0 when still.
+    fling: f32,
+    /// The list's last drag move: its speed (points a 60 Hz frame), when (input time) and in which egui pass. A release
+    /// flings from it only while it is fresh.
+    last_move: Option<(f32, f64, u64)>,
     /// It takes another panel's place, already in place: no slide-in.
     in_place: bool,
     /// The next frame scrolls the picked row just into view, once.
@@ -847,6 +816,55 @@ impl SidePanel {
         }
     }
 
+    /// The list's drag this frame, `moved` (points, down positive), with the fling: a release whose last move was
+    /// fresh and longer than `fling_px` coasts on, slowing down by [`FLING_DECAY`] a 60 Hz frame until it stops, as the
+    /// editors' scrolls do (`ui::scroller`). A touch on the list, a drag or the wheel stops it; `Animation` `Minimal`
+    /// has none ([`anim::inertia`]). Returns how far the list moves this frame.
+    fn coast(
+        &mut self,
+        ui: &eframe::egui::Ui,
+        list: Rect,
+        drag: &eframe::egui::Response,
+        moved: f32,
+        fling_px: f32,
+    ) -> f32 {
+        let (now, pass) = (ui.input(|i| i.time), ui.ctx().cumulative_pass_nr());
+        // Frames at 60 Hz this frame stands for: the fling slows down alike at any frame rate.
+        let frames = ui.input(|i| i.stable_dt).clamp(1.0 / 240.0, 0.1) * 60.0;
+        let over = drag.contains_pointer();
+        let touched = ui.input(|i| {
+            let pressed = i.pointer.any_pressed()
+                && (i.pointer.interact_pos()).is_some_and(|p| list.contains(p));
+            pressed || (i.smooth_scroll_delta.y != 0.0 && over)
+        });
+        if touched || drag.dragged() {
+            self.fling = 0.0;
+        }
+        if moved != 0.0 {
+            self.last_move = Some((moved / frames, now, pass));
+        }
+        if drag.drag_stopped() {
+            let fresh = (self.last_move.take())
+                .filter(|&(_, at, p)| pass.saturating_sub(p) <= 1 && now - at <= FLING_STALE_S);
+            if let Some((speed, ..)) = fresh
+                && speed.abs() > fling_px
+                && anim::inertia(ui.ctx())
+            {
+                self.fling = speed;
+            }
+        }
+        if self.fling == 0.0 || drag.dragged() {
+            return moved;
+        }
+        let step = self.fling * frames;
+        self.fling *= FLING_DECAY.powf(frames);
+        match self.fling.abs() < FLING_STOP {
+            true => self.fling = 0.0,
+            false => ui.ctx().request_repaint(),
+        }
+        moved + step
+    }
+
     /// Shows the panel over everything else; call it every frame while it is open. `rows` gives the list for the
     /// search query (empty while the bar is hidden: the normal folder listing). The panel is modal: a click outside it
     /// (primary, secondary or middle) closes it and never reaches the widgets underneath.
@@ -871,7 +889,13 @@ impl SidePanel {
     ) -> Option<PanelClick<T>> {
         let (c, m) = (&cx.theme.colors, cx.m);
         let (text, ink) = (c.text.to_color32(), c.background.to_color32());
-        let screen = ctx.content_rect();
+        // Above the keyboard panel while it stays in front of the pickers ([`crate::ui::front_panel`]): its bar, strip
+        // and keys show and take their touches, and the list ends above them at any panel height.
+        let full = ctx.content_rect();
+        let screen = match crate::ui::front_panel(ctx) {
+            Some(panel) => full.with_max_y(panel.top().max(full.top() + m.u(4.0))),
+            None => full,
+        };
         let id = chrome.id;
         // The slide-in: p ← (p + 1)/2 a drawn frame, the screen dimmed to α 0.6·p. The panel's touch areas move with it
         // (egui's widgets are where they are painted).
@@ -890,7 +914,7 @@ impl SidePanel {
             .rect_filled(screen, 0.0, anim::dim(ink, anim::DIM_ALPHA * p));
 
         // The popup's backdrop (popup.rs): below the panel, above the screens.
-        let backdrop = crate::ui::backdrop(ctx, id);
+        let backdrop = crate::ui::backdrop_over(ctx, id, screen);
         let (browser_id, rows_id, field) = (id.with("browser"), id.with("rows"), id.with("query"));
         if !std::mem::replace(&mut self.opened, true) {
             focus::enter(ctx, rows_id);
@@ -1097,14 +1121,22 @@ impl SidePanel {
                 }
                 let drag = ui.interact(list, id.with("list"), Sense::drag());
                 let mut moved = drag.drag_delta().y;
+                let max_scroll = (content_h - list.height()).max(0.0);
                 // A row dragged out of the list leaves it where it is.
                 if crate::ui::file_drag::dragging(ctx) {
                     moved = 0.0;
-                } else if drag.contains_pointer() {
-                    moved += ui.input(|i| i.smooth_scroll_delta.y);
+                    (self.fling, self.last_move) = (0.0, None);
+                } else {
+                    moved = self.coast(ui, list, &drag, moved, m.u(FLING_U));
+                    if drag.contains_pointer() {
+                        moved += ui.input(|i| i.smooth_scroll_delta.y);
+                    }
                 }
-                self.scroll_y =
-                    (self.scroll_y - moved).clamp(0.0, (content_h - list.height()).max(0.0));
+                self.scroll_y = (self.scroll_y - moved).clamp(0.0, max_scroll);
+                // A fling that reaches either end stops there.
+                if self.scroll_y <= 0.0 || self.scroll_y >= max_scroll {
+                    self.fling = 0.0;
+                }
                 let scroll = m.round_px(self.scroll_y);
 
                 let painter = ui.painter_at(list);
@@ -1135,6 +1167,8 @@ impl SidePanel {
                         pressed: false,
                         hovered: false,
                         select: None,
+                        bold: false,
+                        mark: row.mark,
                     };
                     match row.kind {
                         RowKind::Section => {
@@ -1242,17 +1276,9 @@ impl SidePanel {
                         false => self.flash = None,
                     }
                 }
-                if content_h > list.height() {
-                    let w = m.u(SCROLLBAR_W);
-                    let thumb = Rect::from_min_size(
-                        pos2(
-                            list.right() - w,
-                            list.top() + scroll / content_h * list.height(),
-                        ),
-                        vec2(w, list.height() * list.height() / content_h),
-                    );
-                    painter.rect_filled(thumb, 0.0, text.gamma_multiply(SCROLLBAR_ALPHA));
-                }
+                // Over the rows: a finger on the thumb drags it (#111).
+                let (bar, u) = (id.with("scrollbar"), m.u(1.0));
+                scroller::list_scrollbar(ui, bar, list, u, content_h, &mut self.scroll_y, text);
                 focus::close(ctx, browser_id);
                 // The audition strip is no part of the browser: a focus target of its own, over the picked row, in view
                 // or not.
@@ -1281,8 +1307,9 @@ impl SidePanel {
     /// The list was refreshed (a search, a folder entered or left, a sort, select mode): the audition strip turns off
     /// and the sample strip stops.
     pub(crate) fn refreshed(&mut self) {
-        // The rows change: no flash stays on what is now another row.
+        // The rows change: no flash stays on what is now another row, and no fling carries on over them.
         self.flash = None;
+        self.fling = 0.0;
         self.audition.off();
         if let Some(strip) = &mut self.sample {
             strip.stop();

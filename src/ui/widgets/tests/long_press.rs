@@ -1,6 +1,7 @@
 use super::*;
 
-// The parameter menu opens on a long press of the mouse too (300 ms within 0.5 U).
+// The parameter menu opens on a long press of the mouse too (300 ms within 0.5 U; a knob's or slider's 500 ms, and
+// any slide over 2 points cancels it: `gesture::control_long_press`).
 
 impl Rig {
     /// Presses the control's centre with the mouse and holds it still, a frame every 1/60 s, until the frame `secs`
@@ -37,12 +38,20 @@ fn rigs() -> Vec<Rig> {
     rigs
 }
 
+/// The hold that opens `kind`'s menu (s): a knob's or slider's is longer.
+fn due(kind: Kind) -> f64 {
+    match kind {
+        Kind::Knob | Kind::VSlider | Kind::HSlider => crate::ui::gesture::CONTROL_LONG_PRESS_S,
+        _ => crate::ui::gesture::LONG_PRESS_S,
+    }
+}
+
 #[test]
 fn a_mouse_held_still_300_ms_opens_the_parameter_menu_and_its_release_neither_clicks_nor_edits() {
     for mut rig in rigs() {
         let kind = rig.kind;
-        rig.hold(0.3, false);
-        assert!(rig.popup_is_open(), "{kind:?}: open at 300 ms");
+        rig.hold(due(kind), false);
+        assert!(rig.popup_is_open(), "{kind:?}: open at its due");
         // Held on past egui's 0.8 s and moved: the press drags nothing under the menu.
         for _ in 0..40 {
             rig.frame(vec![]);
@@ -94,4 +103,23 @@ fn a_long_press_on_a_toggle_does_not_flip_it() {
     rig.hold(0.4, true);
     assert_eq!(rig.value, 0.0);
     assert!(rig.popup_is_open());
+}
+
+#[test]
+fn a_knob_or_slider_held_300_ms_opens_no_menu_and_a_slide_before_its_500_ms_never_does() {
+    for kind in [Kind::Knob, Kind::VSlider, Kind::HSlider] {
+        let mut rig = Rig::new(kind, 0.25);
+        rig.hold(0.4, false);
+        assert!(!rig.popup_is_open(), "{kind:?}: closed at 400 ms");
+        rig.button(RECT.center(), PointerButton::Primary, false);
+        rig.frame(vec![]);
+        // A finger resting on it, then sliding 3 points (short of egui's drag threshold) and held on: no menu.
+        let mut rig = Rig::new(kind, 0.25);
+        rig.hold(0.2, false);
+        rig.frame(vec![Event::PointerMoved(RECT.center() + vec2(0.0, -3.0))]);
+        for _ in 0..40 {
+            rig.frame(vec![]);
+        }
+        assert!(!rig.popup_is_open(), "{kind:?}: a slide cancels it");
+    }
 }

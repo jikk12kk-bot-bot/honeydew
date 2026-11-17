@@ -272,7 +272,9 @@ fn the_union_has_the_user_librarys_places() {
     let factory = fake(&["Presets/Reverb 2/Hall.flmpst"]);
     let mut user = crate::ui::main_menu::NativeLibrary::at("/home/u/data/My Songs".into());
     let places = user.places();
-    assert_eq!(places.len(), 2, "the bin and Unzipped songs");
+    // The bin, Unzipped songs and, as SONGS goes up to the user folder (#73), its fixed folders.
+    let unzipped = Path::new("/home/u/data/Unzipped songs");
+    assert!(places.iter().any(|p| p == unzipped), "{places:?}");
     let union = Union {
         user: &mut user,
         factory: &factory,
@@ -300,7 +302,7 @@ fn a_factory_file_is_stored_as_an_app_shorthand_below_built_in() {
 /// What every lane's entries must hold: plain, unique `/`-separated paths below a top folder of ours.
 #[test]
 fn every_factory_entry_has_a_plain_unique_path_in_a_top_folder() {
-    let tops = [PRESETS, DRUMSETS, LOOPS, SHAPES, CHORD_SETS, TEMPLATES];
+    let tops = [PRESETS, DRUMSETS, LOOPS, SHAPES, SAMPLES, CHORD_SETS, TEMPLATES];
     let entries = &factory().entries;
     for (i, entry) in entries.iter().enumerate() {
         let rel = &entry.rel;
@@ -311,4 +313,24 @@ fn every_factory_entry_has_a_plain_unique_path_in_a_top_folder() {
         assert!(parts.iter().all(plain), "{rel}");
         assert!(entries[..i].iter().all(|e| e.rel != *rel), "{rel} twice");
     }
+}
+
+/// The built-in Lemon plugins' presets are in the factory, each plugin's in `Presets/<plugin>` (its categories as
+/// folders), without its `Default`, which the picker's own `Default` row loads; each reads back as its plugin's.
+#[test]
+fn the_lemon_plugins_presets_are_in_their_plugins_folders() {
+    let trio = at(&format!("{PRESETS}/Lemon Trio"));
+    let rows = rows(factory(), Some(&trio));
+    assert!(rows.contains(&row("Bass", true)), "{rows:?}");
+    assert!(rows.contains(&row("Honeydew bass", true)), "{rows:?}");
+    assert!(!rows.iter().any(|(name, _)| name.starts_with("Default")), "{rows:?}");
+    let reverb = at(&format!("{PRESETS}/Lemon Reverb"));
+    let listed = factory().list(Some(&reverb)).unwrap();
+    let cathedral = (listed.iter())
+        .find(|e| e.name.starts_with("Cathedral"))
+        .expect("Lemon Reverb's Cathedral");
+    let bytes = factory().read(&cathedral.path).unwrap();
+    let preset = crate::plugins::presets::read(&cathedral.path, &bytes).unwrap();
+    assert_eq!(preset.plugin, "org.openstudio.lemon-reverb");
+    assert_eq!(preset.name, "Cathedral");
 }

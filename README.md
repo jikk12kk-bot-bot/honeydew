@@ -118,11 +118,31 @@ Also under SYNTH: Citrus, a six-operator FM synth; Lemon Drum Sampler, with 32 p
 
 ### Local music-assistant control (experimental)
 
-The desktop build has an opt-in local control bridge for editing the open song
+The desktop, Android and iOS builds have an opt-in control bridge for editing the open song
 with an MCP assistant. It can reuse an already-configured plugin instrument
 without changing its preset, or create a built-in synth/drum track and add
-notes. See [the MCP setup guide](tools/honeydew-mcp/README.md) for security,
+notes, start, stop and move the transport, and read and set the mixer's level, pan, mute and solo.
+See [the MCP setup guide](tools/honeydew-mcp/README.md) for security,
 configuration, commands and current limits.
+
+The app is an MCP server itself (Streamable HTTP, plain JSON answers): turn on SETTINGS → Enable MCP control, press
+Generate for a token, and point your assistant at the Address row's URL (`http://127.0.0.1:57831/mcp` by default) with
+the header `Authorization: Bearer <token>`. On a phone, turn on Allow over Wi-Fi and use the
+phone's address on your network (the QR button shows it). Over Wi-Fi anyone on the same network can reach the port, so
+the token is all that guards it: keep it secret and turn the option off on networks you don't trust. The desktop's
+stdio adapter (`tools/honeydew-mcp/server.py`) still works for assistants that only speak stdio.
+
+### Displayer and MP4 render
+
+The transport bar's Displayer button opens a panel that shows an image (PNG, JPEG, WebP) or a video (MP4, MOV, MKV,
+WebM) with the song, in a floating window (Mini: drag it, resize it at its corner; Maxi: the whole work area, letting
+taps through to the views; the panel switches them) or as the background, behind the notes, clips and controls, which
+show on top of it; either at an opacity you pick. Only the Displayer button opens the panel. A video starts
+with the song, runs in real time whatever the tempo, and can be trimmed
+and looped; its sound is for listening only and is never in an audio render. The files stay where they are: if one
+moves, the panel offers Relink. The Save dialog's MP4 format renders the whole song with the Displayer's picture into
+a video (720p or 1080p, 30 or 60 fps, 16:9, 9:16 or 1:1). Video playback and MP4 need a build with FFmpeg (the
+Android APKs have it; see `tools/build-ffmpeg.sh` and the `video` feature); the web version shows images only.
 
 **Multi core processing:** On Linux, macOS and Windows desktop builds, SETTINGS → Multi core processing can run independent channel racks on separate CPU cores. Sends still run before their target bus, and each rack's modules stay in order. The setting takes effect during playback without a restart. It is off by default and falls back to sequential processing for short segments, a single-core machine or a song with no independent channels. It does not split one plugin instance (including Vital) across cores; with one active instrument, leave it off. If enabling it increases underruns on your audio setup, turn it off again.
 
@@ -176,7 +196,7 @@ cargo run --release
 The sound library lives in `sounds/`, split into 90 MB parts to stay under GitHub's file size limit. To rebuild it from the raw sources in `../content-sources` (or `$HONEYDEW_SOURCES`):
 
 ```sh
-tools/release-content.sh 0.4.10
+tools/release-content.sh 0.5.4
 ```
 
 Commit the updated `sounds/honeydew-sounds.zip.*` parts and `sounds/release.txt` (the library's version: the app updates an installed library that is older) with your changes. Add `--web` to also build the web ZIP. Tagged releases include the sounds automatically, and the first release with a new library version also publishes it as its own release, `sounds-<version>`, which the apps download from. Give every changed library a new version.
@@ -221,14 +241,6 @@ tools/android-dist.sh
 
 This writes `target/honeydew-android-<version>-arm-debug.apk`, one APK for 64-bit and 32-bit ARM. Add `--base` for the APK without sounds (`-arm-base-debug.apk`), which downloads them. The debug app is called Honeydew Debug and installs alongside the release app. Its signing key is kept in `android/debug.keystore`; keep that file so debug builds can update each other.
 
-The APK ships the sound library, and Gradle fails without it. If `sounds/` is not checked out (a fork that leaves the library out), give the script a library zip of the same version instead — the `honeydew-<version>-sounds.zip` on the project's releases page:
-
-```sh
-HONEYDEW_SOUNDS_ZIP=/path/to/honeydew-v0.4.6-sounds.zip tools/android-dist.sh
-```
-
-or unpack one into `target/android/assets/content` yourself, and the script uses what is there. `.github/workflows/android-apk.yml` does this on every change to the Android build: it fetches the release's library, builds the debug APK and publishes it to the `apk-debug` prerelease, so a phone can open that page and install it.
-
 **Release signing:** use the same key for every release, or Android won't install updates over the old version. Back up the keystore and passwords outside the repository.
 
 - **Local release:** set `ANDROID_KEYSTORE_FILE`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`, then run `tools/android-dist.sh --release`.
@@ -264,6 +276,12 @@ Honeydew is an independent project, not affiliated with or endorsed by Image-Lin
 - **Code:** [GPL-3.0-or-later](LICENSE). Copyright (c) 2026 The Honeydew contributors.
 - **Plugin hosting, FLP support, Lemon Reverb, Lemon Limiter, Lemon Trio, Lemon Sampler, Lemon Parametric EQ, Citrus, Lemon Drum Sampler and Lemon Slicer:** from Lemon Studio by ItsAlphaNeon; see [Code from Lemon Studio](#code-from-lemon-studio) below.
 - **Lemon Studio's small effects, Lemon Delay, Lemon Vocoder, Press and Pulp Filter:** from Lemon Studio by ItsAlphaNeon too.
+- **Video (Android builds with the `video` feature):** [FFmpeg](https://ffmpeg.org) 7.1.1 (LGPL-2.1-or-later, built with
+  `--enable-gpl`) and [x264](https://www.videolan.org/developers/x264.html) (GPL-2.0-or-later), linked statically; the
+  combination is GPL-2.0-or-later, which the app's GPL-3.0-or-later takes. Their sources are fetched by
+  [`tools/build-ffmpeg.sh`](tools/build-ffmpeg.sh) at the versions it names.
+- **Images and QR codes:** the [`image`](https://github.com/image-rs/image) crate (MIT or Apache-2.0) and
+  [`qrcodegen`](https://github.com/nayuki/QR-Code-generator) by Project Nayuki (MIT).
 - **Font:** Open Sans SemiCondensed SemiBold, SIL Open Font License 1.1 ([`assets/fonts/OFL.txt`](assets/fonts/OFL.txt)).
 - **Icon:** a derivative of "Melon" by afitrose, licensed as Free for commercial use WITH ATTRIBUTION.
 - **Sounds:** the bundled instruments, drum kits, one-shots, effects, loops and waveforms come from the sources below. Full notices are in the app under SETTINGS → Sound credits.
