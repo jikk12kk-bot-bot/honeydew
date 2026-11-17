@@ -6,7 +6,7 @@
 //! The state is nih-plug's JSON, after an 8-byte little-endian length when the plugin wrote it (as
 //! `os_hostlink::state::json` reads it); its `fields` are JSON in strings:
 //! - Lemon Sampler: `sample-path`, the file;
-//! - Lemon Slicer: `sample-path`, the file to open (\"\" = the one in `state`), and `state`, the original's saved state
+//! - Lemon Slicer: `sample-path`, the file to open ("" = the one in `state`), and `state`, the original's saved state
 //!   in hex, which names the loop;
 //! - Lemon Drum Sampler: `state`, the original's saved state in hex, whose layers name their files, and
 //!   `sample-paths`, files given for layers. Each path is changed where it is, by value: what a given file's index
@@ -86,19 +86,20 @@ pub(crate) fn files_of(plugin: &PluginRef) -> Vec<String> {
 
 /// Each sample path the Lemon samplers of `song` name that `map` maps changed to what it maps to.
 pub(crate) fn relink(song: &mut Song, map: &dyn Fn(&str) -> Option<String>) {
+    let mut map = map;
     let modules = (song.channels.iter_mut()).flat_map(|c| &mut c.rack.modules);
     for module in modules.filter(|m| is_plugin(m.type_id)) {
         let Some(plugin) = module.file.plugin.as_deref_mut() else {
             continue;
         };
         let Some(kind) = kind(plugin) else { continue };
-        if let Some(state) = visit(kind, &plugin.state, &mut |path| map(path)) {
+        if let Some(state) = visit(kind, &plugin.state, &mut map) {
             plugin.state = Arc::from(state);
         }
     }
 }
 
-/// Every sample path (not \"\") of a `kind` plugin's state `blob` goes through `each`; one it returns takes its place.
+/// Every sample path (not "") of a `kind` plugin's state `blob` goes through `each`; one it returns takes its place.
 /// The state with them, `None` when none changed or it is no state this reads.
 fn visit(kind: Kind, blob: &[u8], each: &mut dyn FnMut(&str) -> Option<String>) -> Option<Vec<u8>> {
     let (prefixed, json) = split_length(blob);
@@ -238,7 +239,7 @@ fn drum_layers(raw: &[u8], each: &mut dyn FnMut(&str) -> Option<String>) -> Opti
 }
 
 fn from_hex(s: &str) -> Option<Vec<u8>> {
-    (s.len() % 2 == 0).then_some(())?;
+    s.len().is_multiple_of(2).then_some(())?;
     (0..s.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())

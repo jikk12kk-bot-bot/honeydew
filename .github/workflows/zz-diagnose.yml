@@ -32,7 +32,7 @@ jobs:
         run: |
           set +e
           cargo clippy --workspace --all-targets -- -D warnings > clippy.txt 2>&1; echo "clippy exit $?" >> status.txt
-          cargo test --workspace > test.txt 2>&1; echo "test exit $?" >> status.txt
+          cargo test --lib -- lemon_samples main_menu project_files::export project_files::archive > test.txt 2>&1; echo "test exit $?" >> status.txt
           cargo check --workspace --target wasm32-unknown-unknown > wasm.txt 2>&1; echo "wasm exit $?" >> status.txt
           true
       - name: Report
