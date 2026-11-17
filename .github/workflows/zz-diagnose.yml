@@ -26,72 +26,8 @@ jobs:
       - name: Clippy
         run: |
           set +e
-          cargo clippy --workspace --all-targets -- -D warnings > clippy.txt 2>&1
+          cargo clippy --keep-going --workspace --all-targets -- -D warnings > clippy.txt 2>&1
           code=$?
           { echo "### clippy exit $code"; echo '```'; grep -v '^\s*\(Compiling\|Checking\|Downloaded\|Downloading\|Updating\|Locking\|Adding\|Fresh\)' clippy.txt | tail -c 60000; echo '```'; } > body.md
           gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" -F body=@body.md > /dev/null
 
-  android:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: bash tools/fetch-sounds.sh
-        env:
-          SOUNDS_REPO: daijro/honeydew
-          SOUNDS_TAG: v0.5.4
-      - uses: dtolnay/rust-toolchain@1.91.0
-        with:
-          targets: aarch64-linux-android, armv7-linux-androideabi
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: android-arm
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: 'platform-tools'
-      - uses: gradle/actions/setup-gradle@v4
-      - run: |
-          sudo apt-get update && sudo apt-get install -y libclang-dev
-          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.0.13004108'
-          cargo install cargo-ndk --version 4.1.2 --locked
-      - name: Signed build
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set +e
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.0.13004108"
-          export ANDROID_KEYSTORE_FILE="$RUNNER_TEMP/release.jks"
-          umask 077
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_FILE"
-          {
-            echo "keystore bytes: $(wc -c < "$ANDROID_KEYSTORE_FILE"), type: $(file -b "$ANDROID_KEYSTORE_FILE")"
-            echo "lengths: base64=${#ANDROID_KEYSTORE_BASE64} store_pw=${#ANDROID_KEYSTORE_PASSWORD} alias=${#ANDROID_KEY_ALIAS} key_pw=${#ANDROID_KEY_PASSWORD}"
-            echo "store pw has trailing space/newline: $(printf '%s' "$ANDROID_KEYSTORE_PASSWORD" | grep -c '[[:space:]]$')"
-            echo "--- keytool -list (aliases in the keystore):"
-            keytool -list -keystore "$ANDROID_KEYSTORE_FILE" -storepass "$ANDROID_KEYSTORE_PASSWORD" 2>&1 | grep -v -i fingerprint
-            echo "--- given alias found: $(keytool -list -keystore "$ANDROID_KEYSTORE_FILE" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null 2>&1 && echo yes || echo no)"
-            echo "--- key password opens the key:"
-            keytool -exportcert -rfc -keystore "$ANDROID_KEYSTORE_FILE" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null 2>&1 && echo "store ok"
-            keytool -certreq -keystore "$ANDROID_KEYSTORE_FILE" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" -keypass "$ANDROID_KEY_PASSWORD" >/dev/null 2>&1 && echo "key ok" || echo "key password FAILED"
-          } > check.txt 2>&1
-          tools/android-dist.sh --release --base > build.txt 2>&1
-          code=$?
-          rm -f "$ANDROID_KEYSTORE_FILE"
-          { echo "### android exit $code"; echo '```'; cat check.txt; echo '--- build (errors and tail):'; grep -n -i -B2 -A8 'error\|failed\|wrong\|exception' build.txt | grep -v '^\s*$' | tail -c 30000; echo '...'; tail -n 60 build.txt; echo '```'; } > raw.md
-          # Never post a secret's value.
-          python3 - <<'PY'
-          import os
-          s = open('raw.md').read()
-          for k in ('ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_PASSWORD'):
-              v = os.environ.get(k, '')
-              if len(v) >= 3:
-                  s = s.replace(v, '***' + k + '***')
-          open('body.md', 'w').write(s[:64000])
-          PY
-          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" -F body=@body.md > /dev/null
