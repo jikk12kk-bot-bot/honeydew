@@ -1,8 +1,7 @@
 name: Release
 
+# Manual only: Actions → Release → Run workflow, with the release's tag (e.g. v0.5.6); a new tag builds nothing by itself.
 on:
-  push:
-    tags: ["v*"]
   # Builds an existing tag's source with this workflow and replaces its release's downloads.
   workflow_dispatch:
     inputs:

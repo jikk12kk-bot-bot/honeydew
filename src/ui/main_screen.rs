@@ -2732,7 +2732,7 @@ mod tests {
     use crate::project_files::ProjectFiles;
     use crate::project_files::mem::MemFiles;
     use crate::song::{Event, LaneKind, Song, SynthKind};
-    use crate::theme::{Rgba, theme_by_id};
+    use crate::theme::theme_by_id;
     use crate::ui::clips::ClipRef;
     use crate::ui::offscreen::Offscreen;
     use crate::ui::views::{AppCtx, SongEdit};
