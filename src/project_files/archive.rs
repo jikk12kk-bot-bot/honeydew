@@ -356,7 +356,9 @@ impl ProjectFiles {
         });
         super::lemon_samples::relink(song, &|path| {
             let tails = super::lemon_samples::tails(path).into_iter();
-            let file = tails.map(|t| dir.join(t)).find(|f| self.user_file_exists(f))?;
+            let file = tails
+                .map(|t| dir.join(t))
+                .find(|f| self.user_file_exists(f))?;
             if self.disk_user_dir().is_none()
                 && let Ok(bytes) = self.read_user_file(&file)
             {

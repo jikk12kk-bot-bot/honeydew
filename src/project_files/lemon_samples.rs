@@ -144,7 +144,10 @@ fn split_length(blob: &[u8]) -> (bool, &[u8]) {
 }
 
 /// `sample-path`, a JSON string in the field's string.
-fn visit_string(fields: &mut Map<String, Value>, each: &mut dyn FnMut(&str) -> Option<String>) -> bool {
+fn visit_string(
+    fields: &mut Map<String, Value>,
+    each: &mut dyn FnMut(&str) -> Option<String>,
+) -> bool {
     let Some(field) = fields.get_mut(SAMPLE_FIELD) else {
         return false;
     };
@@ -162,11 +165,16 @@ fn visit_string(fields: &mut Map<String, Value>, each: &mut dyn FnMut(&str) -> O
 }
 
 /// `sample-paths`, a JSON list of strings in the field's string.
-fn visit_list(fields: &mut Map<String, Value>, each: &mut dyn FnMut(&str) -> Option<String>) -> bool {
+fn visit_list(
+    fields: &mut Map<String, Value>,
+    each: &mut dyn FnMut(&str) -> Option<String>,
+) -> bool {
     let Some(field) = fields.get_mut(PATHS_FIELD) else {
         return false;
     };
-    let Some(mut paths) = (field.as_str()).and_then(|s| serde_json::from_str::<Vec<String>>(s).ok()) else {
+    let Some(mut paths) =
+        (field.as_str()).and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+    else {
         return false;
     };
     let mut changed = false;
@@ -186,7 +194,10 @@ fn visit_list(fields: &mut Map<String, Value>, each: &mut dyn FnMut(&str) -> Opt
 }
 
 /// `state`, the original's saved state as hex in quotes, in the field's string, through `edit`.
-fn visit_raw(fields: &mut Map<String, Value>, edit: &mut dyn FnMut(&[u8]) -> Option<Vec<u8>>) -> bool {
+fn visit_raw(
+    fields: &mut Map<String, Value>,
+    edit: &mut dyn FnMut(&[u8]) -> Option<Vec<u8>>,
+) -> bool {
     let Some(field) = fields.get_mut(STATE_FIELD) else {
         return false;
     };
@@ -244,7 +255,10 @@ pub(crate) fn tails(path: &str) -> Vec<PathBuf> {
     let parts: Vec<&str> = path.split(['/', '\\']).collect();
     let fine = |part: &&str| {
         !part.contains(':')
-            && matches!(Path::new(part).components().collect::<Vec<_>>()[..], [Component::Normal(_)])
+            && matches!(
+                Path::new(part).components().collect::<Vec<_>>()[..],
+                [Component::Normal(_)]
+            )
     };
     let start = (parts.iter().rposition(|p| !fine(p))).map_or(0, |at| at + 1);
     (start..parts.len())
@@ -290,7 +304,10 @@ pub(crate) mod tests {
         let mut st = lemon_slicer::state::State::default();
         st.set_path(stored);
         let raw = format!("\"{}\"", hex(&st.to_bytes()));
-        plugin(SLICER, blob(&[(STATE_FIELD, raw), (SAMPLE_FIELD, quoted(given))]))
+        plugin(
+            SLICER,
+            blob(&[(STATE_FIELD, raw), (SAMPLE_FIELD, quoted(given))]),
+        )
     }
 
     /// A Lemon Drum Sampler with `samples` on pads by index, as the editor's load puts them, and `given` files.
@@ -328,7 +345,10 @@ pub(crate) mod tests {
 
     #[test]
     fn each_lemon_sampler_names_its_files() {
-        assert_eq!(files_of(&sampler("/u/My Samples/a.wav")), ["/u/My Samples/a.wav"]);
+        assert_eq!(
+            files_of(&sampler("/u/My Samples/a.wav")),
+            ["/u/My Samples/a.wav"]
+        );
         assert!(files_of(&sampler("")).is_empty());
         assert_eq!(files_of(&slicer("/u/loop.wav", "")), ["/u/loop.wav"]);
         assert_eq!(
@@ -349,7 +369,11 @@ pub(crate) mod tests {
 
     #[test]
     fn a_song_names_each_file_once() {
-        let song = song_of(vec![sampler("/u/a.wav"), sampler("/u/a.wav"), slicer("/u/b.wav", "")]);
+        let song = song_of(vec![
+            sampler("/u/a.wav"),
+            sampler("/u/a.wav"),
+            slicer("/u/b.wav", ""),
+        ]);
         assert_eq!(sample_files(&song), ["/u/a.wav", "/u/b.wav"]);
     }
 
@@ -387,7 +411,9 @@ pub(crate) mod tests {
         // A drum state still reads, its pads where they were.
         let kit = plugins_in(&song)[2];
         let raw = lemon_drum_sampler::params::fl_from_plugin_state(&kit.state).unwrap();
-        let pads = lemon_drum_sampler::state::State::parse(&raw).unwrap().pads();
+        let pads = lemon_drum_sampler::state::State::parse(&raw)
+            .unwrap()
+            .pads();
         assert_eq!(pads[2].layers[0].path, "/new/snare.wav");
         assert_eq!(pads[5].layers[0].path, "/x/keep.wav");
         assert_eq!(pads.len(), 32);
@@ -404,10 +430,29 @@ pub(crate) mod tests {
     #[test]
     fn a_paths_tails_never_leave_a_folder() {
         let tails_of = |p: &str| -> Vec<String> {
-            tails(p).iter().map(|t| t.iter().map(|c| c.to_string_lossy()).collect::<Vec<_>>().join("/")).collect()
+            tails(p)
+                .iter()
+                .map(|t| {
+                    t.iter()
+                        .map(|c| c.to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/")
+                })
+                .collect()
         };
-        assert_eq!(tails_of("/home/me/My Samples/a.wav"), ["home/me/My Samples/a.wav", "me/My Samples/a.wav", "My Samples/a.wav", "a.wav"]);
-        assert_eq!(tails_of("C:\\Users\\me\\a.wav"), ["Users/me/a.wav", "me/a.wav", "a.wav"]);
+        assert_eq!(
+            tails_of("/home/me/My Samples/a.wav"),
+            [
+                "home/me/My Samples/a.wav",
+                "me/My Samples/a.wav",
+                "My Samples/a.wav",
+                "a.wav"
+            ]
+        );
+        assert_eq!(
+            tails_of("C:\\Users\\me\\a.wav"),
+            ["Users/me/a.wav", "me/a.wav", "a.wav"]
+        );
         assert_eq!(tails_of("x/../y/a.wav"), ["y/a.wav", "a.wav"]);
         assert_eq!(tails_of("a/./b.wav"), ["b.wav"]);
         assert!(tails_of("a/..").is_empty());

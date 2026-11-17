@@ -975,7 +975,9 @@ fn the_close_triangle_left_of_help_closes_the_menu() {
     );
     assert!(close.right() <= rig.find("Help").left());
     let ink = rig.shapes.iter().any(|c| match &c.shape {
-        egui::Shape::Path(p) => p.points.len() == 3 && p.points.iter().all(|&at| close.contains(at)),
+        egui::Shape::Path(p) => {
+            p.points.len() == 3 && p.points.iter().all(|&at| close.contains(at))
+        }
         _ => false,
     });
     assert!(ink, "the triangle is drawn in its cell");

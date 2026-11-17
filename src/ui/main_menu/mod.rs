@@ -405,7 +405,8 @@ impl MainMenu {
 
         // Header: the close ◀ in a 1.25 U cell at the left, then `Help` in a 2 U cell, `Quit` in one at the right, and
         // between them, centred as a group, the logo, our name and the version. The header itself is no button.
-        let cell = |left: f32, w: f32| Rect::from_x_y_ranges(left..=left + m.u(w), header.y_range());
+        let cell =
+            |left: f32, w: f32| Rect::from_x_y_ranges(left..=left + m.u(w), header.y_range());
         let close = cell(header.left(), CLOSE_CELL);
         let help = cell(close.right(), HEADER_CELL);
         let quit = cell(header.right() - m.u(HEADER_CELL), HEADER_CELL);
