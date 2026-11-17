@@ -45,8 +45,14 @@ pub(crate) fn moved(ctx: &Context, id: Id, rect: Rect, screen: Rect) -> Rect {
 
 /// `rect` moved onto `screen`, its top left first when it is the bigger.
 fn kept_on(rect: Rect, screen: Rect) -> Rect {
-    let x = rect.left().min(screen.right() - rect.width()).max(screen.left());
-    let y = rect.top().min(screen.bottom() - rect.height()).max(screen.top());
+    let x = rect
+        .left()
+        .min(screen.right() - rect.width())
+        .max(screen.left());
+    let y = rect
+        .top()
+        .min(screen.bottom() - rect.height())
+        .max(screen.top());
     rect.translate(pos2(x, y) - rect.min)
 }
 

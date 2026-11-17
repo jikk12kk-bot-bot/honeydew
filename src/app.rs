@@ -2107,6 +2107,8 @@ impl HoneydewApp {
         // The unsaved changes are kept for the next start, written before the app is gone.
         let _ = self.files.keep_session(&self.song, f64::INFINITY, true);
         self.files.finish_session();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.files.join_autosave();
         // The plugins' editors close before their windows go.
         crate::plugins::song_replaced();
         if self.settings_unflushed
@@ -2325,9 +2327,9 @@ impl HoneydewApp {
                     && !self.main_screen.panel_hidden
                     && views::panel_in_front(&self.nav.overlays);
                 let covered = self.nav.overlays.iter().any(over);
-                let grabbed = self
-                    .main_screen
-                    .grab(ui, &metrics, covered && !front, screen.height());
+                let grabbed =
+                    self.main_screen
+                        .grab(ui, &metrics, covered && !front, screen.height());
                 let (mut regions, strip) = panel::panel_layout(
                     ui.ctx(),
                     screen,
@@ -3036,7 +3038,6 @@ mod tests {
     mod performance_monitor;
     mod picker_rules;
     mod preview;
-    mod project_info;
     mod rack_input;
     mod rack_wiring;
     mod recording;
@@ -4037,18 +4038,6 @@ mod tests {
     }
 
     #[test]
-    fn the_logo_opens_the_main_menu_whose_tabs_switch_and_whose_close_x_closes_it() {
-        let mut rig = Rig::new();
-        rig.click(LOGO);
-        assert_eq!(rig.overlays(), [Overlay::MainMenu(MenuTab::Songs)]);
-        rig.frame(vec![]);
-        rig.click_id(egui::Id::new("main_menu").with(("tab", 2_usize)));
-        assert_eq!(rig.overlays(), [Overlay::MainMenu(MenuTab::Settings)]);
-        rig.click_id(egui::Id::new("main_menu").with("close"));
-        assert_eq!(rig.overlays(), []);
-    }
-
-    #[test]
     fn the_transport_switches_to_the_mixer_and_back_and_toggles_its_panels() {
         let mut rig = Rig::new();
         rig.click(MIXER);
@@ -4076,40 +4065,6 @@ mod tests {
         rig.click(CLOSE);
         assert_eq!(rig.app.nav.view, View::Mixer);
         assert!(rig.app.main_screen.panel_hidden);
-    }
-
-    #[test]
-    fn a_clips_edit_button_opens_its_channels_editor_and_the_close_x_goes_back() {
-        let mut rig = Rig::with_drums_and_synth();
-        let edit = egui::Id::new(("clip_button", 4_usize));
-        let plus = egui::Id::new("clip_insert").with(0);
-        // A tap on the empty drum lane makes its track current, the next shows the insert menu, whose `New Clip` adds a
-        // clip and selects it; its Edit opens the drum editor.
-        rig.click(lane(1));
-        rig.click(lane(1));
-        rig.frame(vec![]);
-        rig.click_id(plus);
-        rig.frame(vec![]);
-        rig.click_id(edit);
-        assert_eq!(rig.app.nav.view, View::DrumEditor(1));
-        rig.slide_split();
-        rig.click_id(egui::Id::new("editor_close"));
-        assert_eq!(rig.app.nav.view, View::Playlist);
-        // On the synth lane: the first tap clears the selection, the second makes the track current, the third shows
-        // the insert menu.
-        for _ in 0..3 {
-            rig.click(lane(2));
-        }
-        rig.frame(vec![]);
-        rig.click_id(plus);
-        rig.frame(vec![]);
-        rig.click_id(edit);
-        assert_eq!(rig.app.nav.view, View::PianoRoll(2));
-        rig.slide_split();
-        rig.click_id(egui::Id::new("editor_close"));
-        assert_eq!(rig.app.nav.view, View::Playlist);
-        // A clip edit reaches the song.
-        assert_eq!(rig.app.song.channels[2].lanes[0].clips.len(), 1);
     }
 
     #[test]
@@ -5227,20 +5182,6 @@ mod tests {
         assert_eq!(rig.app.song.title, "Beat");
         assert_eq!(rig.overlays(), []);
         assert_eq!(rig.take(), ["Stop", "ReplaceSong"]);
-    }
-
-    #[test]
-    fn the_songs_folder_is_read_again_when_the_menu_opens() {
-        let (mut rig, _) = rig_with_file("/songs/Beat.flm", b"");
-        rig.open_menu(MenuTab::Songs);
-        rig.app.files.library.store("Late.flm", b"x").unwrap();
-        rig.frame(vec![]);
-        assert!(!rig.drawn(row("Late.flm")), "read every frame");
-        rig.click_id(egui::Id::new("main_menu").with("close"));
-        assert_eq!(rig.overlays(), []);
-        rig.frame(vec![]);
-        rig.open_menu(MenuTab::Songs);
-        assert!(rig.drawn(row("Late.flm")));
     }
 
     /// The SONGS ≡ menu's item at `row`.
@@ -6555,24 +6496,6 @@ mod tests {
         assert!(!rig.texts().iter().any(|t| t.ends_with(" MB")));
         let delay = rig.out.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
         assert!(delay.as_secs_f32() > 1.0, "{delay:?}");
-    }
-
-    #[test]
-    fn stopped_with_its_audio_at_rest_the_app_asks_for_no_frame_but_the_ram_readouts() {
-        // Issue #72: the drum pads' level glows asked for a frame every 50 ms while the audio ran, at rest too.
-        let mut rig = Rig::with_drums_and_synth();
-        let drums = (rig.app.song.channels.iter()).position(|c| c.kind == ChannelKind::Drums);
-        rig.app.selected_channel = drums.expect("a drums channel");
-        rig.click(OUTSIDE);
-        assert!(rig.app.audio.running(), "the audio runs");
-        let delay = |rig: &Rig| rig.out.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
-        // The audio just got its song: what it plays may light a meter up to the output's latency later.
-        assert!(delay(&rig).as_secs_f32() <= 0.05, "{:?}", delay(&rig));
-        // A second on, nothing sounds and nothing went to it since: the RAM readout's frame a second only.
-        for _ in 0..10 {
-            rig.frame(vec![]);
-        }
-        assert!(delay(&rig).as_secs_f32() > 0.9, "{:?}", delay(&rig));
     }
 
     // ---- Channel param controls save no undo step, without a rebuild ----

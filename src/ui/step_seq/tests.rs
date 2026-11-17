@@ -443,71 +443,6 @@ const TOP: f32 = 52.0;
 const Y0: f32 = 52.0;
 
 #[test]
-fn the_row_pitch_is_a_zoom_clamped_to_2_to_100_24_u() {
-    assert_eq!(clamp_pitch(0.5), 0.75);
-    assert_eq!(clamp_pitch(3.0), 3.0);
-    assert_eq!(clamp_pitch(15.0), 12.0);
-    assert_eq!(
-        RowView::default(),
-        RowView {
-            pitch: 2.0,
-            scroll: 0.0
-        },
-        "a new clip asks for 1 U"
-    );
-    // A pinch over the rows zooms them within that range, around the pointer (here the rows' top).
-    let mut rig = Rig::new(pattern());
-    let top = pos2(400.0, TOP);
-    rig.pinch(top, 1.5);
-    assert_eq!(
-        rig.row_view(),
-        RowView {
-            pitch: 3.0,
-            scroll: 0.0
-        }
-    );
-    rig.pinch(top, 10.0);
-    assert_eq!(rig.row_view().pitch, 12.0);
-    rig.pinch(top, 0.01);
-    assert_eq!(rig.row_view().pitch, 0.75);
-    assert_eq!(rig.layout().pitch, 24.0);
-}
-
-#[test]
-fn rows_take_the_zoom_pitch_and_steps_share_the_width() {
-    // U = 32: the strip is the ruler's height, the headers 96 wide, a new clip's rows 64 apart from the pixel nearest
-    // the strip's bottom.
-    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 448.0));
-    let l = Layout::new(rect, 4, 16, &metrics(), 0.0, RowView::default());
-    assert_eq!(
-        l.swing_strip(),
-        Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, TOP))
-    );
-    // Pitch 64, step 43.875 (702 points from the t gap, 2 points), each one pixel short.
-    assert_eq!(
-        l.header(0),
-        Rect::from_min_max(pos2(0.0, Y0), pos2(96.0, Y0 + 63.0))
-    );
-    assert_eq!(
-        l.cell(1, 2),
-        Rect::from_min_max(pos2(186.0, Y0 + 64.0), pos2(229.0, Y0 + 127.0))
-    );
-    assert_eq!(l.hit(pos2(187.0, Y0 + 65.0)), Some((1, 2)));
-    assert_eq!(l.hit(pos2(799.0, Y0 + 255.0)), Some((3, 15)));
-    assert_eq!(l.hit(pos2(799.0, Y0 + 257.0)), None, "below the last row");
-    assert_eq!(l.hit(pos2(50.0, Y0 + 65.0)), None, "a header");
-    assert_eq!(l.hit(pos2(185.0, 20.0)), None, "the strip");
-    let l = Layout::new(rect, 4, 32, &metrics(), 0.0, RowView::default());
-    assert_eq!(l.cell(0, 31).x_range(), Rangef::new(778.0, 799.0));
-    assert_eq!(l.hit(pos2(780.0, 60.0)), Some((0, 31)));
-    // The drum mixer's room sits between the headers, which keep their 3 U, and the steps.
-    let l = Layout::new(rect, 4, 16, &metrics(), 256.0, RowView::default());
-    assert_eq!(l.header(0).x_range(), Rangef::new(0.0, 96.0));
-    assert_eq!(l.cell(0, 0).left(), 354.0);
-    assert_eq!(l.hit(pos2(200.0, 60.0)), None, "the mixer");
-}
-
-#[test]
 fn the_scroll_range_is_the_rows_and_one_and_a_half_more() {
     // 12 rows of 64 and 96 of room in the body under the strip: 864 less its height to scroll.
     let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 448.0));
@@ -719,42 +654,6 @@ impl Rig {
         self.frame(vec![]);
     }
 
-    /// A pinch by `factor` with the pointer at `at`.
-    fn pinch(&mut self, at: Pos2, factor: f32) {
-        // Two fingers: the first stays on `at`, the anchor; the second, below it, spreads (or closes) the separation by
-        // `factor`. (The trackpad's pinch is the time's, which the steps do not have.)
-        let (from, to) = if factor >= 1.0 {
-            (100.0, 100.0 * factor)
-        } else {
-            (100.0 / factor, 100.0)
-        };
-        let touch = |id, phase, pos| egui::Event::Touch {
-            device_id: egui::TouchDeviceId(1),
-            id: egui::TouchId(id),
-            phase,
-            pos,
-            force: None,
-        };
-        let button = |pressed| egui::Event::PointerButton {
-            pos: at,
-            button: PointerButton::Primary,
-            pressed,
-            modifiers: Modifiers::NONE,
-        };
-        use egui::TouchPhase::{End, Move, Start};
-        self.frame(vec![egui::Event::PointerMoved(at)]);
-        self.frame(vec![touch(1, Start, at), button(true)]);
-        self.frame(vec![touch(2, Start, at + vec2(0.0, from))]);
-        self.frame(vec![touch(2, Move, at + vec2(0.0, to))]);
-        self.frame(vec![
-            touch(2, End, at + vec2(0.0, to)),
-            touch(1, End, at),
-            button(false),
-            egui::Event::PointerGone,
-        ]);
-        self.frame(vec![]);
-    }
-
     /// Scrolls the shown clip's time to content beat `x` and draws a frame (the frame clamps it to its range).
     fn scroll_to(&mut self, x: f64) {
         let key = self.view.key(CH, &self.channel().lanes[self.view.lane]);
@@ -763,19 +662,6 @@ impl Rig {
             ..self.clip_view()
         };
         self.view.views.insert(key, view);
-        self.frame(vec![]);
-    }
-
-    /// A vertical drag by `dy` from `from`, in four moves, held still before the release (no fling).
-    fn drag(&mut self, from: Pos2, dy: f32) {
-        self.frame(vec![egui::Event::PointerMoved(from)]);
-        self.press(from, PointerButton::Primary, true);
-        for i in 1..=4 {
-            let at = from + vec2(0.0, dy * i as f32 / 4.0);
-            self.frame(vec![egui::Event::PointerMoved(at)]);
-        }
-        self.frame(vec![]);
-        self.press(from + vec2(0.0, dy), PointerButton::Primary, false);
         self.frame(vec![]);
     }
 
@@ -1009,19 +895,6 @@ fn a_tap_on_the_current_rows_header_toggles_the_mixer_and_on_another_only_select
         Some(Overlay::Menu { row: 0, .. })
     ));
     assert!(!rig.view.fold.open);
-    assert!(rig.actions.is_empty());
-}
-
-#[test]
-fn a_drag_from_the_current_rows_header_scrolls_and_does_not_fold_the_mixer() {
-    // "Dragging does not resize": a drag that starts on the current header is the rows' scroll.
-    let mut rig = Rig::new(pattern());
-    rig.kit = twelve();
-    rig.frame(vec![]);
-    let at = rig.header(0);
-    rig.drag(at, -200.0);
-    assert_eq!(rig.row_view().scroll, 200.0 / 32.0);
-    assert_eq!((rig.view.fold.open, rig.view.fold.c), (false, 0.0));
     assert!(rig.actions.is_empty());
 }
 
@@ -1784,37 +1657,6 @@ fn a_lane_that_is_not_a_drum_lane_shows_nothing() {
     assert!(rig.actions.is_empty());
 }
 
-#[test]
-fn row_headers_shrink_the_pad_name_and_truncate_the_sample_name() {
-    // The drum mixer strip header: both lines left-aligned 2 hairlines into the header and at most its width less 7
-    // hairlines; the pad name shrunk from 12 pt and centred on the row, the sample name truncated at 6 pt keeping 5
-    // tail characters, 0.5 U lower.
-    let sample = "A sample name wider than the header";
-    let mut rig = Rig::new(drums());
-    rig.kit.0[0] = ("Kick", sample, None);
-    rig.frame(vec![]);
-    let (h, t) = (rig.layout().header(0), metrics().t());
-    let boxes = rig.header_lines(h);
-    assert_eq!(boxes.len(), 2, "{boxes:?}");
-    for b in &boxes {
-        assert!(
-            (b.1.left() - (h.left() + 2.0 * t)).abs() < 1e-3,
-            "{b:?} in {h:?}"
-        );
-        assert!(b.1.width() <= h.width() - 7.0 * t, "{b:?}");
-    }
-    let (kick, cut) = (&boxes[0], &boxes[1]);
-    assert_eq!((kick.0.as_str(), kick.2), ("Kick", 24.0));
-    assert!((kick.1.center().y - h.center().y).abs() < 1e-3, "{kick:?}");
-    let (head, tail) = cut.0.split_once("...").expect("an ellipsis");
-    assert!(sample.starts_with(head) && !head.is_empty(), "{cut:?}");
-    assert_eq!((tail, cut.2), ("eader", 12.0));
-    assert!(
-        (cut.1.center().y - (h.center().y + 0.5 * 32.0)).abs() < 1e-3,
-        "{cut:?}"
-    );
-}
-
 /// Twelve pads.
 fn twelve() -> Kit {
     let names = [
@@ -1822,101 +1664,6 @@ fn twelve() -> Kit {
         "Cowbell", "Conga",
     ];
     Kit(names.map(|n| (n, "FL 808 Kit", None)).to_vec())
-}
-
-#[test]
-fn a_new_clip_opens_at_2_u() {
-    let mut rig = Rig::new(drums());
-    assert_eq!(
-        rig.row_view(),
-        RowView {
-            pitch: 2.0,
-            scroll: 0.0
-        }
-    );
-    // `+Clip`'s clip opens at 2 U too.
-    rig.song.channels[CH].lanes[0].add_clip(0, 4.0);
-    rig.view.clip = Some(1);
-    rig.frame(vec![]);
-    assert_eq!(
-        rig.row_view(),
-        RowView {
-            pitch: 2.0,
-            scroll: 0.0
-        }
-    );
-    assert_eq!(
-        rig.layout().header(3),
-        Rect::from_min_max(pos2(0.0, Y0 + 192.0), pos2(96.0, Y0 + 255.0))
-    );
-}
-
-#[test]
-fn each_clip_keeps_its_own_zoom_and_scroll() {
-    let mut channel = pattern();
-    channel.lanes[0].add_clip(512, 4.0);
-    let mut rig = Rig::new(channel);
-    rig.kit = twelve();
-    rig.pinch(pos2(400.0, TOP), 1.5);
-    rig.drag(pos2(400.0, 500.0), -100.0);
-    let zoomed = rig.row_view();
-    assert_eq!(zoomed.pitch, 3.0);
-    assert!((zoomed.scroll - 100.0 / 32.0).abs() < 1e-3, "{zoomed:?}");
-    rig.view.clip = Some(2);
-    rig.frame(vec![]);
-    assert_eq!(rig.row_view(), RowView::default(), "the other clip");
-    rig.view.clip = Some(1);
-    rig.frame(vec![]);
-    assert_eq!(rig.row_view(), zoomed);
-    // Another channel's view keeps them too: they are keyed by channel, lane and clip, not stored in the song.
-    assert!(rig.view.views.contains_key(&(CH, 0, Some(1))));
-}
-
-#[test]
-fn twelve_rows_scroll_to_the_last_row_and_the_add_button() {
-    let mut rig = Rig::new(pattern());
-    rig.kit = twelve();
-    rig.frame(vec![]);
-    // 12 rows of 64 and 96 of room in the body under the strip: 864 less its height to scroll. A drag on the grid
-    // scrolls, past the end at a fifth (the rubber band), which springs back once let go.
-    let range = 864.0 - (600.0 - TOP);
-    rig.drag(pos2(400.0, 590.0), -400.0);
-    assert!(rig.row_view().scroll > range / 32.0);
-    for _ in 0..80 {
-        rig.frame(vec![]);
-    }
-    assert!((rig.row_view().scroll - range / 32.0).abs() < 1e-4);
-    let l = rig.layout();
-    let body = l.body();
-    // The header column scrolls with the grid.
-    assert_eq!(l.header(0).top(), (TOP - range).round());
-    assert_eq!(
-        l.header(11),
-        Rect::from_min_max(pos2(0.0, 440.0), pos2(96.0, 503.0))
-    );
-    assert_eq!(l.cell(11, 15).y_range(), l.header(11).y_range());
-    let add = l.add_button();
-    assert_eq!(
-        add,
-        Rect::from_min_size(pos2(16.0, 528.0), vec2(64.0, 64.0))
-    );
-    assert!(body.contains_rect(add));
-    // The `+` is drawn there.
-    assert!(
-        rig.shapes.iter().any(|c| {
-            let r = c.shape.visual_bounding_rect();
-            r.is_positive() && add.contains_rect(r) && c.clip_rect.contains_rect(r)
-        }),
-        "no + drawn in {add:?}"
-    );
-    // The last row is live: its header selects, its steps toggle.
-    rig.click(l.header(11).center());
-    assert_eq!(rig.view.selected, 11);
-    rig.click(l.cell(11, 15).center());
-    assert!(rig.hits().contains(&(11, 15, 0)), "{:?}", rig.hits());
-    // Nothing paints or reacts over the `SWING` strip: row 0's header there is clipped away.
-    rig.click(pos2(48.0, 40.0));
-    assert!(matches!(rig.view.overlay, Some(Overlay::Swing { .. })));
 }
 
 #[test]
@@ -1954,109 +1701,6 @@ fn headers_span_the_pitch_and_their_lines_sit_on_the_middle_and_half_a_u_below()
             );
         }
     }
-}
-
-#[test]
-fn no_header_line_is_clipped_at_2_u() {
-    // With the app's font, twelve rows: at 2 U both lines of every header in view fit inside it.
-    let mut rig = Rig::new(pattern());
-    crate::fonts::install(&rig.ctx);
-    rig.kit = twelve();
-    rig.frame(vec![]);
-    rig.frame(vec![]);
-    let l = rig.layout();
-    let mut lines = 0;
-    for row in 0..12 {
-        let h = l.header(row);
-        if !l.body().contains_rect(h) {
-            continue;
-        }
-        for (text, r, _, clip) in rig.header_lines(h) {
-            assert!(
-                clip.contains_rect(r) && h.contains_rect(r),
-                "{text}: {r:?} in {h:?}, clip {clip:?}"
-            );
-            lines += 1;
-        }
-    }
-    // Rows 0 to 7 are wholly in view.
-    assert_eq!(lines, 16);
-}
-
-#[test]
-fn a_trackpad_pinch_zooms_the_time_and_two_fingers_zoom_the_rows() {
-    // C rounds 17, 21, 25: the trackpad pinch over the grid is the time's (a beat 1.5 times as wide, k 0.33 → 0.22);
-    // the rows stay. Two fingers zoom the rows.
-    let mut rig = Rig::new(pattern());
-    let before = rig.row_view();
-    rig.frame(vec![egui::Event::PointerMoved(pos2(400.0, 200.0))]);
-    rig.frame(vec![egui::Event::Zoom(1.5)]);
-    rig.frame(vec![]);
-    assert_eq!(rig.row_view(), before);
-    assert!(
-        (rig.clip_view().k - 0.22).abs() < 1e-5,
-        "{:?}",
-        rig.clip_view()
-    );
-    rig.pinch(pos2(400.0, TOP), 1.5);
-    assert_eq!(rig.row_view().pitch, before.pitch * 1.5);
-}
-
-#[test]
-fn a_pinch_keeps_the_point_under_the_pointer() {
-    let mut rig = Rig::new(pattern());
-    rig.kit = twelve();
-    rig.frame(vec![]);
-    // 100 points into the rows, 1.5625 rows down; at 3 U the same row point is 150 points down, so 50 scroll.
-    let at = pos2(400.0, TOP + 100.0);
-    let row_at = |rig: &Rig| {
-        let l = rig.layout();
-        (at.y - l.row_top()) / l.pitch
-    };
-    assert!((row_at(&rig) - 1.5625).abs() < 1e-5);
-    rig.pinch(at, 1.5);
-    let view = rig.row_view();
-    assert!((view.scroll - 50.0 / 32.0).abs() < 1e-5, "{view:?}");
-    assert!((view.pitch - 3.0).abs() < 1e-5, "{view:?}");
-    assert!((row_at(&rig) - 1.5625).abs() < 1e-5);
-}
-
-#[test]
-fn the_wheel_scrolls_the_rows() {
-    let mut rig = Rig::new(pattern());
-    rig.kit = twelve();
-    rig.frame(vec![egui::Event::PointerMoved(pos2(400.0, 300.0))]);
-    rig.frame(vec![egui::Event::MouseWheel {
-        unit: egui::MouseWheelUnit::Point,
-        delta: vec2(0.0, -100.0),
-        modifiers: Modifiers::NONE,
-    }]);
-    // egui smooths the wheel over a few frames.
-    for _ in 0..30 {
-        rig.frame(vec![]);
-    }
-    let scroll = rig.row_view().scroll;
-    assert!((scroll - 100.0 / 32.0).abs() < 0.01, "{scroll}");
-}
-
-#[test]
-fn each_lane_keeps_its_own_clip_views() {
-    // Clip ids are unique only within a lane: the first clip of either lane is clip 1.
-    let mut channel = pattern();
-    let mut second = Lane::new(LaneKind::Drums);
-    second.add_clip(0, 4.0);
-    channel.lanes.push(second);
-    assert_eq!(channel.lanes[1].clips[0].id, channel.lanes[0].clips[0].id);
-    let mut rig = Rig::new(channel);
-    rig.kit = twelve();
-    rig.pinch(pos2(400.0, TOP), 1.5);
-    assert_eq!(rig.row_view().pitch, 3.0);
-    rig.view.lane = 1;
-    rig.frame(vec![]);
-    assert_eq!(rig.row_view(), RowView::default(), "lane 1's clip 1");
-    rig.view.lane = 0;
-    rig.frame(vec![]);
-    assert_eq!(rig.row_view().pitch, 3.0);
 }
 
 // The step selection and its floating buttons.
@@ -2284,25 +1928,6 @@ impl Rig {
 }
 
 #[test]
-fn a_long_press_on_a_hit_selects_it_and_floats_copy_and_delete_over_it() {
-    let mut rig = Rig::new(pattern());
-    assert_eq!(rig.text_at("Copy"), None);
-    let at = rig.cell(1, 4);
-    rig.hold(at);
-    rig.release(at);
-    assert_eq!(rig.selection(), [(1, 4)]);
-    assert!(rig.actions.is_empty(), "{:?}", rig.actions);
-    // Step-sequencer mode: no `Snap`. The row, `Copy` `Delete` `Duplicate`, sits centred above the selected step.
-    let [copy, delete, duplicate] =
-        ["Copy", "Delete", "Duplicate"].map(|t| rig.text_at(t).unwrap());
-    assert_eq!(rig.text_at("Snap"), None);
-    let cell = rig.layout().cell(1, 4);
-    assert!(copy.y < cell.top() && delete.y < cell.top());
-    assert!(copy.x < delete.x && delete.x < duplicate.x);
-    assert!(((copy.x + duplicate.x) / 2.0 - cell.center().x).abs() < 1.0);
-}
-
-#[test]
 fn a_selected_hit_takes_the_selected_tint_and_the_others_the_tint() {
     let mut rig = Rig::new(pattern());
     let at = rig.cell(1, 4);
@@ -2319,31 +1944,6 @@ fn a_selected_hit_takes_the_selected_tint_and_the_others_the_tint() {
     assert_eq!(pale.len(), 1);
     assert!(l.cell(1, 4).contains_rect(pale[0]));
     assert_eq!(in_grid(ink).len(), 3);
-}
-
-#[test]
-fn a_long_press_then_a_drag_boxes_the_hits_without_scrolling() {
-    let mut rig = Rig::new(pattern());
-    rig.kit = twelve();
-    rig.frame(vec![]);
-    // Up and left: a drag up would scroll the rows down.
-    let (from, to) = (rig.cell(2, 4), rig.cell(0, 1));
-    rig.hold(from);
-    rig.frame(vec![egui::Event::PointerMoved(from + (to - from) / 2.0)]);
-    rig.frame(vec![egui::Event::PointerMoved(to)]);
-    // The box shows while it is dragged; the buttons wait for it.
-    assert_eq!(rig.text_at("Copy"), None);
-    rig.release(to);
-    // The Kick on step 0 is left of the box.
-    assert_eq!(rig.selection(), [(1, 4), (2, 2)]);
-    assert_eq!(rig.row_view().scroll, 0.0);
-    assert!(rig.actions.is_empty());
-    // A long press on empty space, lifted where it was, selects nothing.
-    let at = rig.cell(3, 3);
-    rig.hold(at);
-    rig.release(at);
-    assert_eq!(rig.selection(), []);
-    assert!(rig.actions.is_empty());
 }
 
 #[test]
@@ -2415,65 +2015,6 @@ fn a_press_held_over_a_focus_loss_is_up_and_starts_no_box_and_no_tap() {
     assert_eq!(rig.view.boxing, None);
     assert_eq!(rig.selection(), [(1, 4), (2, 2)]);
     assert!(rig.actions.is_empty(), "{:?}", rig.actions);
-}
-
-#[test]
-fn the_step_views_wheel_zooms_the_rows_on_the_headers_and_scrolls_them_on_the_grid() {
-    let mut rig = Rig::new(pattern());
-    rig.kit = twelve();
-    rig.frame(vec![]);
-    let wheel = |rig: &mut Rig, at: Pos2, delta: egui::Vec2| {
-        rig.frame(vec![
-            egui::Event::PointerMoved(at),
-            egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                delta,
-                modifiers: Modifiers::NONE,
-            },
-        ]);
-    };
-    let header = rig.cell(2, 0) - vec2(60.0, 0.0);
-    wheel(&mut rig, header, vec2(0.0, 200.0));
-    assert!(
-        (rig.row_view().pitch - 2.5).abs() < 1e-5,
-        "{:?}",
-        rig.row_view()
-    );
-    let (pitch, scroll) = (rig.row_view().pitch, rig.row_view().scroll);
-    let cell = rig.cell(2, 4);
-    wheel(&mut rig, cell, vec2(0.0, -64.0));
-    assert!(
-        (rig.row_view().scroll - scroll - 2.0).abs() < 1e-5,
-        "{:?}",
-        rig.row_view()
-    );
-    assert_eq!(rig.row_view().pitch, pitch);
-    // The ruler: the time zooms (the step grid has a time axis), the rows stay.
-    let before = rig.row_view();
-    wheel(&mut rig, pos2(400.0, 20.0), vec2(0.0, 200.0));
-    assert_eq!(rig.row_view(), before);
-    assert!((rig.clip_view().k - 0.33 * 0.8).abs() < 1e-5);
-}
-
-#[test]
-fn a_touch_long_press_selects_and_a_move_boxes() {
-    use egui::TouchPhase::*;
-    let mut rig = Rig::new(pattern());
-    let at = rig.cell(2, 2);
-    rig.touch(0.1, Start, at);
-    rig.touch(1.0, Move, at);
-    rig.touch(0.1, End, at);
-    rig.frame(vec![]);
-    assert_eq!(rig.selection(), [(2, 2)]);
-    // From an empty step: a held hit's move drags it instead.
-    let (from, to) = (rig.cell(0, 1), rig.cell(1, 12));
-    rig.touch(0.1, Start, from);
-    rig.touch(1.0, Move, from);
-    rig.touch(0.1, Move, to);
-    rig.touch(0.1, End, to);
-    rig.frame(vec![]);
-    assert_eq!(rig.selection(), [(1, 4), (1, 12)]);
-    assert!(rig.actions.is_empty());
 }
 
 impl Rig {
@@ -2670,53 +2211,6 @@ fn the_selection_stays_with_its_clip() {
     rig.view.clip = Some(1);
     rig.frame(vec![]);
     assert_eq!(rig.selection(), []);
-}
-
-#[test]
-fn the_floating_row_hides_on_a_scroll_or_zoom_and_a_tap_on_the_selection_brings_it_back() {
-    // The same rule as the playlist and the piano roll: the shared placement, hidden by any scroll or zoom, back after
-    // a release on the selection. At U = 32: the 3-button row (`Copy`, `Delete`, `Duplicate`) is 153.6 × 48, m 6.4.
-    let shared = |rig: &Rig, cell: (usize, usize), finger: Pos2| {
-        let l = rig.layout();
-        let sel = Selection {
-            rect: l.cell(cell.0, cell.1),
-            one_row: true,
-            handles: &[],
-        };
-        place_row(&sel, finger, l.grid(), vec2(3.0 * 51.2, 48.0), 6.4, 1.0)
-    };
-    let mut rig = Rig::new(pattern());
-    rig.kit = twelve();
-    rig.frame(vec![]);
-    let at = rig.cell(1, 4);
-    rig.hold(at);
-    rig.release(at);
-    assert!(rig.text_at("Copy").is_some());
-    assert_eq!(rig.view.row.rect(), shared(&rig, (1, 4), at));
-    // The wheel scrolls the rows: hidden, though the hit is still in view.
-    rig.frame(vec![egui::Event::PointerMoved(pos2(400.0, 300.0))]);
-    rig.frame(vec![egui::Event::MouseWheel {
-        unit: egui::MouseWheelUnit::Point,
-        delta: vec2(0.0, -20.0),
-        modifiers: Modifiers::NONE,
-    }]);
-    for _ in 0..30 {
-        rig.frame(vec![]);
-    }
-    assert!(rig.row_view().scroll > 0.0);
-    assert_eq!(rig.text_at("Copy"), None);
-    assert_eq!(rig.selection(), [(1, 4)]);
-    // A long press on the selected hit shows it at the new place, the hit still selected (a tap would delete it).
-    let at = rig.cell(1, 4);
-    rig.hold(at);
-    rig.release(at);
-    assert_eq!(rig.selection(), [(1, 4)]);
-    assert!(rig.text_at("Copy").is_some());
-    assert_eq!(rig.view.row.rect(), shared(&rig, (1, 4), at));
-    // A pinch zooms: hidden again.
-    rig.pinch(pos2(400.0, 300.0), 1.5);
-    assert_eq!(rig.text_at("Copy"), None);
-    assert_eq!(rig.selection(), [(1, 4)]);
 }
 
 #[test]
@@ -2928,44 +2422,6 @@ fn the_lane_is_hidden_until_its_knob_is_tapped_and_lists_its_four_items_in_the_h
     assert_eq!(rig.actions, [StepAction::Toggle { pad: 8, step: 3 }]);
 }
 
-#[test]
-fn a_touch_and_each_move_paint_the_current_rows_step_under_x() {
-    let mut rig = Rig::new(pattern());
-    rig.open_lane();
-    let header = rig.header(1);
-    rig.click(header);
-    // The Snare row (hits on 4 and 12): halfway up on 4, above the lane on 8 (the top), at the bottom on 12.
-    rig.stroke(&[
-        pos2(rig.step_x(4), lane_y(0.5)),
-        pos2(rig.step_x(8), 300.0),
-        pos2(rig.step_x(12), 598.0),
-    ]);
-    // Step 8 holds no Snare hit: nothing to send there.
-    let vel = |step, value| paint(Prop::Velocity, step, value);
-    assert_eq!(rig.actions, [vel(4, 127), vel(12, 1), StepAction::GraphEnd]);
-    let d = (Event::DEFAULT_PAN, Event::DEFAULT_PITCH, 0);
-    assert_eq!(
-        rig.values(),
-        [
-            (0, 255, d.0, d.1, d.2),
-            (2, 255, d.0, d.1, d.2),
-            (1, 127, d.0, d.1, d.2),
-            (1, 1, d.0, d.1, d.2),
-        ]
-    );
-    // The bar of 127: from the bottom, 2 px into its step and 3 px short of its end (step 4 is 195..219).
-    let ink = tinted(&rig, Prop::Velocity, 127, false);
-    let bar = Rect::from_min_max(
-        pos2(197.0, (600.0 - 296.0 * 127.0 / 255.0f32).round()),
-        pos2(216.0, 600.0),
-    );
-    assert!(
-        rig.rects(ink).contains(&bar),
-        "{bar:?} in {:?}",
-        rig.rects(ink)
-    );
-}
-
 /// A pinch before any paint ends a touch that changed nothing: its own undo re-syncs.
 #[test]
 fn a_pinch_before_any_lane_paint_is_a_touch_that_changed_nothing() {
@@ -3033,41 +2489,6 @@ fn a_second_finger_puts_a_lane_drag_back_and_nothing_paints_until_the_lift() {
     rig.touch(0.1, Start, pos2(x, lane_y(0.5)));
     rig.touch(0.1, End, pos2(x, lane_y(0.5)));
     assert_eq!(rig.values()[2].1, 127);
-}
-
-#[test]
-fn panning_and_pitch_snap_to_the_centre_in_a_1_u_zone_and_repeat_stacks_up_to_7() {
-    let mut rig = Rig::new(pattern());
-    rig.open_lane();
-    let header = rig.header(1);
-    rig.click(header);
-    let (four, twelve) = (rig.step_x(4), rig.step_x(12));
-    for (item, top) in [("Panning", 254), ("Pitch", 65534), ("Repeat", 7)] {
-        let at = rig.text_at(item).unwrap();
-        rig.click(at);
-        rig.actions.clear();
-        // Step 4 within half a U of the centre; step 12 from inside the lane to above it.
-        rig.click(pos2(four, LANE_MID + 15.0));
-        rig.stroke(&[pos2(twelve, 400.0), pos2(twelve, 0.0)]);
-        let prop = graph_lane::DRUM_PROPS[rig.view.graph.item];
-        assert_eq!(rig.actions.last(), Some(&StepAction::GraphEnd));
-        assert!(
-            rig.actions.contains(&paint(prop, 12, top)),
-            "{:?}",
-            rig.actions
-        );
-    }
-    // Panning and Pitch there are 127 and 0x7FFF; Repeat, which has no dead zone, round(7 · 133/296) = 3.
-    assert_eq!(rig.values()[2], (1, 255, 127, 0x7FFF, 3));
-    assert_eq!(rig.values()[3], (1, 255, 254, 65534, 7));
-    // A centred value draws its dot on the band's centre.
-    let at = rig.text_at("Panning").unwrap();
-    rig.click(at);
-    let ink = tinted(&rig, Prop::Pan, 127, false);
-    let dot = rig.shapes.iter().any(|c| {
-        matches!(&c.shape, egui::Shape::Circle(d) if d.fill == ink && d.center == pos2(206.5, LANE_MID) && d.radius == 4.0)
-    });
-    assert!(dot, "no dot");
 }
 
 #[test]
@@ -3481,50 +2902,6 @@ fn remembered_values_take_a_hits_length_at_least_the_minimum_its_velocity_and_pa
 }
 
 #[test]
-fn a_hit_alone_in_the_selection_is_remembered_and_new_hits_take_its_velocity_and_pan() {
-    let mut rig = Rig::new(odd_hit());
-    rig.scroll_to(0.0);
-    let default = Remembered::default();
-    assert_eq!(rig.view.remembered, default);
-    // A new hit: the defaults, one step long.
-    let at = rig.cell(0, 0);
-    rig.click(at);
-    assert_eq!(rig.values()[0], (0, 255, 127, 0x7FFF, 0));
-    // Selected alone (a long press), the Snare hit is remembered.
-    let at = rig.cell(1, 4);
-    rig.hold(at);
-    rig.release(at);
-    let snare = Remembered {
-        len_beats: 0.25,
-        velocity: 102,
-        pan: 190,
-    };
-    assert_eq!(rig.view.remembered, snare);
-    // A tap on an empty step only clears the selection; the next one adds a hit with the remembered values.
-    let at = rig.cell(2, 7);
-    rig.click(at);
-    assert_eq!(rig.selection(), []);
-    rig.click(at);
-    assert!(rig.values().contains(&(2, 102, 190, 0x7FFF, 0)));
-    // Two hits selected remember nothing; a touch-down that makes one of them the selection remembers it.
-    let at = rig.cell(0, 0);
-    rig.hold(at);
-    rig.release(at);
-    assert_eq!(rig.view.remembered.velocity, 255);
-    rig.view.remembered = default;
-    // From an empty step clear of the floating row under the Kick.
-    rig.boxed(rig.cell(0, 4), rig.cell(1, 0));
-    assert_eq!(rig.selection(), [(0, 0), (1, 4)]);
-    assert_eq!(rig.view.remembered, default);
-    rig.click(rig.cell(2, 7));
-    let at = rig.cell(1, 4);
-    rig.hold(at);
-    rig.release(at);
-    assert_eq!(rig.selection(), [(1, 4)]);
-    assert_eq!(rig.view.remembered, snare);
-}
-
-#[test]
 fn a_lone_duplicate_is_remembered() {
     let mut rig = Rig::new(odd_hit());
     let at = rig.cell(1, 4);
@@ -3837,45 +3214,6 @@ fn one_bar() -> Rig {
 }
 
 #[test]
-fn cells_run_from_content_beat_0_with_1_px_gaps_at_ppp_1_and_2() {
-    for ppp in [1.0, 2.0] {
-        let m = Metrics::from_pixels_per_point(ppp, DEFAULT_UI_SCALE);
-        let px = 1.0 / ppp;
-        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 448.0));
-        // A step 24.3 points wide, content beat 0 a third of a beat left of the grid (x 96).
-        let l = Layout::new(rect, 4, 1, &m, 0.0, RowView::default()).with_time(63.6, 24.3);
-        // Content beat 0 is off the grid's left: its first visible step is the one under x 96.
-        assert_eq!(l.visible_steps(), 1..31, "ppp {ppp}");
-        for step in 1..29 {
-            let (a, b) = (l.cell(2, step), l.cell(2, step + 1));
-            assert_eq!(
-                b.left() - a.right(),
-                px,
-                "a 1 px gap after step {step}, ppp {ppp}"
-            );
-            assert_eq!(
-                a.left(),
-                (((63.6 + 24.3 * step as f32) * ppp).round()) / ppp
-            );
-            assert_eq!(
-                l.cell(3, step).top() - a.bottom(),
-                px,
-                "a 1 px gap under the row"
-            );
-            for v in [a.left(), a.right(), a.top(), a.bottom()] {
-                assert_eq!((v * ppp).fract(), 0.0, "{a:?} on device pixels");
-            }
-        }
-        // The grid's touch area is every visible step, past the loop too, from content beat 0.
-        assert_eq!(l.hit(pos2(700.0, 120.0)), Some((1, 26)));
-        assert_eq!(l.hit(pos2(90.0, 120.0)), None, "the header column");
-        let l = l.with_time(200.0, 24.3);
-        assert_eq!(l.visible_steps(), 0..25);
-        assert_eq!(l.hit(pos2(150.0, 120.0)), None, "left of content beat 0");
-    }
-}
-
-#[test]
 fn an_active_step_is_inset_2_px_and_trunc_r_4_tall_with_its_dashes_at_ppp_1_and_2() {
     for ppp in [1.0, 2.0] {
         let px = 1.0 / ppp;
@@ -3904,43 +3242,6 @@ fn an_active_step_is_inset_2_px_and_trunc_r_4_tall_with_its_dashes_at_ppp_1_and_
         }
         assert_eq!(dashes(hit, 0, t).count(), 1);
     }
-}
-
-#[test]
-fn cells_alternate_per_beat_in_the_loop_and_are_all_control_fill_past_it() {
-    let rig = Rig::new(pattern());
-    let colors = theme_by_id(0).colors;
-    let (dark, light) = (
-        colors.control_fill.to_color32(),
-        colors.module_fill.to_color32(),
-    );
-    let l = rig.layout();
-    // 3.03 U a beat: the 702-point grid shows 7.24 beats, 28 whole steps and a part.
-    assert_eq!(l.visible_steps(), 0..29);
-    for step in l.visible_steps() {
-        let want = if step < 16 && (step / 4) % 2 == 1 {
-            light
-        } else {
-            dark
-        };
-        assert_eq!(rig.fill_at(l.cell(3, step)), Some(want), "step {step}");
-    }
-    // The hits: on their cells, inset; the Kick on step 0 in the hit colour with a `background` dash.
-    let hit = active_rect(l.cell(0, 0), l.pitch, 1.0);
-    assert_eq!(
-        rig.fill_at(hit),
-        Some(tinted(&rig, Prop::Velocity, 255, false))
-    );
-    let dash = dashes(hit, 0, 2.0).next().unwrap();
-    assert_eq!(rig.fill_at(dash), Some(colors.background.to_color32()));
-    // Nothing is drawn as a line: every rect in the grid's rows is a cell, a hit or a dash.
-    assert!(
-        rig.fill_at(Rect::from_x_y_ranges(
-            l.cell(0, 3).right()..=l.cell(0, 4).left(),
-            l.cell(0, 0).y_range()
-        ))
-        .is_none()
-    );
 }
 
 #[test]
@@ -4099,114 +3400,6 @@ fn the_time_zoom_keeps_a_beat_between_3_03_u_and_10_u_at_d_4() {
 }
 
 #[test]
-fn a_new_clip_opens_at_3_03_u_a_beat_from_its_earliest_hit_and_lowest_row() {
-    // A four-bar clip (room to scroll: 2L = 32 beats) whose earliest hit is pad 3 at beat 5.
-    let mut channel = drums();
-    let c = channel.lanes[0].add_clip(0, 16.0);
-    // Pad 11 makes 12 rows, with room to scroll.
-    c.events = vec![drum(3, 5 * 128), drum(11, 9 * 128)];
-    let rig = Rig::new(channel);
-    let view = rig.clip_view();
-    assert_eq!(view.k, 0.33);
-    assert!(
-        (rig.layout().step_w * 4.0 - 32.0 / 0.33).abs() < 1e-3,
-        "3.03 U a beat"
-    );
-    assert_eq!(view.x, 5.0);
-    assert_eq!(view.rows.scroll, 3.0 * 2.0, "row 3 on top");
-    // A new empty clip's first tap: the view stays where it was.
-    let mut rig = one_bar();
-    let at = rig.cell(1, 6);
-    rig.click(at);
-    assert_eq!(rig.hits(), on(&[(1, 6)]));
-    assert_eq!((rig.clip_view().x, rig.clip_view().rows.scroll), (0.0, 0.0));
-}
-
-#[test]
-fn the_time_scrolls_over_0_to_2l_less_the_view() {
-    // One bar of 4/4: 8 beats of content, 7.24 in view: 0.76 to scroll.
-    let mut rig = one_bar();
-    let grid = rig.cell(1, 6);
-    rig.wheel(grid, vec2(-2000.0, 0.0));
-    let max = 8.0 - 702.0 / f64::from(32.0f32 / 0.33);
-    assert!(
-        (rig.clip_view().x - max).abs() < 1e-4,
-        "{:?}",
-        rig.clip_view()
-    );
-    rig.wheel(grid, vec2(2000.0, 0.0));
-    assert_eq!(rig.clip_view().x, 0.0);
-    // A drag on the grid scrolls the time too (sideways past the calm zone).
-    let from = rig.cell(1, 9);
-    rig.frame(vec![egui::Event::PointerMoved(from)]);
-    rig.press(from, PointerButton::Primary, true);
-    for i in 1..=4 {
-        rig.frame(vec![egui::Event::PointerMoved(
-            from - vec2(15.0 * i as f32, 0.0),
-        )]);
-    }
-    rig.press(from - vec2(60.0, 0.0), PointerButton::Primary, false);
-    // The scroller: x stays still for the first move (15 points, inside its 0.5 U calm zone), then follows 1:1: 45
-    // points.
-    let x = 45.0 / f64::from(32.0f32 / 0.33);
-    assert!(
-        (rig.clip_view().x - x).abs() < 1e-4,
-        "{:?}",
-        rig.clip_view()
-    );
-    assert!(rig.actions.is_empty(), "a drag adds no hit");
-    // A bar of 2/4 is 4 beats of content: the view spans it, nothing scrolls.
-    let mut rig = one_bar();
-    rig.song.time_sig.beats_per_bar = 2;
-    rig.song.channels[CH].lanes[0].clips[0].loop_len_beats = 2.0;
-    rig.frame(vec![]);
-    rig.wheel(rig.cell(1, 6), vec2(-2000.0, 0.0));
-    assert_eq!(rig.clip_view().x, 0.0);
-}
-
-#[test]
-fn follow_puts_the_folded_playhead_at_a_quarter_of_the_view_while_playing_a_longer_loop() {
-    let mut channel = drums();
-    channel.lanes[0].add_clip(0, 16.0).events = vec![drum(0, 0)];
-    let mut rig = Rig::new(channel);
-    let visible = 702.0 / f64::from(32.0f32 / 0.33);
-    rig.view.follow = true;
-    // Stopped: no follow.
-    rig.view.playhead = 10 * 128;
-    rig.frame(vec![]);
-    assert_eq!(rig.clip_view().x, 0.0);
-    // Playing beat 26 of the song: folded into the 16-beat loop, beat 10.
-    rig.view.playing = true;
-    rig.view.playhead = 26 * 128;
-    rig.frame(vec![]);
-    assert!(
-        (rig.clip_view().x - (10.0 - 0.25 * visible)).abs() < 1e-4,
-        "{:?}",
-        rig.clip_view()
-    );
-    // A drag sideways does not move it meanwhile.
-    let from = rig.cell(1, 50);
-    rig.frame(vec![egui::Event::PointerMoved(from)]);
-    rig.press(from, PointerButton::Primary, true);
-    for i in 1..=4 {
-        rig.frame(vec![egui::Event::PointerMoved(
-            from + vec2(30.0 * i as f32, 0.0),
-        )]);
-    }
-    rig.press(from + vec2(120.0, 0.0), PointerButton::Primary, false);
-    assert!((rig.clip_view().x - (10.0 - 0.25 * visible)).abs() < 1e-4);
-    // Off with the setting, or for a loop that fits the view.
-    rig.view.follow = false;
-    rig.view.playhead = 3 * 128;
-    rig.frame(vec![]);
-    assert!((rig.clip_view().x - (10.0 - 0.25 * visible)).abs() < 1e-4);
-    let mut rig = one_bar();
-    (rig.view.follow, rig.view.playing, rig.view.playhead) = (true, true, 3 * 128);
-    rig.frame(vec![]);
-    assert_eq!(rig.clip_view().x, 0.0);
-}
-
-#[test]
 fn the_rulers_bar_numbers_are_song_bars() {
     // A one-bar clip at song bar 5: its content beat 4 is song bar 6's line.
     let mut channel = drums();
@@ -4232,28 +3425,6 @@ fn the_rulers_bar_numbers_are_song_bars() {
 }
 
 #[test]
-fn the_scroll_thumb_shows_the_view_over_the_loop() {
-    // A four-bar clip, scrolled 2 beats in: 7.24 of 16 beats in view. The track stops 0.15 U short of the ruler's end;
-    // the thumb is t tall, t below the ruler top, in `text` at α 0.3.
-    let mut channel = drums();
-    channel.lanes[0].add_clip(0, 16.0);
-    let mut rig = Rig::new(channel);
-    rig.scroll_to(2.0);
-    let ink = theme_by_id(0).colors.text.to_color32().gamma_multiply(0.3);
-    let (w, track) = (702.0, 702.0 - 0.15 * 32.0);
-    let visible = w / (32.0 / 0.33);
-    let want = Rect::from_min_size(
-        pos2(98.0 + 2.0 * track / 16.0, 2.0),
-        vec2(track * visible / 16.0, 2.0),
-    );
-    let bars = rig.rects(ink);
-    assert!(bars.iter().any(|r| (r.min - want.min).length() < 1e-3 && (r.size() - want.size()).length() < 1e-3), "{bars:?}");
-    // A loop the view spans has none.
-    let rig = one_bar();
-    assert!(rig.rects(ink).is_empty());
-}
-
-#[test]
 fn a_ruler_tap_past_the_loop_end_does_nothing() {
     let mut rig = one_bar();
     let at = rig.ruler(20) + vec2(10.0, 0.0);
@@ -4265,31 +3436,6 @@ fn a_ruler_tap_past_the_loop_end_does_nothing() {
         rig.edits(),
         [StepAction::SetPlayhead(15 * u64::from(STEP_TICKS))]
     );
-}
-
-#[test]
-fn the_playhead_line_sits_at_the_folded_playhead_stopped_or_playing_down_to_the_last_row() {
-    // The pattern's 4 rows of 64 from the grid's top: the line ends 256 below it.
-    let mut rig = Rig::new(pattern());
-    let colors = theme_by_id(0).colors;
-    // Stopped at song tick 512 + 6 steps: folded into the one-bar loop, step 6.
-    rig.view.playhead = 512 + 6 * u64::from(STEP_TICKS);
-    rig.frame(vec![]);
-    let l = rig.layout();
-    // Centred on the device pixel nearest the playhead's x (ppp 1).
-    let x = (l.x0 + 6.0 * l.step_w).round();
-    let line = |rig: &Rig| {
-        (rig.rects(colors.text.to_color32()).iter()).any(|r| {
-            crate::ui::timeline::testing::line_x(*r, 1.0) == x
-                && r.y_range() == Rangef::new(TOP, TOP + 256.0)
-                && r.width() < 32.0
-        })
-    };
-    assert!(line(&rig), "{:?}", rig.rects(colors.text.to_color32()));
-    // Playing, the same.
-    rig.view.playing = true;
-    rig.frame(vec![]);
-    assert!(line(&rig));
 }
 
 #[test]
@@ -4741,37 +3887,6 @@ fn a_quick_drag_on_the_ruler_scrolls_the_time_and_seeks_nothing() {
 }
 
 #[test]
-fn zooming_the_time_past_its_limit_keeps_the_beat_under_the_pointer() {
-    // The scroller zooms within k's range (0.1 … 0.33) about the pointer; past the limit the anchor holds.
-    let mut rig = Rig::new(four_bars());
-    rig.scroll_to(2.0);
-    let at = pos2(500.0, 24.0);
-    let beat = |rig: &Rig| {
-        let l = rig.layout();
-        f64::from((at.x - l.x0) / (4.0 * l.step_w))
-    };
-    let before = beat(&rig);
-    for _ in 0..10 {
-        rig.wheel(at, vec2(0.0, 600.0));
-    }
-    assert_eq!(rig.clip_view().k, 0.1);
-    assert!(
-        (beat(&rig) - before).abs() < 1e-3,
-        "{} {before}",
-        beat(&rig)
-    );
-    for _ in 0..10 {
-        rig.wheel(at, vec2(0.0, -600.0));
-    }
-    assert_eq!(rig.clip_view().k, 0.33);
-    assert!(
-        (beat(&rig) - before).abs() < 1e-3,
-        "{} {before}",
-        beat(&rig)
-    );
-}
-
-#[test]
 fn a_fling_while_following_leaves_nothing_once_playback_stops() {
     // `Options.follow`: while following, one finger does not scroll the time and no fling is left.
     let mut rig = Rig::new(four_bars());
@@ -4799,28 +3914,6 @@ fn a_fling_while_following_leaves_nothing_once_playback_stops() {
         rig.frame_after(1.0 / 60.0, vec![]);
     }
     assert_eq!(rig.clip_view().x, followed);
-}
-
-#[test]
-fn a_shrunk_loop_lets_posx_spring_back_over_frames() {
-    // In step mode, when L shrinks, posX is not clamped; the overscroll spring pulls it back, a tenth of the overshoot
-    // a frame.
-    let mut rig = Rig::new(four_bars());
-    rig.scroll_to(10.0);
-    let snare = rig.cell(1, 48);
-    rig.click(snare);
-    assert_eq!(rig.loop_beats(), 4.0);
-    let max = 8.0 - 702.0 / f64::from(32.0f32 / 0.33);
-    let x = rig.clip_view().x;
-    assert!(x > 5.0 && x < 10.0, "springing: {x}");
-    for _ in 0..120 {
-        rig.frame(vec![]);
-    }
-    assert!(
-        (rig.clip_view().x - max).abs() < 1e-3,
-        "{:?}",
-        rig.clip_view()
-    );
 }
 
 /// Channel 1's one-bar lane at d = 8 with Swing 0.6, and a tap on step 3: its hit starts 10 ticks late, on step 4

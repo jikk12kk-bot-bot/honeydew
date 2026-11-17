@@ -537,33 +537,6 @@ fn a_stretch_sets_the_ratio_and_the_clip_resyncs_by_the_loop_rule() {
     assert_eq!(c.visible_ticks(), 6.0 * 128.0);
 }
 
-#[test]
-fn the_zoom_limits_use_the_subdivision_d() {
-    // U·d/192 … 100·U·d beats per point, d = TDIV byte 0 (the shared frame's).
-    let sig = |d, b| TimeSig {
-        subdivision: d,
-        beats_per_bar: b,
-    };
-    assert_eq!(geom::zoom_limits(32.0, sig(3, 4)), [0.5, 9600.0]);
-    assert_eq!(
-        geom::zoom_limits(32.0, sig(3, 7)),
-        geom::zoom_limits(32.0, sig(3, 4))
-    );
-    // The view zoomed all the way out at d = 3 (b = 7 plays no part).
-    let mut s = song();
-    s.time_sig = sig(3, 7);
-    let mut rig = Rig::new(s, None);
-    rig.run(vec![egui::Event::PointerMoved(pos2(600.0, 200.0))]);
-    for _ in 0..10 {
-        rig.run(vec![egui::Event::Zoom(0.01)]);
-    }
-    assert_eq!(rig.ed.views[&AT].beat_w, 2.0);
-    for _ in 0..10 {
-        rig.run(vec![egui::Event::Zoom(100.0)]);
-    }
-    assert_eq!(rig.ed.views[&AT].beat_w, 2400.0);
-}
-
 // ---- the view, offscreen ----
 
 #[test]

@@ -34,7 +34,12 @@ pub fn add_channel_menu() -> Vec<PopupItem<AddChannelPick>> {
     ]
     .concat();
     let folder_row = ChannelKind::ADDABLE.len() + 1;
-    items.push(PopupItem::new(AddChannelPick::Folder, 0, folder_row, "Folder"));
+    items.push(PopupItem::new(
+        AddChannelPick::Folder,
+        0,
+        folder_row,
+        "Folder",
+    ));
     items.push(PopupItem::header(2, 0, "Plugins:"));
     let bundled = (plugins::builtin::all().iter())
         .filter(|p| p.instrument())

@@ -584,7 +584,8 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, app: &mut AppCtx) -> Option<Na
                     );
                     s.maxi = maxi;
                     let r = next(ui);
-                    let note = "Mini: drag the window, resize it at its corner. Maxi lets taps through.";
+                    let note =
+                        "Mini: drag the window, resize it at its corner. Maxi lets taps through.";
                     crate::ui::widgets::shrink(
                         ui.painter(),
                         m,

@@ -113,7 +113,8 @@ use crate::ui::modules_browser::{InsertAt, add_module};
 use crate::ui::picker_preview::Sound;
 use crate::ui::preset_picker::categories;
 use crate::ui::preset_picker::{
-    CHORD_SETS_TITLE, DRUMSET_TITLE, INSTRUMENTS_TITLE, PickerAction, Place, PresetPicker, RACK_TITLE,
+    CHORD_SETS_TITLE, DRUMSET_TITLE, INSTRUMENTS_TITLE, PickerAction, Place, PresetPicker,
+    RACK_TITLE,
 };
 use crate::ui::rack::{
     Held, Outcome, PresetTarget, hold_removal, load_rack_into, module_name,
@@ -590,7 +591,9 @@ pub fn show(
     let shown = app.files.with_preset_files("", exts, |library| {
         // A fresh picker opens where it was left (`state.places`); its first opening at the module's own file or
         // folder (#109): the first of them there.
-        let start = open_at.iter().find(|(path, file)| !*file || library.exists(path));
+        let start = open_at
+            .iter()
+            .find(|(path, file)| !*file || library.exists(path));
         match start {
             Some((file, true)) => picker.reveal(library, file),
             Some((folder, false)) => picker.open_to(library, folder),
@@ -1465,7 +1468,10 @@ fn picker(files: &ProjectFiles, target: PresetTarget, module_type: Option<u16>) 
             .with_shortcuts([DRUMSETS_FOLDER]),
         // The content folder's `Chord Sets` is named as our factory folder is.
         (PresetTarget::ChordSet, _) => PresetPicker::new(CHORD_SETS_TITLE, user, exts[0], true)
-            .with_factory(ours.into_iter().chain(files.content_folder(content::CHORD_SETS)))
+            .with_factory(
+                ours.into_iter()
+                    .chain(files.content_folder(content::CHORD_SETS)),
+            )
             .with_shortcuts([CHORD_SETS_FOLDER]),
         _ => {
             let title = match target {
@@ -1620,7 +1626,12 @@ fn load_into(
                 None => {
                     let file = &mut module.file;
                     file.preset_name = crate::ui::preset_picker::DEFAULT.to_owned();
-                    (file.category, file.preset_path, file.source_path, file.provenance) = Default::default();
+                    (
+                        file.category,
+                        file.preset_path,
+                        file.source_path,
+                        file.provenance,
+                    ) = Default::default();
                     String::new()
                 }
             }
@@ -1663,10 +1674,16 @@ fn load_plugin_preset(
 ) -> Result<(), String> {
     use crate::plugins::presets::{self, Body, Preset};
     let preset = match pick {
-        Some((path, bytes)) => Some(presets::read(path, bytes).ok_or("The file is not a plugin preset.")?),
+        Some((path, bytes)) => {
+            Some(presets::read(path, bytes).ok_or("The file is not a plugin preset.")?)
+        }
         None => None,
     };
-    let plugin = module.file.plugin.as_deref().map(|p| (p.id.clone(), presets::folder(p)));
+    let plugin = module
+        .file
+        .plugin
+        .as_deref()
+        .map(|p| (p.id.clone(), presets::folder(p)));
     let Some((plugin_id, name)) = plugin else {
         // Lemon Reverb or Lemon Limiter.
         let Some(preset) = preset else {
@@ -1675,9 +1692,13 @@ fn load_plugin_preset(
         };
         let ours = presets::native_plugin(module.type_id);
         if !ours.is_some_and(|id| id.eq_ignore_ascii_case(&preset.plugin)) {
-            return Err(format!("The preset is for another plugin ({}).", preset.plugin));
+            return Err(format!(
+                "The preset is for another plugin ({}).",
+                preset.plugin
+            ));
         }
-        let params = presets::native_params(module.type_id, &preset).ok_or("The preset does not fit the module.")?;
+        let params = presets::native_params(module.type_id, &preset)
+            .ok_or("The preset does not fit the module.")?;
         // All but Enable, which a preset leaves as it is.
         for (param, value) in module.params.iter_mut().zip(params).skip(1) {
             *param = value;
@@ -1686,7 +1707,10 @@ fn load_plugin_preset(
     };
     let preset = match preset {
         Some(p) if !p.plugin.eq_ignore_ascii_case(&plugin_id) => {
-            return Err(format!("The preset is for another plugin than {name} ({}).", p.plugin));
+            return Err(format!(
+                "The preset is for another plugin than {name} ({}).",
+                p.plugin
+            ));
         }
         Some(p) => p,
         None => (presets::of(&plugin_id).into_iter())
@@ -1701,7 +1725,9 @@ fn load_plugin_preset(
     };
     match crate::plugins::load_preset(channel_id, module, &preset) {
         true => Ok(()),
-        false => Err(format!("{name} is not running, or did not take the preset.")),
+        false => Err(format!(
+            "{name} is not running, or did not take the preset."
+        )),
     }
 }
 
@@ -2449,7 +2475,12 @@ mod tests {
             .collect();
         assert_eq!(rows, expected);
         assert_eq!(
-            names(&files, PresetTarget::ChordSet, None, &[MY_FILES, "My Chord Sets"]),
+            names(
+                &files,
+                PresetTarget::ChordSet,
+                None,
+                &[MY_FILES, "My Chord Sets"]
+            ),
             ["Mine"]
         );
         // The search keeps the rows whose name holds the query, in the root too.
@@ -2620,7 +2651,10 @@ mod tests {
                 rows.into_iter().map(|e| e.name).collect::<Vec<_>>(),
             )
         });
-        assert_eq!(listed, (Some(tmp.0.clone()), vec!["Mine.chords".to_owned()]));
+        assert_eq!(
+            listed,
+            (Some(tmp.0.clone()), vec!["Mine.chords".to_owned()])
+        );
     }
 
     #[test]

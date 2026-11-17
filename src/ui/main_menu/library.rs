@@ -628,7 +628,11 @@ fn migrate_user_dir(
             return match move_out(old, new, &rename) {
                 Ok(()) => {
                     let _ = std::fs::remove_file(&marker);
-                    eprintln!("moved the user folder {} to {}", old.display(), new.display());
+                    eprintln!(
+                        "moved the user folder {} to {}",
+                        old.display(),
+                        new.display()
+                    );
                     new.to_owned()
                 }
                 Err(err) => {
@@ -742,7 +746,9 @@ fn same_bytes(a: &Path, b: &Path) -> bool {
     };
     let (mut ba, mut bb) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
     loop {
-        let Ok(n) = fa.read(&mut ba) else { return false };
+        let Ok(n) = fa.read(&mut ba) else {
+            return false;
+        };
         if n == 0 {
             return true;
         }

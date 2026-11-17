@@ -471,7 +471,10 @@ mod folder_tests {
             ["Folder:", "Move to Folder…", "Remove from Folder"]
         );
         let items = move_to_folder_items(&song, 1);
-        assert_eq!(labels(&items), ["Move to Folder:", "New Folder", "Drums", "Folder 1"]);
+        assert_eq!(
+            labels(&items),
+            ["Move to Folder:", "New Folder", "Drums", "Folder 1"]
+        );
         assert_eq!(items[0].id, None);
         assert!(items[2].current && items[2].disabled, "its own folder");
         assert_eq!(items[3].id, Some(TrackOp::MoveToFolder(1)));
@@ -506,7 +509,10 @@ mod folder_tests {
         song.toggle_folder(f);
         song.channels[1].params.0[2] = 1.0;
         let items = folder_menu(&song, f);
-        assert_eq!(labels(&items)[2..4], ["Expand Folder", "Expand All Folders"]);
+        assert_eq!(
+            labels(&items)[2..4],
+            ["Expand Folder", "Expand All Folders"]
+        );
         assert_eq!(items[3].id, Some(FolderOp::AllOpen(true)));
         assert_eq!((items[5].col, &*items[5].label), (1, "Unmute Folder"));
         // An empty folder has nothing to mute or solo.

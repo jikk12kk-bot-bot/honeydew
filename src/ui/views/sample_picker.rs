@@ -506,7 +506,9 @@ pub fn show(
 fn factory_file(path: &ContentPath) -> Option<PathBuf> {
     let relative = crate::project_files::built_in(path)?.replace('\\', "/");
     let rel = relative.split_once('/')?.1;
-    let file = rel.split('/').fold(PathBuf::from(ROOT), |p, part| p.join(part));
+    let file = rel
+        .split('/')
+        .fold(PathBuf::from(ROOT), |p, part| p.join(part));
     (content_path(&file).as_ref() == Some(path)).then_some(file)
 }
 
@@ -770,7 +772,11 @@ pub fn show_module(
     let into = |song: &Song, path: &Path, files: &ProjectFiles| {
         slicer_pick(song.find_module(channel, module)?, path, files)
     };
-    let which = place(("module", app.song.channels.get(channel).map(|c| c.id), module));
+    let which = place((
+        "module",
+        app.song.channels.get(channel).map(|c| c.id),
+        module,
+    ));
     let (path, decoded) = match pick(state, ui, app, make, (!shape, shape), (which, None), into) {
         Shown::Open => return None,
         Shown::Picked(path, decoded) if !state.closing => {

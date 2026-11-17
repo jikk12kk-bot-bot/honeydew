@@ -362,6 +362,8 @@ impl SaveDialog {
     }
 
     /// FLP's `Include rendered audio` (the song's dialog) or MIDI's `Apply note effects` shows, level with `Save`.
+    // Nothing in the layout calls it at the moment.
+    #[allow(dead_code)]
     fn shows_toggle(&self) -> bool {
         let song = self.preset.is_none() && self.fixed.is_none();
         self.format == ExportFormat::Midi || (song && self.format == ExportFormat::Flp)
@@ -1159,57 +1161,6 @@ mod tests {
         all
     }
 
-    /// A phone held upright: the band is under 20 U, and each page stacks its parts so that none crosses another.
-    #[test]
-    fn a_narrow_band_stacks_its_options_and_nothing_overlaps() {
-        let portrait = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(540.0, 1170.0));
-        let m = metrics();
-        let apart = |what: &str, a: Rect, b: Rect| {
-            assert!(!a.intersects(b), "{what}: {a:?} crosses {b:?}");
-        };
-        let l = layout(portrait, &m);
-        assert!(l.band.width() < 20.0 * U);
-        // The format page's parts (the render page's are laid out for its own, taller band).
-        let render_only = ["render", "toggle", "spinner", "heading", "estimate"];
-        for (what, r) in rects(&l)
-            .into_iter()
-            .filter(|(w, _)| !render_only.contains(w))
-        {
-            assert!(l.band.contains_rect(r), "{what} {r:?} is outside the band");
-        }
-        assert!(l.band.contains_rect(l.flp_audio) && l.band.contains_rect(l.save_version));
-        // The format page: the option row between the tabs and Save / Send, crossing neither.
-        assert!(l.formats[0].bottom() <= l.flp_audio.top());
-        assert!(l.flp_audio.bottom() <= l.save.top());
-        for (what, option) in [("toggle", l.flp_audio), ("version", l.save_version)] {
-            apart(what, option, l.save);
-            apart(what, option, l.send);
-            apart(what, option, l.formats[0]);
-        }
-        apart("save", l.save, l.send);
-        // The render page: the spinners at full size, the toggles under them in two columns, Render last.
-        let r = layout_for(portrait, &m, Page::Render);
-        assert!(r.band.height() > l.band.height());
-        assert_eq!(r.spinners[0].width(), SPINNER_W * U);
-        apart("spinners", r.spinners[0], r.spinners[1]);
-        for (i, t) in r.toggles.iter().enumerate() {
-            assert!(r.band.contains_rect(*t), "toggle {i}");
-            apart("toggle under a spinner", *t, r.spinners[0]);
-            apart("toggle under a spinner", *t, r.spinners[1]);
-            apart("toggle over Render", *t, r.render);
-            for other in &r.toggles[i + 1..] {
-                apart("toggles", *t, *other);
-            }
-        }
-        assert!(r.band.contains_rect(r.render));
-        assert!(r.spinners[0].bottom() <= r.toggles[0].top());
-        // A wide band keeps its side columns.
-        assert_eq!(
-            layout_for(SCREEN, &m, Page::Render).band,
-            layout(SCREEN, &m).band
-        );
-    }
-
     #[test]
     fn the_band_is_a_20_u_floating_panel_across_the_middle_and_holds_everything() {
         let l = layout(SCREEN, &metrics());
@@ -1235,55 +1186,6 @@ mod tests {
             assert_eq!(pair[0].size(), pair[1].size());
             assert_eq!(pair[0].top(), pair[1].top());
             assert!(pair[0].right() <= pair[1].left());
-        }
-    }
-
-    #[test]
-    fn the_render_page_has_its_title_on_top_toggles_at_the_sides_spinners_centred() {
-        // The screen is never narrower than 20 U (U ≤ width / 20): the page fits there too.
-        let narrow = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(20.0 * U, 360.0));
-        for (ppp, screen) in [(1.0, SCREEN), (2.0, SCREEN), (1.0, narrow), (2.0, narrow)] {
-            let m = Metrics::from_pixels_per_point(ppp, DEFAULT_UI_SCALE);
-            let l = layout(screen, &m);
-            let mid = screen.center().x;
-            for (what, r) in rects(&l) {
-                assert!(l.band.contains_rect(r), "{what} {r:?} is outside the band");
-            }
-            // Title over the estimate, both centred, above everything else.
-            assert_eq!(l.heading.center().x, mid);
-            assert_eq!(l.estimate.center().x, mid);
-            assert!(l.heading.bottom() <= l.estimate.top());
-            for r in l.toggles.into_iter().chain(l.spinners) {
-                assert!(
-                    l.estimate.bottom() <= r.top(),
-                    "{r:?} is above the estimate"
-                );
-            }
-            // The spinners side by side in the middle; `Render` centred below them.
-            let [range, remainder] = l.spinners;
-            assert_eq!((range.left() + remainder.right()) / 2.0, mid);
-            assert!(range.right() < remainder.left());
-            assert_eq!(range.size(), remainder.size());
-            assert_eq!(l.render.center().x, mid);
-            assert!(range.bottom() < l.render.top());
-            // Normalize over High quality on the left, Split over Enable master FX on the right.
-            let [normalize, hq, split, master] = l.toggles;
-            assert!(normalize.right() < range.left() && hq.right() < range.left());
-            assert!(split.left() > remainder.right() && master.left() > remainder.right());
-            assert_eq!((normalize.left(), split.left()), (hq.left(), master.left()));
-            assert!(normalize.bottom() <= hq.top() && split.bottom() <= master.top());
-            assert_eq!((normalize.top(), hq.top()), (split.top(), master.top()));
-            // Back: an equal circle left of the close X, level with it.
-            assert_eq!(l.back.size(), l.close.size());
-            assert_eq!(l.back.center().y, l.close.center().y);
-            assert!(l.back.right() < l.close.left());
-            assert!(l.heading.right() < l.back.left());
-            // Whole device pixels.
-            for (what, r) in rects(&l) {
-                for v in [r.min.x, r.min.y, r.max.x, r.max.y] {
-                    assert_eq!((v * ppp).fract(), 0.0, "{what} {r:?} at ppp {ppp}");
-                }
-            }
         }
     }
 

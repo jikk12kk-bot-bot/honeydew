@@ -102,7 +102,9 @@ pub fn show(
             .with_factory(files.content_folder(SOUNDFONTS));
         picker.sort = app.settings.patch_ordering();
         let channel_id = app.song.channels.get(channel).map(|c| c.id);
-        let id = egui::Id::new(TITLE).with("place").with((channel_id, module));
+        let id = egui::Id::new(TITLE)
+            .with("place")
+            .with((channel_id, module));
         picker.keep_place(ui.ctx(), &*library, id);
         picker
     });

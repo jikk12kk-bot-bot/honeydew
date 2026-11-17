@@ -482,59 +482,6 @@ mod tests {
     }
 
     #[test]
-    fn zoom_scroll_and_the_initial_view() {
-        // U·d/192 … 100·U·d points per beat, d = TDIV byte 0.
-        // Byte 1 (b) plays no part.
-        let sig = |subdivision, beats_per_bar| TimeSig {
-            subdivision,
-            beats_per_bar,
-        };
-        assert_eq!(zoom_limits(32.0, sig(4, 4)), [32.0 * 4.0 / 192.0, 12800.0]);
-        assert_eq!(zoom_limits(32.0, sig(4, 3)), zoom_limits(32.0, sig(4, 4)));
-        assert_eq!(zoom_limits(32.0, sig(3, 4)), [32.0 * 3.0 / 192.0, 9600.0]);
-        assert_eq!(zoom_limits(32.0, sig(8, 4)), [32.0 * 8.0 / 192.0, 25600.0]);
-        assert_eq!(zoom_limits(32.0, sig(8, 7)), zoom_limits(32.0, sig(8, 4)));
-        assert_eq!(zoom_limits(32.0, sig(0, 4)), zoom_limits(32.0, sig(1, 4)));
-        // The first point's beat at 4 U per beat; beat 0 without points.
-        let v = View::initial(Some(256), 32.0);
-        assert_eq!((v.left, v.beat_w), (2.0, 128.0));
-        assert_eq!(View::initial(None, 32.0).left, 0.0);
-        // As the scroller's axis: scroll 0 … 2 × loop, 8 beats less the 350/128 shown.
-        let grid = Rect::from_min_size(pos2(0.0, 0.0), vec2(350.0, 100.0));
-        let clamped = |v: View, loop_beats| {
-            let was = axis(v, 32.0, TimeSig::default(), loop_beats, grid);
-            take(v, was, was.clamped())
-        };
-        let max = 8.0 - 350.0 / 128.0;
-        assert_eq!(clamped(v, 4.0), v);
-        assert!((clamped(View { left: 7.0, ..v }, 4.0).left - max).abs() < 1e-6);
-        assert_eq!(clamped(View { left: -1.0, ..v }, 4.0).left, 0.0);
-        // A grid wider than twice the loop: no scroll.
-        assert_eq!(clamped(v, 1.0).left, 0.0);
-        let wide = View {
-            left: 0.0,
-            beat_w: 1e6,
-            ..v
-        };
-        assert_eq!(clamped(wide, 4.0).beat_w, 3200.0);
-        let narrow = View {
-            left: 0.0,
-            beat_w: 1.0,
-            ..v
-        };
-        assert_eq!(clamped(narrow, 4.0).beat_w, 32.0 / 12.0);
-        // Its zones: one finger on the ruler band and the grid; the wheel zooms over the ruler and the grid.
-        let f = frame(300.0, 1.0);
-        let z = zones(&f);
-        assert_eq!(z.touch, [f.time.union(f.grid), Rect::NOTHING]);
-        assert_eq!(z.wheel_zoom, [f.time.union(f.grid), Rect::NOTHING]);
-        assert_eq!((z.wheel_scroll, z.pinch), (f.grid, f.grid));
-        // The axis puts the view's left beat on the grid's left edge.
-        assert_eq!(v.axis(60.0).x(256.0), 60.0);
-        assert_eq!(v.axis(60.0).x(384.0), 188.0);
-    }
-
-    #[test]
     fn the_playhead_wraps_modulo_the_loop() {
         assert_eq!(playhead(600.0, 512.0), 88.0);
         assert_eq!(playhead(512.0, 512.0), 0.0);

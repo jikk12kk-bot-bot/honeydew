@@ -72,8 +72,12 @@ pub fn preset_exts(type_id: u16) -> &'static [&'static str] {
         52 => &[PRESET_EXT, super::SF2_EXT, super::SFZ_EXT],
         // Lemon Reverb and Lemon Limiter take their Lemon plugins' presets too; a plugin module takes plugin presets
         // only ([`crate::plugins::presets`]).
-        honeydew_audio::lemon::REVERB | honeydew_audio::lemon::LIMITER => &[PRESET_EXT, OSPRESET_EXT],
-        crate::song::plugin::PLUGIN_INSTRUMENT | crate::song::plugin::PLUGIN_EFFECT => &[OSPRESET_EXT],
+        honeydew_audio::lemon::REVERB | honeydew_audio::lemon::LIMITER => {
+            &[PRESET_EXT, OSPRESET_EXT]
+        }
+        crate::song::plugin::PLUGIN_INSTRUMENT | crate::song::plugin::PLUGIN_EFFECT => {
+            &[OSPRESET_EXT]
+        }
         _ => &[PRESET_EXT],
     }
 }
@@ -224,7 +228,11 @@ impl ProjectFiles {
     /// name: the module's preset name (its folder's while it is `Default`), or the rack's or kit's channel name.
     pub fn ask_preset(&mut self, source: PresetSource, channel: i32) {
         let plugin_folder = match &source {
-            PresetSource::Module(module) => module.file.plugin.as_deref().map(crate::plugins::presets::folder),
+            PresetSource::Module(module) => module
+                .file
+                .plugin
+                .as_deref()
+                .map(crate::plugins::presets::folder),
             _ => None,
         };
         let base = match &source {

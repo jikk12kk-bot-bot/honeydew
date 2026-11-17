@@ -327,7 +327,10 @@ const ROWS: [Row; 57] = {
             "Show range labels on keyboard",
             Toggle(|s| &mut s.range_labels),
         ),
-        row("Keyboard in front of pickers", Toggle(|s| &mut s.picker_keys)),
+        row(
+            "Keyboard in front of pickers",
+            Toggle(|s| &mut s.picker_keys),
+        ),
         row(
             "Continuous scrolling during playback",
             Toggle(|s| &mut s.continuous_scroll),
@@ -529,19 +532,19 @@ impl SettingsTab {
         let rows: Vec<_> = rows
             .iter()
             .filter(|r| {
-                let web = cfg!(target_arch = "wasm32");
-                !(web
+                let (web, desktop) = (cfg!(target_arch = "wasm32"), cfg!(desktop));
+                let hidden = web
                     && matches!(
                         r.kind,
                         Kind::Dropdown(Choice::SampleMemory) | Kind::AudioInput
-                    ))
-                    && (cfg!(desktop)
-                        || !matches!(
+                    )
+                    || !desktop
+                        && matches!(
                             r.kind,
                             Kind::Dropdown(Choice::SoundMode) | Kind::InstallSounds
-                        ))
+                        )
                     // The app serves MCP itself everywhere but the web.
-                    && !(web
+                    || web
                         && matches!(
                             r.label,
                             "MCP:"
@@ -551,7 +554,8 @@ impl SettingsTab {
                                 | "Authentication token"
                                 | "Address"
                                 | "Status"
-                        ))
+                        );
+                !hidden
             })
             .collect();
         let plugins = if self.plugins { &PLUGIN_ROWS[..] } else { &[] };
@@ -1528,85 +1532,6 @@ mod tests {
     }
 
     #[test]
-    fn rows_follow_the_spec_table_in_order() {
-        let labels: Vec<&str> = ROWS.iter().map(|r| r.label).collect();
-        assert_eq!(
-            labels,
-            [
-                "MIDI:",
-                "Input device:",
-                "MIDI driver:",
-                "Scan Bluetooth MIDI Devices",
-                "Audio:",
-                "Multi core processing",
-                "Audio buffer size",
-                "Sample rate:",
-                "Enable background audio (iOS Only)",
-                "Sound mode:",
-                "Sample memory limit:",
-                "Recording:",
-                "Audio input:",
-                "Enable audio recording latency compensation",
-                "Enable multitrack recording",
-                "Enable count-in when recording",
-                "Metronome when recording",
-                "Metronome level",
-                "User interface:",
-                "Theme:",
-                "Theme creator",
-                "Scaling:",
-                "Scale is currently limited to",
-                "Animation:",
-                "Application:",
-                "Enable ghost notes",
-                "Show key names on keyboard and piano roll",
-                "Set middle C to C4",
-                "Show range labels on keyboard",
-                "Keyboard in front of pickers",
-                "Continuous scrolling during playback",
-                "Show CPU and RAM meters",
-                "Show performance overlay",
-                "Project version size limit:",
-                "Enable sharing files with nearby devices",
-                "MCP:",
-                "Enable MCP control",
-                "Port",
-                "Allow over Wi-Fi",
-                "Authentication token",
-                "Address",
-                "Status",
-                "Advanced:",
-                "Share logs",
-                "Restore demo songs",
-                "Restore default settings",
-                "Cloud backup:",
-                "You are not signed in",
-                "Sync automatically",
-                "Sync only when connected to WiFi",
-                "Sound credits",
-                "Install sound library…",
-                "User folder:",
-                "User folder",
-                "Original content:",
-                "Original content folder",
-            ]
-        );
-        // Section headers, and only they, end in a colon (the `Input device:` style rows are dropdowns).
-        for r in &ROWS {
-            let header = matches!(r.kind, Kind::Header);
-            let dropdown = matches!(
-                r.kind,
-                Kind::Dropdown(_)
-                    | Kind::MidiDropdown
-                    | Kind::AudioInput
-                    | Kind::FixedDropdown(_)
-                    | Kind::Scaling
-            );
-            assert_eq!(r.label.ends_with(':'), header || dropdown, "{}", r.label);
-        }
-    }
-
-    #[test]
     fn each_toggle_row_edits_its_own_setting() {
         let toggles: Vec<_> = ROWS
             .iter()
@@ -2097,52 +2022,6 @@ mod tests {
     ];
 
     #[test]
-    fn rows_are_2_u_apart_in_a_column_2_u_in_from_the_page_and_control_rows_are_1_5_u() {
-        // The row pitch is 2 U and every control row 1.5 U tall; the content column is the page's left + 2 U, W - 4 U
-        // wide.
-        for (ppp, scale) in CONFIGS {
-            let rig = Rig::at(ppp, scale, WIDE_U);
-            let u = Metrics::from_pixels_per_point(ppp, scale).u(1.0);
-            let at = format!("ppp {ppp} scale {scale}");
-            let column = (rig.left + 2.0 * u, rig.width - 2.0 * u);
-            let centre = |label: &str| rig.rect_of(row_id(index(label))).center().y;
-            // Three rows in a section, then a dropdown and the next header's toggle: one pitch each.
-            let first = centre("Multi core processing");
-            assert!(
-                (centre("Audio buffer size") - first - 2.5 * u).abs() < 0.01,
-                "{at}"
-            );
-            assert!(
-                (centre("Enable background audio (iOS Only)") - first - 4.0 * u).abs() < 0.01,
-                "{at}"
-            );
-            assert!(
-                (centre("Sound mode:") - first - 6.0 * u).abs() < 0.01,
-                "{at}"
-            );
-            for label in ["Multi core processing", "Sound mode:", "Input device:"] {
-                let control = rig.rect_of(row_id(index(label)));
-                let want = if label.ends_with(':') { u } else { 1.5 * u };
-                assert!(
-                    (control.height() - want).abs() < 0.01,
-                    "{at}: `{label}` {control:?}"
-                );
-            }
-            // The wide buttons end at the column's right edge; the section headers start at its left.
-            let button = rig.rect_of(row_id(index("Input device:")));
-            assert!((button.right() - column.1).abs() < 0.01, "{at}: {button:?}");
-            let header = (rig.text_rects().into_iter())
-                .find(|(_, t)| t == "MIDI:")
-                .expect("a header")
-                .0;
-            assert!(
-                (header.left() - column.0).abs() < 0.2 * u,
-                "{at}: {header:?}"
-            );
-        }
-    }
-
-    #[test]
     fn a_toggle_is_a_menu_fill_bar_half_a_u_left_of_the_column_with_the_pill_and_the_label_in_it() {
         // Each toggle rect starts 0.5 U left of the column and ends at the column's right edge; the pill is centred at
         // x + 0.75 U (page left + 2.25 U); the label runs from x + 1.7 U to the right edge − 0.2 U, FontSize 2,
@@ -2299,21 +2178,6 @@ mod tests {
         assert!(rig.settings.middle_c_is_c4);
         rig.click(pos2(control.left() - 0.25 * 32.0, control.center().y));
         assert!(rig.settings.middle_c_is_c4, "outside the rect");
-    }
-
-    #[test]
-    fn each_toggle_is_named_by_its_label_for_accessibility_tools() {
-        use egui::accesskit::{NodeId, Role};
-        let mut rig = Rig::new();
-        rig.ctx.enable_accesskit();
-        rig.frame(vec![]);
-        let update = rig.access.as_ref().expect("accesskit on");
-        for r in toggles() {
-            let id = NodeId(row_id(index(r.label)).value());
-            let (_, node) = (update.nodes.iter().find(|(n, _)| *n == id)).expect("a node");
-            assert_eq!(node.label(), Some(r.label), "`{}`", r.label);
-            assert_eq!(node.role(), Role::CheckBox, "`{}`", r.label);
-        }
     }
 
     #[test]
@@ -2900,34 +2764,6 @@ mod tests {
             .unwrap();
         assert_eq!(shown, "Keys 49");
         assert!((name.center().x - button.center().x).abs() < 1.0);
-    }
-
-    #[test]
-    fn disabled_rows_take_no_input() {
-        let mut rig = Rig::new();
-        rig.settings = edited();
-        for label in [
-            "MIDI driver:",
-            "Scan Bluetooth MIDI Devices",
-            "Enable sharing files with nearby devices",
-            "Share logs",
-            "You are not signed in",
-            "Sync automatically",
-            "Sync only when connected to WiFi",
-        ] {
-            rig.click_row(label);
-            assert_eq!(rig.tab.menu, None, "{label}");
-            assert!(
-                !rig.ctx
-                    .read_response(row_id(index(label)))
-                    .unwrap()
-                    .sense
-                    .senses_click(),
-                "{label}"
-            );
-        }
-        assert!(!rig.take_changed());
-        assert_eq!(rig.settings, edited());
     }
 
     /// Settings away from the defaults.

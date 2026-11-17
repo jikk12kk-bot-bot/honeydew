@@ -21,9 +21,7 @@
 //! cell); the sub-tracks triangle and the current sub-track's triangle show collapsed too (they are neither controls
 //! nor labels); the expanded meters are drawn under the level slider, the left peak on the lower bar.
 
-use eframe::egui::{
-    Align2, Color32, Id, Painter, Rect, Shape, Stroke, Ui, UiBuilder, pos2, vec2,
-};
+use eframe::egui::{Align2, Color32, Id, Rect, Shape, Stroke, Ui, UiBuilder, pos2, vec2};
 use honeydew_audio::device::ModuleMeter;
 
 use crate::icons::{draw_icon, icon_edge};
@@ -228,7 +226,9 @@ pub fn show(
             let w = m.round_px(m.u(FOLDER_BAR_W));
             let bar = rect.with_max_x(rect.left() + w.max(1.0 / m.ppp()));
             let hue = song.file.folders.get(place.folder).map(|f| f.hue);
-            let ink = hue.map_or(c.text, |h| channel_color(h, cx.theme)).to_color32();
+            let ink = hue
+                .map_or(c.text, |h| channel_color(h, cx.theme))
+                .to_color32();
             let ink = ink.gamma_multiply(FOLDER_BAR_ALPHA);
             painter.rect_filled(bar, 0.0, ink);
         }
@@ -334,7 +334,9 @@ fn folder_row(
     let w = m.round_px(m.u(CLOSED_FOLDER_BAR_W)).max(1.0 / m.ppp());
     painter.rect_filled(rect.with_max_x(rect.left() + w), 0.0, ink);
     // The glyph: a tab and a body, in the cell's upper part.
-    let cell = rect.with_max_x(rect.left() + m.u(CELL_W)).with_min_x(rect.left() + w);
+    let cell = rect
+        .with_max_x(rect.left() + m.u(CELL_W))
+        .with_min_x(rect.left() + w);
     let t = m.t();
     let body = Rect::from_center_size(
         cell.center() - vec2(0.0, cell.height() * 0.12),
@@ -349,8 +351,16 @@ fn folder_row(
     // The disclosure triangle.
     let (x, y, d) = (cell.center().x, body.bottom() + 5.0 * t, 2.0 * t);
     let points = match f.open {
-        true => vec![pos2(x - d, y - d * 0.5), pos2(x + d, y - d * 0.5), pos2(x, y + d)],
-        false => vec![pos2(x - d * 0.5, y - d), pos2(x + d, y), pos2(x - d * 0.5, y + d)],
+        true => vec![
+            pos2(x - d, y - d * 0.5),
+            pos2(x + d, y - d * 0.5),
+            pos2(x, y + d),
+        ],
+        false => vec![
+            pos2(x - d * 0.5, y - d),
+            pos2(x + d, y),
+            pos2(x - d * 0.5, y + d),
+        ],
     };
     painter.add(Shape::convex_polygon(points, ink, Stroke::NONE));
     if !expanded {
@@ -362,7 +372,15 @@ fn folder_row(
     let members = song.folder_members(folder).len();
     let label = (header.with_min_x(cell.right())).shrink2(vec2(m.u(LABEL_INSET), m.t()));
     let font = m.font_id(FontSize::Pt8);
-    widgets::truncated(&painter, label, Align2::RIGHT_TOP, &f.name, font.clone(), ink, 5);
+    widgets::truncated(
+        &painter,
+        label,
+        Align2::RIGHT_TOP,
+        &f.name,
+        font.clone(),
+        ink,
+        5,
+    );
     let count = match members {
         1 => "1 track".to_owned(),
         n => format!("{n} tracks"),
@@ -377,7 +395,11 @@ fn folder_row(
         let grow = if held(ui, r) { PRESSED_GROWTH } else { 1.0 };
         let disc = DISC_SHARE * r.width().min(r.height()) * grow;
         let fill = c.module_fill.to_color32();
-        let fill = if grow > 1.0 { widgets::pressed(fill) } else { fill };
+        let fill = if grow > 1.0 {
+            widgets::pressed(fill)
+        } else {
+            fill
+        };
         painter.circle_filled(r.center(), disc, fill);
         let mut on = if song.folder_muted(folder) { 1.0 } else { 0.0 };
         let control = Control {
@@ -412,7 +434,11 @@ fn folder_row(
 /// Folder `folder`'s Mute (`solo` false: channel strip param 2) or `Solo` (param 3): on for every member unless every
 /// one has it already, then off for all. Returns the params it changed, already written to `song`: (channel, target,
 /// value). A solo's smart solo ([`mixer::smart_solo`]) is the caller's.
-pub fn folder_switch(song: &mut Song, folder: usize, solo: bool) -> Vec<(usize, AutomationTarget, f32)> {
+pub fn folder_switch(
+    song: &mut Song,
+    folder: usize,
+    solo: bool,
+) -> Vec<(usize, AutomationTarget, f32)> {
     let (param, all) = match solo {
         true => (3, song.folder_soloed(folder)),
         false => (2, song.folder_muted(folder)),

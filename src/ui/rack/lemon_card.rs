@@ -20,9 +20,9 @@
 use eframe::egui::text::{CCursor, CCursorRange};
 use eframe::egui::text_edit::TextEditState;
 use eframe::egui::{
-    self, Area, Color32, ColorImage, CursorIcon, Event, Id, Key, LayerId, Modifiers, MouseWheelUnit, Order,
-    PointerButton, Pos2, Rect, Response, Sense, TextEdit, TextureHandle, TextureOptions, Ui, Vec2,
-    pos2, vec2,
+    self, Area, Color32, ColorImage, CursorIcon, Event, Id, Key, LayerId, Modifiers,
+    MouseWheelUnit, Order, PointerButton, Pos2, Rect, Response, Sense, TextEdit, TextureHandle,
+    TextureOptions, Ui, Vec2, pos2, vec2,
 };
 use os_plugkit::embed::{self, Answer, Button, Input, MenuView, Modal};
 use os_ui::Canvas;
@@ -174,7 +174,9 @@ pub(crate) fn show(
         r if r > 0.0 => r.min(1.0),
         _ => 1.0,
     };
-    let scale = (content.width() * zoom * ppp * resolution / w as f32).max(0.5).min(most);
+    let scale = (content.width() * zoom * ppp * resolution / w as f32)
+        .max(0.5)
+        .min(most);
     // The handle's type is the platform's (`embed::Parent`: `usize` on macOS).
     let Some(editor) = plugins::lemon_editor(channel_id, instance_id, scale)
         .map(|id| -> embed::Parent { id as _ })
@@ -1358,10 +1360,17 @@ mod tests {
         let right = Rect::from_min_size(pos2(745.0, 500.0), vec2(40.0, 40.0));
         let grip = Rect::from_min_size(pos2(700.0, 545.0), vec2(85.0, 10.0));
         let pill = left.union(right).union(grip);
-        set_pad_area(&mut rig.card, Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)), vec![pill]);
+        set_pad_area(
+            &mut rig.card,
+            Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)),
+            vec![pill],
+        );
         set_buttons(&mut rig.card, Some([left, right, grip]));
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(rig.card.size.0 as f32, 500.0));
-        let rect = Rect::from_min_size(rect.min, vec2(rect.width(), body_height(rig.card.size, rect.width())));
+        let rect = Rect::from_min_size(
+            rect.min,
+            vec2(rect.width(), body_height(rig.card.size, rect.width())),
+        );
         let cursor = |rig: &Rig| rect.min + rig.card.pad.cursor.expect("on") * rect.size();
         // The cursor onto the Delay tile (`lemon_small_fx::chorus`: x 8…166, y 8…54), the finger far from it.
         let tile = pos2(87.0, 31.0);
@@ -1371,7 +1380,10 @@ mod tests {
         let to = from + (tile - start) / PAD_SPEED;
         rig.frame(finger(TouchPhase::Start, from));
         for k in 1..=4 {
-            rig.frame(finger(TouchPhase::Move, from + (to - from) * k as f32 / 4.0));
+            rig.frame(finger(
+                TouchPhase::Move,
+                from + (to - from) * k as f32 / 4.0,
+            ));
         }
         rig.frame(finger(TouchPhase::End, to));
         assert!(cursor(&rig).distance(tile) < 1.0, "{:?}", cursor(&rig));
@@ -1406,7 +1418,10 @@ mod tests {
         }
         rig.frame(second(TouchPhase::End, pos2(from.x, 60.0)));
         rig.frame(finger(TouchPhase::End, left.center()));
-        assert!(plugins::idle().iter().any(|m| m.gesture == 1), "the knob turned");
+        assert!(
+            plugins::idle().iter().any(|m| m.gesture == 1),
+            "the knob turned"
+        );
         set_mouse(&mut rig.card, false);
         assert!(!mouse_on(&rig.card));
     }
@@ -1426,7 +1441,10 @@ mod tests {
         set_pad_area(&mut rig.card, screen, vec![pill]);
         set_buttons(&mut rig.card, Some([left, right, grip]));
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(rig.card.size.0 as f32, 500.0));
-        let rect = Rect::from_min_size(rect.min, vec2(rect.width(), body_height(rig.card.size, rect.width())));
+        let rect = Rect::from_min_size(
+            rect.min,
+            vec2(rect.width(), body_height(rig.card.size, rect.width())),
+        );
         let cursor = |rig: &Rig| rect.min + rig.card.pad.cursor.expect("on") * rect.size();
         // Time stretching's `Mode` list (`view::sample_tab`): the cursor onto it.
         let mode = centre(view::rr(456.0, 548.0, 102.0, 122.0));
@@ -1434,7 +1452,10 @@ mod tests {
         let to = from + (mode - cursor(&rig)) / PAD_SPEED;
         rig.frame(finger(TouchPhase::Start, from));
         for k in 1..=4 {
-            rig.frame(finger(TouchPhase::Move, from + (to - from) * k as f32 / 4.0));
+            rig.frame(finger(
+                TouchPhase::Move,
+                from + (to - from) * k as f32 / 4.0,
+            ));
         }
         rig.frame(finger(TouchPhase::End, to));
         assert!(cursor(&rig).distance(mode) < 1.0, "{:?}", cursor(&rig));
@@ -1456,7 +1477,10 @@ mod tests {
         quick.extend(finger(TouchPhase::End, left.center()));
         rig.frame(quick);
         rig.frame(vec![]);
-        assert!(matches!(embed::modal(editor), Some(Modal::Menu { .. })), "Left clicked");
+        assert!(
+            matches!(embed::modal(editor), Some(Modal::Menu { .. })),
+            "Left clicked"
+        );
         assert!(dismiss(&rig.card));
         rig.frame(vec![]);
         // The grip moves the buttons.
@@ -1464,7 +1488,10 @@ mod tests {
         rig.frame(finger(TouchPhase::Move, grip.center() - vec2(100.0, 50.0)));
         rig.frame(finger(TouchPhase::End, grip.center() - vec2(100.0, 50.0)));
         assert_eq!(take_buttons_moved(&mut rig.card), vec2(-100.0, -50.0));
-        assert!(cursor(&rig).distance(mode) < 1.0, "the grip moves no cursor");
+        assert!(
+            cursor(&rig).distance(mode) < 1.0,
+            "the grip moves no cursor"
+        );
     }
 
     /// Issue #68: full screen, the editor fills the screen as far as its aspect allows, centred, painted at that scale

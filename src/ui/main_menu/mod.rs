@@ -22,9 +22,7 @@ use crate::icons::{IconId, draw_icon};
 use crate::metrics::{FontSize, Metrics};
 use crate::settings::Settings;
 use crate::theme::DISABLED_ALPHA;
-use crate::ui::buttons::{
-    boxed_circle_button, filled_circle_button, outline_circle_button,
-};
+use crate::ui::buttons::{boxed_circle_button, filled_circle_button, outline_circle_button};
 use crate::ui::popup::{PopupItem, PopupResult};
 use crate::ui::scroller::{Axis, Scroller, Y, Zones};
 use crate::ui::settings_tab::SettingsTab;
@@ -66,8 +64,6 @@ const PAD: f32 = 0.5;
 const GAP: f32 = 0.25;
 /// `Help`'s and the close X's cells at the header's ends.
 const HEADER_CELL: f32 = 2.0;
-/// The close X's icon size factor.
-const CLOSE_ICON: f32 = 0.6;
 /// A tab under the mouse: `text` at this alpha over its cell.
 const TAB_HOVER_ALPHA: f32 = 0.05;
 /// A tab label too wide for its cell keeps this many characters after its middle ellipsis.
@@ -423,7 +419,7 @@ impl MainMenu {
             self.help_menu = Some(help.center());
         }
         let quit_response = crate::ui::focus::interact(ui, quit, id.with("Quit"), Sense::click());
-        if crate::ui::buttons::hovered(ui, &quit_response) {
+        if crate::ui::widgets::hovered(ui, &quit_response) {
             let r = 0.375 * quit.width().min(quit.height());
             (ui.painter()).circle_filled(
                 quit.center(),

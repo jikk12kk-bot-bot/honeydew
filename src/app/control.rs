@@ -64,7 +64,7 @@ fn now_ms() -> u64 {
 }
 
 /// Held for a frame's length ([`frame_lock`]); notes its end.
-pub(super) struct FrameGuard(MutexGuard<'static, Option<AppPtr>>);
+pub(super) struct FrameGuard(#[allow(dead_code)] MutexGuard<'static, Option<AppPtr>>);
 
 impl Drop for FrameGuard {
     fn drop(&mut self) {
@@ -75,7 +75,7 @@ impl Drop for FrameGuard {
 /// At a frame's start: holds the app away from [`background`] until the frame ends, and keeps where it is for it.
 pub(super) fn frame_lock(app: &mut HoneydewApp) -> FrameGuard {
     let mut held = APP.lock().unwrap_or_else(PoisonError::into_inner);
-    *held = app.control.is_some().then(|| AppPtr(app));
+    *held = app.control.is_some().then_some(AppPtr(app));
     FrameGuard(held)
 }
 

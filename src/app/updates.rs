@@ -63,11 +63,12 @@ impl HoneydewApp {
                 Some(false) => {
                     self.sounds_ask_open = false;
                     self.navigate(Nav::Open(Overlay::Message {
-                    tag: SOUNDS_TAG,
-                    lines: vec![
-                        "No sounds downloaded.".into(),
-                        "Download them any time: Main menu > UPDATES > Download sound library.".into(),
-                    ],
+                        tag: SOUNDS_TAG,
+                        lines: vec![
+                            "No sounds downloaded.".into(),
+                            "Download them any time: Main menu > UPDATES > Download sound library."
+                                .into(),
+                        ],
                         confirm: None,
                         extra: None,
                     }));

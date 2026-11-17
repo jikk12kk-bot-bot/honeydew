@@ -111,9 +111,9 @@ use crate::ui::UiCtx;
 use crate::ui::picker_preview::{Play, STRIP_H, SampleStrip};
 use crate::ui::popup::{self, PopupItem};
 use crate::ui::preset_picker::MY_FILES;
-use crate::ui::shortcuts;
 use crate::ui::scroller::{self, Scroller};
 use crate::ui::search_bar::{self, Found, ROW_H, RowLook, SearchBar, Walk, matching};
+use crate::ui::shortcuts;
 use crate::ui::song_options::{SongOptionsAction, SongOptionsDialog};
 use crate::ui::widgets::{Button, button, text_label, truncated, truncated_bold};
 use crate::ui::{anim, focus, gesture};
@@ -488,7 +488,11 @@ impl SongsTab {
         };
         let mut at = from.clone();
         let mut folders = Vec::new();
-        for part in path.strip_prefix(&from).into_iter().flat_map(Path::components) {
+        for part in path
+            .strip_prefix(&from)
+            .into_iter()
+            .flat_map(Path::components)
+        {
             at = at.join(part);
             folders.push(SongEntry {
                 name: part.as_os_str().to_string_lossy().into_owned(),
@@ -523,7 +527,10 @@ impl SongsTab {
     fn toggle_shortcut(&self, ctx: &Context, library: &dyn SongLibrary) {
         let user = library.user_folder();
         let dir = self.open_dir(library);
-        let Some(key) = user.zip(dir).and_then(|(user, dir)| shortcuts::key(&user, &dir)) else {
+        let Some(key) = user
+            .zip(dir)
+            .and_then(|(user, dir)| shortcuts::key(&user, &dir))
+        else {
             return;
         };
         let defaults = [SONGS_FOLDER.to_owned()];
@@ -1499,17 +1506,17 @@ mod tests {
     fn the_breadcrumb_names_the_folders_above_the_open_one() {
         let mut tab = SongsTab::default();
         assert_eq!(
-            (tab.breadcrumb(false).as_str(), tab.title()),
+            (tab.breadcrumb(false).as_str(), tab.title(false)),
             ("", "My Songs")
         );
         tab.folders.push(entry("Demo songs", true, 0));
         assert_eq!(
-            (tab.breadcrumb(false).as_str(), tab.title()),
+            (tab.breadcrumb(false).as_str(), tab.title(false)),
             ("My Songs", "Demo songs")
         );
         tab.folders.push(entry("Old", true, 0));
         assert_eq!(
-            (tab.breadcrumb(false).as_str(), tab.title()),
+            (tab.breadcrumb(false).as_str(), tab.title(false)),
             ("My Songs / Demo songs", "Old")
         );
     }
@@ -1521,18 +1528,18 @@ mod tests {
         let mut tab = SongsTab::default();
         tab.folders.push(entry("Recently Deleted", true, 0));
         assert_eq!(
-            (tab.breadcrumb(true).as_str(), tab.title()),
+            (tab.breadcrumb(true).as_str(), tab.title(false)),
             (note, "Recently Deleted")
         );
         // The bin stands in for the root in the trail.
         tab.folders.push(entry("My Songs", true, 0));
         assert_eq!(
-            (tab.breadcrumb(true).as_str(), tab.title()),
+            (tab.breadcrumb(true).as_str(), tab.title(false)),
             (note, "My Songs")
         );
         tab.folders.push(entry("F", true, 0));
         assert_eq!(
-            (tab.breadcrumb(true), tab.title()),
+            (tab.breadcrumb(true), tab.title(false)),
             (format!("{note} / My Songs"), "F")
         );
     }

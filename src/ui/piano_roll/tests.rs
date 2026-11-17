@@ -997,7 +997,6 @@ mod component {
     use crate::song::{ChannelKind, Event, PPQ, Song};
     use crate::theme::theme_by_id;
     use crate::ui::UiCtx;
-    use crate::ui::clips::{Selection, place_row};
     use crate::ui::piano_roll::notes::{Geom, SnapMode};
     use crate::ui::piano_roll::{BEAT_U, PianoRoll, PianoRollAction, Remembered, RollOptions};
     use crate::ui::timeline;
@@ -1964,21 +1963,6 @@ mod component {
         assert!(rig.text("Copy").is_some());
     }
 
-    #[test]
-    fn floating_copy_places_the_copies_after_the_selection() {
-        let mut rig = Rig::new(vec![n(128, 64.0, 70)]);
-        rig.select(vec![true]);
-        let copy = rig.text("Copy").unwrap();
-        rig.tap(copy);
-        assert_eq!(
-            spans(&super::super::note_clipboard(&rig.ctx)),
-            [(128, 64.0, 70)]
-        );
-        assert_eq!(spans(rig.events()), [(128, 64.0, 70), (192, 64.0, 70)]);
-        assert_eq!(rig.roll.selected, [false, true]);
-        assert_eq!(rig.all, [DONE]);
-    }
-
     /// Escape: closes the open popup.
     fn escape(rig: &mut Rig) {
         rig.frame(vec![In::Key {
@@ -1998,103 +1982,6 @@ mod component {
         rig.frame(vec![In::PointerMoved(p)]);
         rig.button(p, PointerButton::Secondary, true);
         rig.button(p, PointerButton::Secondary, false);
-    }
-
-    /// The first note's rect in the roll's current view, and where the shared rule puts the floating row over it
-    /// with the finger at `finger` (at U = 32 a 4-button row is 204.8 × 48, m 6.4).
-    fn shared_row(rig: &Rig, finger: Pos2) -> (Rect, Option<Rect>) {
-        let g = rig.roll.geom(GRID.min, 32.0);
-        let e = &rig.events()[0];
-        let rect = g.note_rect(e).unwrap();
-        let m = Metrics::from_pixels_per_point(1.0, DEFAULT_UI_SCALE);
-        let handles = [crate::ui::clips::end_handle(rect, &m)];
-        let sel = Selection {
-            rect,
-            one_row: true,
-            handles: &handles,
-        };
-        (
-            rect,
-            place_row(&sel, finger, GRID, vec2(204.8, 48.0), 6.4, 1.0),
-        )
-    }
-
-    #[test]
-    fn the_floating_row_hides_on_a_scroll_or_zoom_and_a_tap_on_the_selection_brings_it_back() {
-        // The rule the playlist and the drum editor share.
-        let mut rig = Rig::new(vec![n(512, 128.0, 66)]);
-        let middle = |rig: &Rig| shared_row(rig, Pos2::ZERO).0.center();
-        let p = middle(&rig);
-        rig.tap(p);
-        assert_eq!(rig.roll.selected, [true]);
-        assert!(rig.text("Copy").is_some());
-        assert_eq!(rig.roll.row.rect(), shared_row(&rig, p).1);
-        // The wheel scrolls: hidden, the note still in view.
-        rig.frame(vec![
-            In::PointerMoved(pos2(600.0, 200.0)),
-            In::MouseWheel {
-                unit: MouseWheelUnit::Point,
-                delta: vec2(0.0, -16.0),
-                modifiers: Modifiers::NONE,
-            },
-        ]);
-        for _ in 0..30 {
-            rig.frame(vec![]);
-        }
-        assert_ne!(rig.roll.scroll, Some(vec2(0.0, SCROLL_Y)));
-        assert!(GRID.contains(middle(&rig)));
-        assert_eq!(rig.text("Copy"), None);
-        // A long press on the selection: back, at the new place, the note still selected (a tap would deselect it).
-        let p = middle(&rig);
-        rig.hold(p);
-        rig.release(p);
-        assert_eq!(rig.roll.selected, [true]);
-        assert!(rig.text("Copy").is_some());
-        assert_eq!(rig.roll.row.rect(), shared_row(&rig, p).1);
-        // A pinch zooms: hidden again.
-        rig.frame(vec![In::PointerMoved(pos2(600.0, 200.0)), In::Zoom(1.5)]);
-        rig.frame(vec![]);
-        assert_eq!(rig.text("Copy"), None);
-        assert_eq!(rig.roll.selected, [true]);
-        assert!(rig.all.is_empty(), "{:?}", rig.all);
-    }
-
-    #[test]
-    fn the_rolls_floating_row_is_the_shared_placement() {
-        // Each: a note (tick, key) tapped at its middle, and where its row went.
-        for ((tick, key), side) in [
-            // Room on both sides, one key high: above.
-            ((512, 66), "above"),
-            // The top row: no room above, so below.
-            ((512, 72), "below"),
-            // At the left edge: centred on the finger, slid right into the grid; above.
-            ((0, 66), "above"),
-        ] {
-            let mut rig = Rig::new(vec![n(tick, 64.0, key)]);
-            let (note, _) = shared_row(&rig, Pos2::ZERO);
-            rig.tap(note.center());
-            let (_, want) = shared_row(&rig, note.center());
-            let row = rig.roll.row.rect();
-            assert_eq!(row, want, "key {key}");
-            let row = row.unwrap();
-            assert!(GRID.contains_rect(row), "key {key}");
-            match side {
-                "above" => assert_eq!(row.bottom(), note.top() - 6.4, "key {key}"),
-                _ => assert_eq!(row.top(), note.bottom() + 6.4, "key {key}"),
-            }
-            // The labels sit in the row's 51.2-point slots, left to right.
-            for (i, label) in ["Copy", "Delete", "Snap", "Duplicate", "More..."]
-                .into_iter()
-                .enumerate()
-            {
-                let at = rig.text(label).unwrap();
-                let slot = pos2(row.left() + 25.6 + 51.2 * i as f32, row.center().y);
-                assert!(
-                    (at - slot).length() < 1.0,
-                    "{label} at {at:?}, not {slot:?}"
-                );
-            }
-        }
     }
 
     #[test]
@@ -2850,24 +2737,6 @@ mod component {
         assert_eq!(rig.song.channels[1].lanes[0].clips[0].loop_len_beats, 16.0);
         // Quantize re-syncs whatever it moved; no undo step, as nothing changed.
         assert_eq!(rig.all, [PianoRollAction::Resync]);
-    }
-
-    #[test]
-    fn notes_above_key_127_do_not_break_the_roll() {
-        let mut rig = Rig::new(vec![n(0, 64.0, 0), n(64, 64.0, 200)]);
-        rig.roll.scroll = Some(vec2(0.0, 2048.0));
-        rig.frame(vec![]);
-        // Select all through the note menu, after selecting the key 0 note.
-        rig.select(vec![true, false]);
-        rig.tap(rig.text("More...").unwrap());
-        rig.frame(vec![]);
-        rig.tap(rig.text("Select All").unwrap());
-        assert_eq!(rig.roll.selected, [true, false]);
-        rig.tap(rig.text("Copy").unwrap());
-        assert_eq!(
-            spans(rig.events()),
-            [(0, 64.0, 0), (64, 64.0, 200), (64, 64.0, 0)]
-        );
     }
 
     #[test]

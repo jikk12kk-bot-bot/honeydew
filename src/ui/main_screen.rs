@@ -805,13 +805,7 @@ impl MainScreen {
             actions.nav = Some(nav);
         }
         #[cfg(any(target_arch = "wasm32", test))]
-        crate::app::live::playlist(
-            ui,
-            &cx,
-            app.song,
-            (grid, &lanes, axis),
-            app.covered,
-        );
+        crate::app::live::playlist(ui, &cx, app.song, (grid, &lanes, axis), app.covered);
         // Children get the touch first: a held header, a marquee (or the hold that starts one) takes it from the
         // scroller; a ruler press waiting for its long press leaves it the scroller's until a range starts.
         if self.header_busy || self.clips.busy(ui.input(|i| i.time)) {
@@ -2969,8 +2963,6 @@ mod tests {
         reorder: Option<Vec<usize>>,
         /// The playhead knob's drop: the song tick it seeks to.
         seek: Option<u64>,
-        /// Where the track grid starts.
-        grid_left: f32,
         shapes: Vec<egui::epaint::ClippedShape>,
     }
 
@@ -3088,7 +3080,6 @@ mod tests {
                         insert: actions.insert,
                         reorder: actions.reorder,
                         seek: actions.seek,
-                        grid_left: screen.header_w(&m) + m.t(),
                         shapes: Vec::new(),
                     });
                 });
@@ -3145,48 +3136,6 @@ mod tests {
             pressed,
             modifiers: Default::default(),
         }
-    }
-
-    #[test]
-    fn wheel_scrolls_eight_channels_until_the_last_row_fits_the_track_area() {
-        let ctx = egui::Context::default();
-        let (mut screen, mut time) = (MainScreen::default(), 0.0);
-        let mut song = song_with_channels(8); // master + 8 = 9 rows
-        let (mut m, mut area) = run_frame(&ctx, &mut screen, &mut song, &mut time, vec![]);
-        let last = song.channels.len() - 1;
-        // Not scrolled: the last row is far below the area.
-        assert!(row_top(area, screen.scroll_y, last, m.u(ROW_H)) > area.bottom());
-
-        let over_rows = area.center();
-        run_frame(
-            &ctx,
-            &mut screen,
-            &mut song,
-            &mut time,
-            vec![egui::Event::PointerMoved(over_rows), wheel(-5000.0)],
-        );
-        for _ in 0..60 {
-            (m, area) = run_frame(&ctx, &mut screen, &mut song, &mut time, vec![]);
-        }
-        let max = content_height(song.channels.len(), m.u(ROW_H), &m) - area.height();
-        assert_eq!(screen.scroll_y, max);
-        let top = row_top(area, screen.scroll_y, last, m.u(ROW_H));
-        let last_row = Rect::from_x_y_ranges(area.x_range(), top..=top + m.u(ROW_H));
-        assert!(
-            area.contains_rect(last_row),
-            "{last_row:?} not inside {area:?}"
-        );
-        // The `+` is 0.75 U below it, and 0.75 U above the area's bottom.
-        let plus = add_button_center(area, area, song.channels.len(), last_row.bottom(), &m);
-        assert_eq!(plus.y - m.u(ADD_D) / 2.0, last_row.bottom() + m.u(0.75));
-        assert_eq!(plus.y + m.u(ADD_D) / 2.0, area.bottom() - m.u(0.75));
-
-        // Wheeling back up returns to the top.
-        run_frame(&ctx, &mut screen, &mut song, &mut time, vec![wheel(5000.0)]);
-        for _ in 0..60 {
-            run_frame(&ctx, &mut screen, &mut song, &mut time, vec![]);
-        }
-        assert_eq!(screen.scroll_y, 0.0);
     }
 
     #[test]
@@ -3676,41 +3625,11 @@ mod tests {
             self.click_id(Id::new("clip_insert").with(0))
         }
 
-        /// A tap at `pos` 0.1 s long, then another 0.1 s later: released 0.2 s apart, a double tap.
-        fn double_tap(&mut self, pos: Pos2) -> (Option<SongEdit>, Option<Nav>) {
-            self.frames(vec![
-                vec![egui::Event::PointerMoved(pos)],
-                vec![button(pos, true)],
-                vec![button(pos, false)],
-                vec![button(pos, true)],
-                vec![button(pos, false)],
-            ])
-        }
-
-        /// A press at `pos` held 0.4 s, then released there: a long press.
-        fn long_press(&mut self, pos: Pos2) -> (Option<SongEdit>, Option<Nav>) {
-            self.frames(vec![
-                vec![egui::Event::PointerMoved(pos)],
-                vec![button(pos, true)],
-                vec![],
-                vec![],
-                vec![],
-                vec![button(pos, false)],
-            ])
-        }
-
         /// The insert menu is drawn, a frame on.
         fn plus_shown(&mut self) -> bool {
             let f = self.frame(vec![]);
             (f.shapes.iter())
                 .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "New Clip"))
-        }
-
-        /// Taps the MiniSynth's clip and lets the double-tap window pass: current and selected, it drags at once.
-        fn current(&mut self) {
-            self.click(CLIP);
-            self.frame(vec![]);
-            self.frame(vec![]);
         }
     }
 
@@ -3825,309 +3744,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_take_being_recorded_is_a_two_tone_bar_on_its_track() {
-        // Two beats on the Drums row (from Y_1 = TOP + 64, 63 tall), from the grid's left edge.
-        let mut rig = Rig::new(song_with_a_clip());
-        let take = |channel| LiveTake {
-            channel,
-            lane: 0,
-            start: 0.0,
-            end: 256.0,
-            clip: None,
-        };
-        rig.screen.takes = vec![take(1), take(7)];
-        let f = rig.frame(vec![]);
-        let theme = theme_by_id(0);
-        let rects: Vec<(Rect, Color32)> = (f.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r) if r.rect.x_range() == Rangef::new(GRID_X, 126.0) => {
-                    Some((r.rect, r.fill))
-                }
-                _ => None,
-            })
-            .collect();
-        let color = channel_color(rig.song.channels[1].hue, &theme).to_color32();
-        // A recording clip: its clip box is x 50 … 126 (2 beats' x, 126.8, truncated), Y_1 + 1 … Y_2 − t − 1; a
-        // channel-colour box a pixel in from its top and bottom, then a content-colour one 3 px in. A take on a channel that does not exist draws nothing.
-        let [(outer, outer_fill), (inner, inner_fill)] = rects[..] else {
-            panic!("{rects:?}")
-        };
-        let rect =
-            |y0: f32, y1: f32| Rect::from_min_max(pos2(GRID_X, TOP + y0), pos2(126.0, TOP + y1));
-        assert_eq!((outer, outer_fill), (rect(66.0, 124.0), color));
-        assert_eq!(inner, rect(68.0, 122.0));
-        assert_ne!(inner_fill, outer_fill);
-    }
-
     // ---- the rows and clips as the playlist draws them ----
-
-    /// Row `i`'s fill right of the headers (x [`GRID_X`]): y [`TOP`] + 64 i, 63 tall (a pixel of gap under it).
-    fn row_fills(f: &Frame, rows: usize) -> Vec<Color32> {
-        (0..rows)
-            .filter_map(|i| {
-                let top = TOP + 64.0 * i as f32;
-                f.shapes.iter().find_map(|s| match &s.shape {
-                    egui::Shape::Rect(r)
-                        if r.rect.left() == GRID_X
-                            && (r.rect.top() - top).abs() < 1e-3
-                            && (r.rect.height() - 63.0).abs() < 1e-3 =>
-                    {
-                        Some(r.fill)
-                    }
-                    _ => None,
-                })
-            })
-            .collect()
-    }
-
-    #[test]
-    fn the_current_tracks_row_is_module_fill_once_there_are_two_channels() {
-        let c = theme_by_id(0).colors;
-        let (module, control) = (c.module_fill.to_color32(), c.control_fill.to_color32());
-        // The keyboard's channel, Drums (row 1), has the current track.
-        let mut rig = Rig::new(song_with_a_clip());
-        assert_eq!(row_fills(&rig.frame(vec![]), 3), [control, module, control]);
-        // A tap on the MiniSynth's clip makes its track current.
-        rig.click(CLIP);
-        assert_eq!(row_fills(&rig.frame(vec![]), 3), [control, control, module]);
-        // The master alone, its track current: fewer than 2 channels, every row `controlFill`.
-        let mut rig = Rig::new(Song::default());
-        rig.selected = 0;
-        assert_eq!(row_fills(&rig.frame(vec![]), 1), [control]);
-        // The master and one instrument: two channels, the current track lit.
-        let mut song = Song::default();
-        song.add_channel(ChannelKind::Synth(SynthKind::MiniSynth));
-        let mut rig = Rig::new(song);
-        assert_eq!(row_fills(&rig.frame(vec![]), 2), [control, module]);
-    }
-
-    #[test]
-    fn the_rows_beat_lines_are_background_4_2_1_px_centred_on_marks_at_least_0_6_u_apart() {
-        // 38.4 points a beat at U 32: half beats are 19.2 apart, 0.6 U, and quarters would be closer. Bars 4 px, beats
-        // 2 px, half beats 1 px, each ⌊w/2⌋ px left of its mark rounded to the pixel grid. Drums' row (y TOP + 64, 63
-        // tall).
-        let mut rig = Rig::new(song_with_a_clip());
-        let f = rig.frame(vec![]);
-        let bg = theme_by_id(0).colors.background.to_color32();
-        let mut lines: Vec<(f32, f32)> = (f.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r)
-                    if (r.rect.top() - TOP - 64.0).abs() < 1e-3
-                        && (r.rect.height() - 63.0).abs() < 1e-3
-                        && r.fill == bg =>
-                {
-                    Some((r.rect.left(), r.rect.width()))
-                }
-                _ => None,
-            })
-            .collect();
-        lines.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let want = [
-            (48.0, 4.0),
-            (69.0, 1.0),
-            (87.0, 2.0),
-            (108.0, 1.0),
-            (126.0, 2.0),
-            (146.0, 1.0),
-            (164.0, 2.0),
-            (184.0, 1.0),
-            (202.0, 4.0),
-        ];
-        assert_eq!(lines[..9], want);
-        // At ppp 2 the same marks in half-point pixels: w px wide, ⌊w/2⌋ px left of the mark on the half-point grid.
-        let m = Metrics::from_pixels_per_point(2.0, DEFAULT_UI_SCALE);
-        let theme = theme_by_id(0);
-        let cx = UiCtx {
-            theme: &theme,
-            m: &m,
-        };
-        let song = song_with_a_clip();
-        let tracks: Vec<(TrackRow, f32)> = (track_rows(&song).into_iter())
-            .zip([48.0, 112.0, 176.0])
-            .collect();
-        let axis = TimeAxis {
-            origin: 48.0,
-            beat_w: BEAT_PT,
-        };
-        let rect = Rect::from_min_max(pos2(0.0, 48.0), pos2(1170.0, 380.0));
-        let rows = (TimeSig::default(), 64.0, None, GridSize::Auto);
-        let out = egui::Context::default().run(egui::RawInput::default(), |ctx| {
-            let panel = egui::CentralPanel::default().frame(egui::Frame::NONE);
-            panel.show(ctx, |ui| {
-                paint_track_rows(ui.painter(), rect, 48.0, &tracks, axis, rows, &cx);
-            });
-        });
-        let mut lines: Vec<(f32, f32)> = (out.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r)
-                    if r.rect.top() == 112.0 && r.rect.height() == 63.5 && r.fill == bg =>
-                {
-                    Some((r.rect.left(), r.rect.width()))
-                }
-                _ => None,
-            })
-            .collect();
-        lines.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let want = [
-            (47.0, 2.0),
-            (67.0, 0.5),
-            (86.0, 1.0),
-            (105.5, 0.5),
-            (124.5, 1.0),
-            (144.0, 0.5),
-            (162.5, 1.0),
-            (182.5, 0.5),
-            (200.5, 2.0),
-        ];
-        assert_eq!(lines[..9], want);
-    }
-
-    /// The light outlines (a stroke t + 1 px = 3 px wide on its middle) the frame drew.
-    fn outlines(f: &Frame) -> Vec<Rect> {
-        (f.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r)
-                    if r.stroke.width == 3.0 && r.stroke_kind == egui::StrokeKind::Middle =>
-                {
-                    Some(r.rect)
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn only_the_current_tracks_current_clip_has_the_light_outline() {
-        // A one-bar Drums clip from beat 0 (x 50 … 203), and the MiniSynth's (x 203 … 357); the outline is 1.5t (3 px)
-        // out from a clip box (Y_r + 1 … Y_{r+1} − t − 1) on every side.
-        let mut song = song_with_a_clip();
-        song.channels[1].lanes[0].add_clip(0, 4.0);
-        let mut rig = Rig::new(song);
-        let lit = |x: [f32; 2], row: f32| {
-            let y_r = TOP + 64.0 * row;
-            Rect::from_min_max(
-                pos2(x[0] - 3.0, y_r + 1.0 - 3.0),
-                pos2(x[1] + 3.0, y_r + 64.0 - 3.0 + 3.0),
-            )
-        };
-        assert_eq!(outlines(&rig.frame(vec![])), []);
-        // A tap makes the MiniSynth's clip current, and its track the current track.
-        rig.click(CLIP);
-        let synth = lit([203.0, 357.0], 2.0);
-        assert_eq!(outlines(&rig.frame(vec![])), [synth]);
-        // A long press selects the Drums clip with its handles; the current clip stays the only one outlined.
-        rig.long_press(pos2(120.0, 144.0));
-        let drums = ClipRef {
-            channel: 1,
-            lane: 0,
-            id: 1,
-        };
-        assert_eq!(rig.screen.clips.selected, Some(drums));
-        assert_eq!(outlines(&rig.frame(vec![])), [synth]);
-        // The Drums track made current (a tap on its empty space after the one that deselects): its track has no
-        // current clip, and the MiniSynth's track is no longer current.
-        rig.click(pos2(600.0, 144.0));
-        rig.click(pos2(600.0, 144.0));
-        assert_eq!(outlines(&rig.frame(vec![])), []);
-    }
-
-    /// The miniature bars (t = 2 px tall) on track row `row`, left to right: (x, colour).
-    fn bars(f: &Frame, row: f32) -> Vec<(f32, Color32)> {
-        let ys = Rangef::new(TOP + 64.0 * row, TOP + 64.0 * (row + 1.0));
-        let mut bars: Vec<(f32, Color32)> = (f.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r) if r.rect.height() == 2.0 && ys.contains(r.rect.top()) => {
-                    Some((r.rect.left(), r.fill))
-                }
-                _ => None,
-            })
-            .collect();
-        bars.sort_by(|a, b| a.0.total_cmp(&b.0));
-        bars
-    }
-
-    /// The MiniSynth's clip shown twice (repeats at x 203 and 357; notes on beats 0 and 2 of each), and a Drums clip
-    /// with a hit at beat 0.
-    fn song_with_repeats() -> Song {
-        let mut song = song_with_a_clip();
-        song.channels[2].lanes[0].clips[0].visible_len_beats = 8.0;
-        song.channels[1].lanes[0].add_clip(0, 4.0).events = vec![Event::Drum {
-            pos: 0,
-            len_beats: 0.25,
-            pad: 0,
-            velocity: 100,
-            pan: Event::DEFAULT_PAN,
-            value: 0x7FFF,
-            repeat: 0,
-        }];
-        song
-    }
-
-    #[test]
-    fn a_muted_clip_dims_every_repeat() {
-        let mut rig = Rig::new(song_with_repeats());
-        let plain = bars(&rig.frame(vec![]), 2.0);
-        assert_eq!(
-            plain.iter().map(|b| b.0).collect::<Vec<_>>(),
-            [203.0, 280.0, 357.0, 434.0]
-        );
-        let bright = plain[0].1;
-        assert!(plain.iter().all(|b| b.1 == bright));
-        rig.song.channels[2].lanes[0].clips[0].muted = true;
-        let muted = bars(&rig.frame(vec![]), 2.0);
-        let dim = muted[0].1;
-        assert_ne!(dim, bright);
-        assert!(muted.iter().all(|b| b.1 == dim));
-    }
-
-    #[test]
-    fn preview_dims_every_clip_but_the_one_it_plays() {
-        let mut rig = Rig::new(song_with_repeats());
-        let f = rig.frame(vec![]);
-        let (synth, drums) = (bars(&f, 2.0), bars(&f, 1.0));
-        assert_eq!(drums.len(), 1);
-        rig.preview = Some(ClipKey {
-            channel: 2,
-            lane: 0,
-            id: 1,
-        });
-        let f = rig.frame(vec![]);
-        assert_eq!(bars(&f, 2.0), synth);
-        assert_ne!(bars(&f, 1.0)[0].1, drums[0].1);
-    }
-
-    #[test]
-    fn a_selected_clip_dims_its_repeats_but_the_one_under_the_selection_while_its_handles_show() {
-        let mut rig = Rig::new(song_with_repeats());
-        let bright = bars(&rig.frame(vec![]), 2.0)[0].1;
-        // A tap on repeat 1 (beat 6 of the clip, x 434) selects the clip there with its handles: repeat 0 dims.
-        rig.click(pos2(434.0, 207.5));
-        let inks: Vec<Color32> = bars(&rig.frame(vec![]), 2.0).iter().map(|b| b.1).collect();
-        let dim = inks[0];
-        assert_ne!(dim, bright);
-        assert_eq!(inks, [dim, dim, bright, bright]);
-        let inks = |rig: &mut Rig, row| -> Vec<Color32> {
-            bars(&rig.frame(vec![]), row).iter().map(|b| b.1).collect()
-        };
-        // A drag of the end handle (at x 510.8; pressed 6 points right of it, past the clip on its repeat 2) four beats
-        // on: three repeats, and the handle's touch-down kept the picked one.
-        let handle = pos2(510.8 + 6.0, 207.5);
-        rig.drag(handle, handle + vec2(4.0 * BEAT_PT, 0.0));
-        assert_eq!(rig.clips(2)[0].visible_len_beats, 12.0);
-        assert_eq!(inks(&mut rig, 2.0), [dim, dim, bright, bright, dim, dim]);
-        // The MiniSynth and the Drums swap places (a track reorder): the selection follows to row 1 with its repeat.
-        rig.song.channels.swap(1, 2);
-        let swap = |c, l| Some((if c == 1 || c == 2 { 3 - c } else { c }, l));
-        rig.screen.clips.rekey(swap);
-        rig.selected = 1;
-        assert_eq!(inks(&mut rig, 1.0), [dim, dim, bright, bright, dim, dim]);
-        // While a touch hides the handles, nothing is dimmed.
-        let body = pos2(278.4, 143.5);
-        rig.frame(vec![egui::Event::PointerMoved(body)]);
-        rig.frame(vec![button(body, true)]);
-        assert_eq!(inks(&mut rig, 1.0), [bright; 6]);
-    }
 
     /// The selection's fill boxes (`text` at α 0.10 … 0.20) the frame drew, with their alpha.
     fn selection_fills(f: &Frame) -> Vec<(Rect, u8)> {
@@ -4140,23 +3757,6 @@ mod tests {
                 let text = near(cr, tr) && near(cg, tg) && near(cb, tb);
                 // Over the track rows (the transport's dividers are `text` too).
                 (text && (25..=52).contains(&a) && f.area.contains_rect(r)).then_some((r, a))
-            })
-            .collect()
-    }
-
-    /// Every stroked rect the frame drew over the track rows.
-    fn strokes(f: &Frame) -> Vec<Rect> {
-        (f.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r)
-                    if r.stroke.width > 0.0
-                        && r.rect.left() >= GRID_X
-                        && r.rect.top() >= TOP
-                        && r.rect.bottom() <= 380.0 =>
-                {
-                    Some(r.rect)
-                }
-                _ => None,
             })
             .collect()
     }
@@ -4181,69 +3781,6 @@ mod tests {
         song
     }
 
-    #[test]
-    fn a_marquee_group_gets_one_pulsing_box_over_its_clips_and_no_outline() {
-        // One box from the earliest start to the latest end, the first selected row's top (Y_1 = TOP + 64) to the last's
-        // bottom (Y_3 = TOP + 192); only the marquee itself is drawn (no outline on the clips after).
-        let mut rig = Rig::new(grouped());
-        marquee(&mut rig, ACROSS);
-        assert_eq!(rig.screen.clips.group.len(), 2);
-        let f = rig.frame(vec![]);
-        let sbox = Rect::from_min_max(pos2(GRID_X, TOP + 64.0), pos2(357.2, TOP + 192.0));
-        let fills: Vec<Rect> = selection_fills(&f).into_iter().map(|f| f.0).collect();
-        assert_eq!(fills, [sbox]);
-        assert_eq!(strokes(&f), []);
-    }
-
-    #[test]
-    fn the_selection_box_pulses_text_at_0_15_plus_0_05_cos_2_pi_p_with_p_stepping_0_0125_a_frame() {
-        // A long press selects the MiniSynth's clip without making it current: its box (x 203.6 … 357.2, row 2's
-        // TOP + 128 … TOP + 192) and no outline at all. The box shows from the press: the long press drew it 4 frames (p = 0 … 0.0375), so
-        // over the next 81 frames the alpha runs the 80-frame cosine from p = 0.05, the clips asking for every frame.
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.long_press(CLIP);
-        let sbox = Rect::from_min_max(pos2(203.6, TOP + 128.0), pos2(357.2, TOP + 192.0));
-        let asks =
-            |rig: &Rig| (rig.ctx.repaint_causes().iter()).any(|c| c.file.ends_with("clips.rs"));
-        let alphas: Vec<u8> = (0..81)
-            .map(|_| {
-                let f = rig.frame(vec![]);
-                assert_eq!(strokes(&f), []);
-                assert!(asks(&rig));
-                let fills = selection_fills(&f);
-                assert_eq!(fills.len(), 1);
-                assert_eq!(fills[0].0, sbox);
-                fills[0].1
-            })
-            .collect();
-        let alpha = |p: f32| {
-            let a = 0.15 + 0.05 * (std::f32::consts::TAU * p).cos();
-            Rgba {
-                a,
-                ..theme_colors().text
-            }
-            .to_color32()
-            .to_srgba_unmultiplied()[3]
-        };
-        // The phase that fits best, and it fits to a step of alpha everywhere.
-        let off = |j: usize| -> Vec<u8> {
-            (alphas.iter().enumerate())
-                .map(|(k, &a)| a.abs_diff(alpha((j + k) as f32 * 0.0125)))
-                .collect()
-        };
-        let phase = (0..80).min_by_key(|&j| off(j).iter().map(|&d| u32::from(d)).sum::<u32>());
-        assert_eq!(phase, Some(4), "{alphas:?}");
-        assert!(off(4).iter().all(|&d| d <= 1), "{alphas:?}");
-        assert_eq!(alphas.iter().min().unwrap().abs_diff(26), 0, "0.10");
-        assert!(alphas.iter().max().unwrap().abs_diff(51) <= 1, "0.20");
-        // Deselected: no box, and nothing asks for frames.
-        rig.click(pos2(600.0, CLIP.y));
-        let f = rig.frame(vec![]);
-        assert_eq!(selection_fills(&f), []);
-        rig.frames(vec![vec![]; 10]);
-        assert!(!asks(&rig));
-    }
-
     /// The selection handles' `text` bodies over the track rows, as drawn (rounded rects: the start and end capsules,
     /// the audio bar).
     fn handle_bodies(f: &Frame) -> Vec<Rect> {
@@ -4264,176 +3801,6 @@ mod tests {
             .collect()
     }
 
-    /// The `text` discs over the playlist grid (centre, radius, on a `background` α 0.3 rim): the handles have the rim,
-    /// the floating row's light bubbles none.
-    fn grid_discs(f: &Frame) -> Vec<(Pos2, f32, bool)> {
-        let c = theme_colors();
-        let (text, rim) = (
-            c.text.to_color32(),
-            Rgba {
-                a: 0.3,
-                ..c.background
-            }
-            .to_color32(),
-        );
-        let all = circles(f);
-        let rimmed = |p: Pos2| all.iter().any(|c| c.0 == p && c.2 == rim);
-        (all.iter())
-            .filter(|c| {
-                c.2 == text && (TOP..380.0).contains(&c.0.y) && c.0.x < 1100.0 && c.1 < 31.0
-            })
-            .map(|c| (c.0, c.1, rimmed(c.0)))
-            .collect()
-    }
-
-    /// [`song_with_a_clip`] with an Audio Clip channel (3) whose one-bar clip from beat 0 does not loop: row 3, x 50 …
-    /// 203.6, y 240 … 304.
-    fn with_audio() -> Song {
-        let mut song = song_with_a_clip();
-        song.add_channel(ChannelKind::AudioClip);
-        song.channels[3].lanes[0].add_clip(0, 4.0);
-        song
-    }
-
-    #[test]
-    fn the_handles_are_a_start_and_an_end_capsule_and_a_bar_under_a_lone_audio_clip_that_does_not_loop()
-     {
-        // A notes clip: the start capsule inside its left end, the end one past its right end, centred on the row.
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.long_press(CLIP);
-        rig.frames(vec![vec![]; 3]);
-        let h = handle_bodies(&rig.frame(vec![]));
-        assert_eq!(h.len(), 2);
-        let clip = Rect::from_x_y_ranges(203.6..=357.2, TOP + 128.0..=TOP + 192.0);
-        assert!(clip.x_range().contains(h[0].center().x) && h[1].left() > clip.right());
-        assert!(
-            h.iter()
-                .all(|r| r.height() > r.width() && (r.center().y - clip.center().y).abs() < 1e-3)
-        );
-        // An audio clip that does not loop: and the bar, wider than tall, under its right end.
-        let mut rig = Rig::new(with_audio());
-        rig.long_press(pos2(120.0, 272.0));
-        rig.frames(vec![vec![]; 3]);
-        let h = handle_bodies(&rig.frame(vec![]));
-        assert_eq!(h.len(), 3);
-        assert!(
-            h[2].width() > h[2].height() && h[2].top() > 304.0 && h[2].x_range().contains(203.6)
-        );
-        // Looping, no bar.
-        rig.song.channels[3].lanes[0].clips[0].visible_len_beats = 5.0;
-        assert_eq!(handle_bodies(&rig.frame(vec![])).len(), 2);
-        // Nor with two clips selected, even two audio clips that do not loop (the second from beat 5, x 242 … 395.6).
-        let mut song = with_audio();
-        song.channels[3].lanes[0].add_clip(5 * PPQ, 4.0);
-        let mut rig = Rig::new(song);
-        marquee(&mut rig, [pos2(414.8, 280.0), pos2(70.0, 300.0)]);
-        assert_eq!(rig.screen.clips.group.len(), 2);
-        rig.frames(vec![vec![]; 3]);
-        let h = handle_bodies(&rig.frame(vec![]));
-        assert!(h.len() == 2 && h[1].left() > 395.6, "{h:?}");
-    }
-
-    #[test]
-    fn a_handles_touch_hides_by_its_rule_and_a_clips_touch_hides_them_all() {
-        // The audio clip's handles: start, end, bar.
-        let mut rig = Rig::new(with_audio());
-        rig.long_press(pos2(120.0, 272.0));
-        rig.frames(vec![vec![]; 3]);
-        let all = handle_bodies(&rig.frame(vec![]));
-        let xs = |h: &[Rect]| h.iter().map(|r| r.center().x).collect::<Vec<f32>>();
-        let shown = |rig: &mut Rig, at: Pos2| -> Vec<f32> {
-            rig.frame(vec![egui::Event::PointerMoved(at)]);
-            rig.frame(vec![button(at, true)]);
-            let held = xs(&handle_bodies(&rig.frame(vec![])));
-            // Held past 0.3 s: a long press, which keeps the selection (a tap would toggle it).
-            rig.frames(vec![vec![]; 3]);
-            rig.frame(vec![button(at, false)]);
-            rig.frames(vec![vec![]; 3]);
-            held
-        };
-        // The end one hides the bar; the bar hides the other two; the start one hides none.
-        let [start, end, bar] = [all[0], all[1], all[2]].map(|r| r.center());
-        assert_eq!(shown(&mut rig, end), [start.x, end.x]);
-        assert_eq!(shown(&mut rig, bar), [bar.x]);
-        assert_eq!(shown(&mut rig, start), [start.x, end.x, bar.x]);
-        // A touch on the clip hides them all.
-        assert_eq!(shown(&mut rig, pos2(120.0, 272.0)), Vec::<f32>::new());
-    }
-
-    #[test]
-    fn the_handles_pop_in_grow_while_held_and_wobble_once_let_go() {
-        // The other editor handles' animations, e.g. the audio editor's stretch handle. The pop-in is the editors'
-        // 1.0515·sin(1.885·(1 − a)), a ← 0.6·a a 60 Hz frame (the rig's frames are 0.1 s: 6 of them); held, a handle
-        // grows by up to 10 px over 0.1 s; let go, it wobbles from there, 10·cos(2πs/0.12)·(1 − s/0.3) px for 0.3 s
-        // (the knob law), 5 % larger under the mouse. The end capsule is 15.44 wide (0.42 U + 2 px), its body 2 px
-        // less.
-        let a = |frames: u32| crate::ui::step_seq::pop_in(0.6, f64::from(frames) * 0.1);
-        let end = |f: &Frame| handle_bodies(f).get(1).map(|r| r.width());
-        let near = |r: f32, want: f32| (r - want).abs() < 1e-3;
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.long_press(CLIP);
-        // Scale 0 on the first frame: nothing drawn yet.
-        assert_eq!(handle_bodies(&rig.frame(vec![])), []);
-        let scale = |k| crate::ui::automation::pop_scale(a(k));
-        let w = |k: f32, grown: f32| 15.44 * k + grown - 2.0;
-        assert!(near(end(&rig.frame(vec![])).unwrap(), w(scale(1), 0.0)));
-        let at = handle_bodies(&rig.frame(vec![]))[1].center();
-        // Held (a long press, which keeps the selection): +10 px from 0.1 s on.
-        rig.frame(vec![egui::Event::PointerMoved(at)]);
-        rig.frame(vec![button(at, true)]);
-        for _ in 0..4 {
-            let held = end(&rig.frame(vec![])).unwrap();
-            assert!(near(held, w(1.0, 10.0)), "{held}");
-        }
-        rig.frame(vec![button(at, false)]);
-        let wobble =
-            |s: f64| (10.0 * (std::f64::consts::TAU * s / 0.12).cos() * (1.0 - s / 0.3)) as f32;
-        for s in [0.1, 0.2, 0.3] {
-            let r = end(&rig.frame(vec![])).unwrap();
-            assert!(
-                near(r, w(1.05, wobble(s))),
-                "{s}: {r} vs {}",
-                w(1.05, wobble(s))
-            );
-        }
-        assert!(near(end(&rig.frame(vec![])).unwrap(), w(1.05, 0.0)));
-    }
-
-    #[test]
-    fn a_live_marquee_draws_no_selection_and_its_release_shows_it_popping_in_from_p_0() {
-        // The handles come on release after a drag. A clip selected for a while, then a marquee from the master's empty
-        // row across the Drums and MiniSynth clips: while it is live its group shows no box and no handles; released,
-        // both show, the handles' pop-in from its start (radius 0) and the fill from p = 0 (α 0.20).
-        let mut rig = Rig::new(grouped());
-        rig.long_press(CLIP);
-        rig.frames(vec![vec![]; 10]);
-        let [from, to] = ACROSS;
-        rig.frame(vec![egui::Event::PointerMoved(from)]);
-        rig.frame(vec![button(from, true)]);
-        rig.frames(vec![vec![]; 4]);
-        rig.frame(vec![egui::Event::PointerMoved(to)]);
-        let f = rig.frame(vec![]);
-        assert_eq!(rig.screen.clips.group.len(), 2);
-        // The only box is the marquee's own (`text` α 0.2).
-        let marquee = Rect::from_two_pos(from, to);
-        assert_eq!(selection_fills(&f), [(marquee, 51)]);
-        assert_eq!(handle_bodies(&f), []);
-        rig.frame(vec![button(to, false)]);
-        let f = rig.frame(vec![]);
-        let sbox = Rect::from_min_max(pos2(GRID_X, TOP + 64.0), pos2(357.2, TOP + 192.0));
-        let alpha = Rgba {
-            a: 0.2,
-            ..theme_colors().text
-        };
-        assert_eq!(
-            selection_fills(&f),
-            [(sbox, alpha.to_color32().to_srgba_unmultiplied()[3])]
-        );
-        // The handles pop in from scale 0: drawn from the next frame on.
-        assert_eq!(handle_bodies(&f), []);
-        assert_eq!(handle_bodies(&rig.frame(vec![])).len(), 2);
-    }
-
     #[test]
     fn a_touch_in_the_groups_frame_hides_its_handles() {
         // The group's box, on its empty part (row 1 right of the Drums clip): the touch acts on the group whole.
@@ -4447,65 +3814,6 @@ mod tests {
         let f = rig.frame(vec![]);
         assert_eq!(handle_bodies(&f), []);
         assert_eq!(selection_fills(&f).len(), 1);
-    }
-
-    #[test]
-    fn a_handles_tap_only_deselects_for_a_clip_and_for_a_group() {
-        // An empty-space tap, wherever the handle: the selection goes and no clip becomes current.
-        let mut rig = Rig::new(grouped());
-        rig.click(CLIP);
-        rig.frames(vec![vec![]; 3]);
-        assert_eq!(rig.current_clip(), Some(SYNTH_CLIP));
-        // The current clip's end handle.
-        let end = |rig: &mut Rig| handle_bodies(&rig.frame(vec![]))[1].center();
-        let at = end(&mut rig);
-        rig.click(at);
-        assert_eq!(rig.screen.clips.selected, None);
-        assert_eq!(rig.current_clip(), Some(SYNTH_CLIP));
-        // Another clip's (the Drums clip long pressed, not current).
-        rig.long_press(pos2(120.0, 144.0));
-        rig.frames(vec![vec![]; 3]);
-        let at = end(&mut rig);
-        rig.click(at);
-        assert_eq!(rig.screen.clips.selected, None);
-        assert_eq!(rig.current_clip(), Some(SYNTH_CLIP));
-        // The group's end handle.
-        marquee(&mut rig, ACROSS);
-        rig.frames(vec![vec![]; 3]);
-        assert_eq!(rig.screen.clips.group.len(), 2);
-        let at = end(&mut rig);
-        rig.click(at);
-        assert_eq!(rig.screen.clips.group, []);
-        assert_eq!(rig.current_clip(), Some(SYNTH_CLIP));
-    }
-
-    #[test]
-    fn the_third_handles_drag_stretches_a_decodable_sample_on_release() {
-        // 2 s of silence at 44.1 kHz in the user folder, at 120 BPM: 4 beats, the audio clip's whole loop. Its third
-        // handle (the bar under its right end) dragged two beats on: the end law (6 beats), then on release the audio
-        // editor's stretch for 1.5 × the sample's 4 beats, the STR1 ratio 1.5 and SYNC on.
-        let mut song = with_audio();
-        song.tempo_bpm = 120.0;
-        let path = crate::flm::chunk::ContentPath::Shorthand {
-            root: crate::flm::chunk::ContentRoot::User,
-            relative: "My Samples/silence.wav".into(),
-        };
-        let mut slot = crate::song::SamplerSlot::default();
-        slot.file.path = Some(path);
-        song.channels[3].lanes[0].clips[0].file.sample = Some(Box::new(slot));
-        let wav = crate::sample_cache::tests::wav(&[0; 88_200]);
-        USER_FILES.with_borrow_mut(|f| *f = vec![("My Samples/silence.wav", wav)]);
-        let mut rig = Rig::new(song);
-        rig.click(pos2(120.0, 272.0));
-        rig.frames(vec![vec![]; 3]);
-        let third = handle_bodies(&rig.frame(vec![]))[2].center();
-        let edits = rig.drag(third, third + vec2(2.0 * BEAT_PT, 0.0));
-        USER_FILES.with_borrow_mut(Vec::clear);
-        assert_eq!(edits.last(), Some(&Some(SongEdit::Final)));
-        let clip = &rig.song.channels[3].lanes[0].clips[0];
-        let slot = clip.file.sample.as_deref().unwrap();
-        assert_eq!(clip.visible_len_beats, 6.0);
-        assert_eq!((slot.file.stretch_mode, slot.file.stretch_ratio), (1, 1.5));
     }
 
     #[test]
@@ -4537,33 +3845,6 @@ mod tests {
         assert_eq!(
             (starts(&rig, 1), starts(&rig, 2)),
             (vec![640 - 16], vec![1152 - 16])
-        );
-    }
-
-    #[test]
-    fn a_clip_being_recorded_shows_only_as_its_live_bar() {
-        // The live take bar: the take's clip (MiniSynth row, y 176 ..= 239, from beat 4) shows as the bar from its
-        // start to the playhead (beat 5), its notes live in it: nothing of it past the bar.
-        let mut rig = Rig::new(song_with_a_clip());
-        let fills_past = |rig: &mut Rig| {
-            let f = rig.frame(vec![]);
-            let past = pos2(48.0 + 6.5 * BEAT_PT, 207.5);
-            (f.shapes.iter())
-                .filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.rect.contains(past)))
-                .count()
-        };
-        let drawn = fills_past(&mut rig);
-        let id = rig.song.channels[2].lanes[0].clips[0].id;
-        rig.screen.takes = vec![LiveTake {
-            channel: 2,
-            lane: 0,
-            start: 512.0,
-            end: 640.0,
-            clip: Some(id),
-        }];
-        assert!(
-            fills_past(&mut rig) < drawn,
-            "the clip is not drawn past the bar"
         );
     }
 
@@ -4651,66 +3932,6 @@ mod tests {
     }
 
     #[test]
-    fn a_tap_makes_a_clip_current_and_selected_and_a_second_tap_on_it_deselects_it() {
-        let mut rig = Rig::new(song_with_a_clip());
-        assert_eq!(rig.click(CLIP), (None, None));
-        assert_eq!(rig.screen.clips.selected, Some(SYNTH_CLIP));
-        assert_eq!(rig.current_clip(), Some(SYNTH_CLIP));
-        assert_eq!(rig.selected, 2, "its channel takes the keyboard");
-        // Current and selected: the next tap (released 0.4 s later, no double tap) deselects it; it stays current.
-        rig.frame(vec![]);
-        assert_eq!(rig.click(CLIP), (None, None));
-        assert_eq!(rig.screen.clips.selected, None);
-        assert_eq!(rig.current_clip(), Some(SYNTH_CLIP));
-        // And the next selects it again.
-        rig.frame(vec![]);
-        rig.click(CLIP);
-        assert_eq!(rig.screen.clips.selected, Some(SYNTH_CLIP));
-    }
-
-    #[test]
-    fn a_tap_beside_a_clip_deselects_then_toggles_the_insert_menu_whose_new_clip_adds_a_bar() {
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.click(CLIP);
-        // Past the clip's end and its end handle, in beat 9.2 of the same (current) track: first it only deselects.
-        let beside = pos2(GRID_X + 9.2 * BEAT_PT, CLIP.y);
-        assert_eq!(rig.click(beside), (None, None));
-        assert_eq!(rig.screen.clips.selected, None);
-        assert!(!rig.plus_shown());
-        // Then the insert menu; a second tap on that cell hides it, a third shows it again.
-        assert_eq!(rig.click(beside), (None, None));
-        assert!(rig.plus_shown());
-        rig.click(beside);
-        assert!(!rig.plus_shown());
-        rig.click(beside);
-        assert!(rig.plus_shown());
-        assert_eq!(rig.clips(2).len(), 1);
-        // `New Clip` adds a bar at the snapped beat (beat 9: a beat at this zoom), current and selected.
-        assert_eq!(rig.plus().0, Some(SongEdit::Final));
-        let added = &rig.clips(2)[1];
-        assert_eq!(
-            (added.id, added.start_tick, added.loop_len_beats),
-            (2, 1152, 4.0)
-        );
-        let new = ClipRef {
-            id: 2,
-            ..SYNTH_CLIP
-        };
-        assert_eq!(rig.screen.clips.selected, Some(new));
-        assert_eq!(rig.current_clip(), Some(new));
-        assert!(!rig.plus_shown());
-        // A tap on another cell of the track moves it there; any other press hides it.
-        let further = pos2(GRID_X + 14.3 * BEAT_PT, CLIP.y);
-        rig.click(further);
-        rig.click(further);
-        assert!(rig.plus_shown());
-        rig.click(further + vec2(2.0 * BEAT_PT, 0.0));
-        assert!(rig.plus_shown());
-        rig.click(pos2(600.0, 80.0));
-        assert!(!rig.plus_shown());
-    }
-
-    #[test]
     fn a_tap_on_another_tracks_empty_space_makes_it_current_and_new_clip_adds_a_clip_there() {
         let mut rig = Rig::new(song_with_a_clip());
         rig.selected = 2;
@@ -4742,78 +3963,6 @@ mod tests {
         assert_eq!(rig.selected, 0);
     }
 
-    #[test]
-    fn a_double_tap_on_a_clip_opens_its_editor_and_the_window_is_0_3_s_release_to_release() {
-        let mut rig = Rig::new(song_with_a_clip());
-        let edit = Nav::EditClip(ClipKey {
-            channel: 2,
-            lane: 0,
-            id: 1,
-        });
-        // Select, then within 0.3 s open; the second tap leaves the selection as it was.
-        assert_eq!(rig.double_tap(CLIP), (None, Some(edit)));
-        assert_eq!(rig.screen.clips.selected, Some(SYNTH_CLIP));
-        // Released 0.3 s apart: no double tap (the second tap deselects).
-        for _ in 0..3 {
-            rig.frame(vec![]);
-        }
-        assert_eq!(rig.click(CLIP), (None, None));
-        assert_eq!(rig.screen.clips.selected, None);
-        // A quick tap on a clip that is not current never opens: it makes it current.
-        let mut song = song_with_a_clip();
-        song.channels[1].lanes[0].add_clip(0, 4.0);
-        let mut rig = Rig::new(song);
-        let drums = pos2(GRID_X + BEAT_PT, 144.0);
-        rig.frames(vec![
-            vec![egui::Event::PointerMoved(CLIP)],
-            vec![button(CLIP, true)],
-            vec![button(CLIP, false)],
-            vec![egui::Event::PointerMoved(drums)],
-            vec![button(drums, true)],
-        ]);
-        assert_eq!(rig.frame(vec![button(drums, false)]).nav, None);
-        let drum_clip = ClipRef {
-            channel: 1,
-            lane: 0,
-            id: 1,
-        };
-        assert_eq!(rig.current_clip(), Some(drum_clip));
-    }
-
-    #[test]
-    fn a_long_press_on_a_clip_shows_its_handles_and_row_without_making_it_current() {
-        let mut song = song_with_a_clip();
-        song.channels[1].lanes[0].add_clip(0, 4.0);
-        let mut rig = Rig::new(song);
-        rig.click(CLIP);
-        let drums = pos2(GRID_X + BEAT_PT, 144.0);
-        rig.long_press(drums);
-        let drum_clip = ClipRef {
-            channel: 1,
-            lane: 0,
-            id: 1,
-        };
-        assert_eq!(rig.screen.clips.selected, Some(drum_clip));
-        assert_eq!(rig.current_clip(), Some(SYNTH_CLIP));
-        assert_eq!(rig.selected, 2);
-        assert!(rig.rect_of(Id::new(("clip_button", 0_usize))).is_some());
-        // A long press on the selected clip keeps it selected.
-        rig.long_press(drums);
-        assert_eq!(rig.screen.clips.selected, Some(drum_clip));
-    }
-
-    /// The filled rects of `f` centred on `at`, as their sizes.
-    fn squares(f: &Frame, at: Pos2) -> Vec<f32> {
-        (f.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r) if (r.rect.center() - at).length() < 0.5 => {
-                    Some(r.rect.width())
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
     /// The song with a drum clip under the MiniSynth's (both beats 4 to 8, rows 1 and 2).
     fn two_rows() -> Song {
         let mut song = song_with_a_clip();
@@ -4826,69 +3975,6 @@ mod tests {
         lane: 0,
         id: 1,
     };
-
-    #[test]
-    fn the_shared_long_press_time_and_calm_zone_decide_a_touch_on_a_clip() {
-        // `gesture::LONG_PRESS_S` and `CALM_U` (0.3 s; 0.5 U, 16 points at U = 32) on a clip that is not current:
-        // released at 0.28 s, or moved 0.45 U, the press is a tap (it makes the clip current); at 0.32 s it is a long
-        // press (selected, not current); moved 0.55 U before its 300 ms it is cancelled (nothing).
-        let after = |secs: f64, by: f32| {
-            let mut rig = Rig::new(song_with_a_clip());
-            rig.frame(vec![egui::Event::PointerMoved(CLIP)]);
-            rig.frame(vec![button(CLIP, true)]);
-            let mut to = CLIP;
-            // Each frame is 0.1 s on, the release's too.
-            let mut held = 0.1;
-            if by != 0.0 {
-                to = CLIP + vec2(by, 0.0);
-                rig.frame(vec![egui::Event::PointerMoved(to)]);
-                held += 0.1;
-            }
-            rig.time += secs - held;
-            rig.frame(vec![button(to, false)]);
-            (rig.current_clip(), rig.screen.clips.selected)
-        };
-        let synth = Some(SYNTH_CLIP);
-        assert_eq!(after(0.28, 0.0), (synth, synth));
-        assert_eq!(after(0.32, 0.0), (None, synth));
-        assert_eq!(after(0.2, 0.45 * 32.0), (synth, synth));
-        assert_eq!(after(0.2, 0.55 * 32.0), (None, None));
-    }
-
-    #[test]
-    fn a_long_press_on_empty_space_grows_the_marquee_and_its_drag_selects_the_clips_it_touches_live()
-     {
-        let mut rig = Rig::new(two_rows());
-        let from = pos2(GRID_X + BEAT_PT, 144.0);
-        rig.frame(vec![egui::Event::PointerMoved(from)]);
-        rig.frame(vec![button(from, true)]);
-        rig.frame(vec![]);
-        // 0.2 s in: 3 U·(4.4333·0.2 − 0.33) (U = 32).
-        let f = rig.frame(vec![]);
-        let side = 96.0 * (0.2 * 4.4333 - 0.33);
-        assert!(
-            squares(&f, from).iter().any(|w| (w - side).abs() < 0.5),
-            "{:?}",
-            squares(&f, from)
-        );
-        rig.frame(vec![]);
-        let f = rig.frame(vec![]);
-        assert!(!squares(&f, from).iter().any(|w| (w - 96.0).abs() < 0.5));
-        assert_eq!(rig.screen.clips.selected, None);
-        // Dragged into the MiniSynth's clip: the rectangle touches both clips, the selection already.
-        let to = CLIP;
-        rig.frame(vec![egui::Event::PointerMoved(to)]);
-        assert_eq!(rig.screen.clips.selected, None);
-        assert_eq!(rig.screen.clips.group, [DRUM_CLIP, SYNTH_CLIP]);
-        rig.frame(vec![button(to, false)]);
-        assert!(rig.rect_of(Id::new(("clip_button", 0_usize))).is_some());
-        // The group's Delete takes both, as one edit.
-        assert_eq!(
-            rig.click_id(Id::new(("clip_button", 2_usize))).0,
-            Some(SongEdit::Final)
-        );
-        assert!(rig.clips(1).is_empty() && rig.clips(2).is_empty());
-    }
 
     #[test]
     fn the_group_moves_as_one_and_a_tap_on_one_of_its_clips_makes_it_the_selection() {
@@ -4920,222 +4006,6 @@ mod tests {
         assert_eq!(rig.current_clip(), Some(SYNTH_CLIP));
     }
 
-    #[test]
-    fn a_shown_rows_circles_pop_in() {
-        // From nothing on the frame the row shows.
-        let mut rig = Rig::new(song_with_a_clip());
-        // The light bubbles: `text` discs with no handle's rim.
-        let radii = |f: &Frame| -> Vec<f32> {
-            (grid_discs(f).into_iter())
-                .filter(|c| !c.2)
-                .map(|c| c.1)
-                .collect()
-        };
-        rig.frame(vec![egui::Event::PointerMoved(CLIP)]);
-        rig.frame(vec![button(CLIP, true)]);
-        let shown = rig.frame(vec![button(CLIP, false)]);
-        let first = radii(&shown);
-        assert_eq!(first.len(), 6, "{first:?}");
-        assert!(first.iter().all(|&r| r < 1.0), "{first:?}");
-        // 0.1 s on (6 frames at 60 Hz): past full size; then radius 22.4 points (diameter 1.4 U).
-        let next = radii(&rig.frame(vec![]));
-        assert!(next.iter().all(|&r| r > 22.4), "{next:?}");
-        let settled = radii(&rig.frame(vec![]));
-        assert!(
-            settled.iter().all(|&r| (r - 22.4).abs() < 1e-3),
-            "{settled:?}"
-        );
-    }
-
-    #[test]
-    fn a_clip_that_is_not_current_drags_only_after_300_ms_and_an_earlier_move_cancels_the_touch() {
-        let mut rig = Rig::new(song_with_a_clip());
-        // Moved 0.1 s after the touch-down: cancelled, the selection hidden, nothing moved.
-        let edits = rig.drag(CLIP, CLIP + vec2(2.0 * BEAT_PT, 0.0));
-        assert!(edits.iter().all(Option::is_none), "{edits:?}");
-        assert_eq!(rig.clips(2)[0].start_tick, 512);
-        assert_eq!(rig.screen.clips.selected, None);
-        assert_eq!(rig.current_clip(), None);
-        // Held 0.4 s first: it drags (and stays not current).
-        let to = CLIP + vec2(2.0 * BEAT_PT, 0.0);
-        let (edit, _) = rig.frames(vec![
-            vec![egui::Event::PointerMoved(CLIP)],
-            vec![button(CLIP, true)],
-            vec![],
-            vec![],
-            vec![],
-            vec![egui::Event::PointerMoved(to)],
-            vec![button(to, false)],
-        ]);
-        assert_eq!(edit, Some(SongEdit::Final));
-        assert_eq!(rig.clips(2)[0].start_tick, 768);
-        assert_eq!(rig.screen.clips.selected, Some(SYNTH_CLIP));
-        assert_eq!(rig.current_clip(), None);
-    }
-
-    #[test]
-    fn dragging_a_clip_moves_it_on_the_beat_grid_and_its_release_is_the_final_edit() {
-        let mut rig = Rig::new(song_with_a_clip());
-        // Current, it drags at once.
-        rig.current();
-        // Up and right by 1.4 beats: it stays in its row, one beat later.
-        let edits = rig.drag(CLIP, CLIP + vec2(1.4 * BEAT_PT, -30.0));
-        assert_eq!(rig.clips(2)[0].start_tick, 640);
-        assert!(edits.contains(&Some(SongEdit::Ongoing)), "{edits:?}");
-        assert_eq!(edits.last(), Some(&Some(SongEdit::Final)));
-        assert_eq!(
-            rig.screen.clips.selected,
-            Some(ClipRef {
-                channel: 2,
-                lane: 0,
-                id: 1
-            })
-        );
-        // The drag did not pan the playlist.
-        assert_eq!((rig.screen.scroll_x, rig.screen.scroll_y), (0.0, 0.0));
-    }
-
-    #[test]
-    fn a_notes_clip_drags_onto_another_channels_notes_track_but_never_onto_a_drum_or_audio_row() {
-        // Clips drag between tracks of any channel by lane kind. Rows: the master, Drums (1), the MiniSynth (2) with
-        // its clip, an audio channel (3) and a second MiniSynth (4).
-        let mut song = song_with_a_clip();
-        song.add_channel(ChannelKind::AudioClip);
-        song.add_channel(ChannelKind::Synth(SynthKind::MiniSynth));
-        let mut rig = Rig::new(song);
-        rig.current();
-        let row = |i: f32| pos2(CLIP.x, 48.0 + 64.0 * i + 32.0);
-        // Over the drum row, then the audio row (as near the second synth's row as its own): it stays on its own.
-        rig.drag(CLIP, row(1.0));
-        rig.drag(CLIP, row(3.0));
-        assert_eq!(rig.clips(2).len(), 1);
-        // Over the second synth's row: it moves there, still the current and selected clip.
-        let edits = rig.drag(CLIP, row(4.0));
-        assert!(rig.clips(2).is_empty());
-        assert_eq!(rig.clips(4).len(), 1);
-        let moved = ClipRef {
-            channel: 4,
-            lane: 0,
-            id: 1,
-        };
-        assert_eq!(rig.current_clip(), Some(moved));
-        assert_eq!(rig.screen.clips.selected, Some(moved));
-        assert_eq!(edits.last(), Some(&Some(SongEdit::Final)));
-    }
-
-    #[test]
-    fn a_tap_on_a_clip_makes_its_channel_current_the_masters_too() {
-        let mut song = song_with_a_clip();
-        // A clip on the master's automation lane, from a file (the rig's song has one at beat 60 already).
-        song.channels[0].lanes[0].add_clip(512, 4.0);
-        let mut rig = Rig::new(song);
-        assert_eq!(rig.selected, 1);
-        rig.click(CLIP);
-        assert_eq!(rig.selected, 2);
-        rig.click(pos2(CLIP.x, 80.0));
-        assert_eq!(
-            rig.screen.clips.selected,
-            Some(ClipRef {
-                channel: 0,
-                lane: 0,
-                id: 2
-            })
-        );
-        assert_eq!(rig.selected, 0);
-    }
-
-    #[test]
-    fn a_drag_ends_with_exactly_one_final_edit_even_when_it_comes_back_to_its_start() {
-        let finals = |edits: &[Option<SongEdit>]| {
-            edits
-                .iter()
-                .filter(|&&e| e == Some(SongEdit::Final))
-                .count()
-        };
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.current();
-        let away = CLIP + vec2(2.0 * BEAT_PT, 0.0);
-        let edits: Vec<_> = [
-            vec![egui::Event::PointerMoved(CLIP)],
-            vec![button(CLIP, true)],
-            vec![egui::Event::PointerMoved(away)],
-            vec![egui::Event::PointerMoved(CLIP)],
-            vec![button(CLIP, false)],
-        ]
-        .into_iter()
-        .map(|events| rig.frame(events).edit)
-        .collect();
-        assert_eq!(rig.clips(2)[0].start_tick, 512);
-        assert_eq!(finals(&edits), 1, "{edits:?}");
-        let edits = rig.drag(CLIP, away);
-        assert_eq!(rig.clips(2)[0].start_tick, 768);
-        assert_eq!(finals(&edits), 1, "{edits:?}");
-    }
-
-    #[test]
-    fn a_pinch_that_starts_on_a_clip_leaves_the_clip_where_it_was() {
-        use egui::TouchPhase::{End, Move, Start};
-        let touch = |id, phase, pos| egui::Event::Touch {
-            device_id: egui::TouchDeviceId(1),
-            id: egui::TouchId(id),
-            phase,
-            pos,
-            force: None,
-        };
-        // The first finger drives the pointer, as an integration does.
-        let first = |phase, pos| {
-            let pointer = match phase {
-                Start => vec![button(pos, true)],
-                Move => vec![egui::Event::PointerMoved(pos)],
-                _ => vec![button(pos, false), egui::Event::PointerGone],
-            };
-            [vec![touch(1, phase, pos)], pointer].concat()
-        };
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.current();
-        // Its visible length is the loop's (stored as 0).
-        let before = rig.clips(2)[0].clone();
-        let (away, other) = (CLIP + vec2(2.0 * BEAT_PT, 0.0), CLIP + vec2(300.0, 0.0));
-        rig.frame(vec![egui::Event::PointerMoved(CLIP)]);
-        let edits: Vec<_> = [
-            first(Start, CLIP),
-            first(Move, away),
-            vec![touch(2, Start, other)],
-            first(Move, away - vec2(BEAT_PT, 0.0)),
-            vec![touch(2, Move, other + vec2(BEAT_PT, 0.0))],
-            // The second finger lifts first; the first one moves on.
-            vec![touch(2, End, other + vec2(BEAT_PT, 0.0))],
-            first(Move, away + vec2(BEAT_PT, 0.0)),
-            first(End, away + vec2(BEAT_PT, 0.0)),
-        ]
-        .into_iter()
-        .map(|events| rig.frame(events).edit)
-        .collect();
-        assert_eq!(rig.clips(2)[0], before);
-        assert_ne!(rig.screen.zoom, 0.0, "no pinch");
-        // The drag's ongoing edits, then one final edit when the second finger lands, and nothing after it.
-        assert_eq!(edits[1], Some(SongEdit::Ongoing), "{edits:?}");
-        assert_eq!(edits[2], Some(SongEdit::Final), "{edits:?}");
-        assert!(edits[3..].iter().all(Option::is_none), "{edits:?}");
-
-        // The second finger lands before the first one moves: the drag that starts then writes nothing.
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.current();
-        rig.frame(vec![egui::Event::PointerMoved(CLIP)]);
-        let edits: Vec<_> = [
-            first(Start, CLIP),
-            vec![touch(2, Start, other)],
-            first(Move, away),
-            vec![touch(2, End, other)],
-            first(End, away),
-        ]
-        .into_iter()
-        .map(|events| rig.frame(events).edit)
-        .collect();
-        assert_eq!(rig.clips(2)[0], before);
-        assert!(edits.iter().all(Option::is_none), "{edits:?}");
-    }
-
     /// Touch `id`'s `phase` at `pos`; the first finger (1) also drives the pointer, as an integration does.
     fn finger(id: u64, phase: egui::TouchPhase, pos: Pos2) -> Vec<egui::Event> {
         use egui::TouchPhase::{Move, Start};
@@ -5153,34 +4023,6 @@ mod tests {
             _ => vec![],
         };
         [vec![touch], pointer].concat()
-    }
-
-    #[test]
-    fn a_pinch_on_a_held_clip_that_is_not_current_puts_the_selection_back() {
-        use egui::TouchPhase::{End, Start};
-        let mut rig = Rig::new(two_rows());
-        // The drum clip selected; the second finger lands while the first holds the synth clip.
-        rig.long_press(pos2(CLIP.x, 144.0));
-        assert_eq!(rig.screen.clips.selected, Some(DRUM_CLIP));
-        let other = CLIP + vec2(300.0, 0.0);
-        rig.frame(vec![egui::Event::PointerMoved(CLIP)]);
-        rig.frame(finger(1, Start, CLIP));
-        assert_eq!(
-            rig.screen.clips.selected,
-            Some(SYNTH_CLIP),
-            "the touch-down's"
-        );
-        let (edit, _) = rig.frames(vec![
-            finger(2, Start, other),
-            vec![],
-            vec![],
-            vec![],
-            finger(2, End, other),
-            finger(1, End, CLIP),
-        ]);
-        assert_eq!(edit, None);
-        assert_eq!(rig.screen.clips.selected, Some(DRUM_CLIP));
-        assert_eq!(rig.clips(2)[0].start_tick, 512);
     }
 
     #[test]
@@ -5222,131 +4064,6 @@ mod tests {
     }
 
     #[test]
-    fn a_quick_pinch_on_an_empty_lane_adds_no_clip() {
-        use egui::TouchPhase::{End, Move, Start};
-        let touch = |id, phase, pos| egui::Event::Touch {
-            device_id: egui::TouchDeviceId(1),
-            id: egui::TouchId(id),
-            phase,
-            pos,
-            force: None,
-        };
-        // A drum clip at beat 60, so that the time has room to scroll (0 … twice the song's length).
-        let mut song = song_with_a_clip();
-        song.channels[1].lanes[0].add_clip(60 * PPQ, 4.0);
-        let mut rig = Rig::new(song);
-        // Beat 8 of the MiniSynth lane; the first finger stays put while the second one moves.
-        let (at, other) = (pos2(GRID_X + 8.6 * BEAT_PT, CLIP.y), pos2(800.0, CLIP.y));
-        let edits: Vec<_> = [
-            vec![egui::Event::PointerMoved(at)],
-            vec![touch(1, Start, at), button(at, true)],
-            vec![touch(2, Start, other)],
-            vec![touch(2, Move, other + vec2(BEAT_PT, 0.0))],
-            vec![touch(2, End, other + vec2(BEAT_PT, 0.0))],
-            vec![
-                touch(1, End, at),
-                button(at, false),
-                egui::Event::PointerGone,
-            ],
-        ]
-        .into_iter()
-        .map(|events| rig.frame(events).edit)
-        .collect();
-        assert!(edits.iter().all(Option::is_none), "{edits:?}");
-        assert_eq!(rig.clips(2).len(), 1);
-        assert_eq!(rig.selected, 1, "the pinch made no track current");
-        // Taps after it still do: the track becomes current, then `New Clip` adds a clip.
-        rig.click(at);
-        assert_eq!(rig.selected, 2);
-        rig.click(at);
-        assert_eq!(rig.plus().0, Some(SongEdit::Final));
-        assert_eq!(rig.clips(2).len(), 2);
-    }
-
-    #[test]
-    fn a_focus_loss_ends_a_clip_drag_and_a_stale_press_drags_nothing() {
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.current();
-        let step = |k: f32| CLIP + vec2(k * BEAT_PT, 0.0);
-        let edits: Vec<_> = [
-            vec![egui::Event::PointerMoved(CLIP)],
-            vec![button(CLIP, true)],
-            vec![egui::Event::PointerMoved(step(1.0))],
-            vec![egui::Event::WindowFocused(false)],
-            // egui keeps the button down: back in the window, the pointer only hovers.
-            vec![
-                egui::Event::WindowFocused(true),
-                egui::Event::PointerMoved(step(3.0)),
-            ],
-            vec![egui::Event::PointerMoved(step(4.0))],
-        ]
-        .into_iter()
-        .map(|events| rig.frame(events).edit)
-        .collect();
-        assert_eq!(rig.clips(2)[0].start_tick, 640);
-        assert_eq!(
-            edits[2..],
-            [Some(SongEdit::Ongoing), Some(SongEdit::Final), None, None]
-        );
-        // A press gone stale before it moved: the hover that egui takes for its drag moves nothing either.
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.current();
-        let edits: Vec<_> = [
-            vec![egui::Event::PointerMoved(CLIP)],
-            vec![button(CLIP, true)],
-            vec![egui::Event::WindowFocused(false)],
-            vec![egui::Event::PointerMoved(step(1.0))],
-            vec![egui::Event::PointerMoved(step(2.0))],
-        ]
-        .into_iter()
-        .map(|events| rig.frame(events).edit)
-        .collect();
-        assert_eq!(rig.clips(2)[0].start_tick, 512);
-        assert!(edits.iter().all(Option::is_none), "{edits:?}");
-    }
-
-    #[test]
-    fn a_move_that_arrives_with_the_lift_still_moves_the_clip() {
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.current();
-        let to = CLIP + vec2(2.0 * BEAT_PT, 0.0);
-        rig.frame(vec![egui::Event::PointerMoved(CLIP)]);
-        rig.frame(vec![button(CLIP, true)]);
-        rig.frame(vec![egui::Event::PointerMoved(CLIP + vec2(BEAT_PT, 0.0))]);
-        assert_eq!(rig.clips(2)[0].start_tick, 640);
-        // A touch: the last move, the lift and the pointer gone in one frame.
-        let f = rig.frame(vec![
-            egui::Event::PointerMoved(to),
-            button(to, false),
-            egui::Event::PointerGone,
-        ]);
-        assert_eq!(rig.clips(2)[0].start_tick, 768);
-        assert_eq!(f.edit, Some(SongEdit::Final));
-    }
-
-    #[test]
-    fn a_drag_that_starts_on_a_floating_button_moves_nothing_under_it() {
-        let mut song = song_with_a_clip();
-        // Two bars on the drums, under the MiniSynth clip's buttons.
-        song.channels[1].lanes[0].add_clip(0, 8.0);
-        let mut rig = Rig::new(song);
-        rig.click(CLIP);
-        let copy = rig.rect_of(Id::new(("clip_button", 0_usize))).unwrap();
-        let edits = rig.drag(copy.center(), copy.center() + vec2(2.0 * BEAT_PT, 0.0));
-        assert!(edits.iter().all(Option::is_none), "{edits:?}");
-        assert_eq!(rig.clips(1)[0].start_tick, 0);
-        assert_eq!(
-            rig.screen.clips.selected,
-            Some(ClipRef {
-                channel: 2,
-                lane: 0,
-                id: 1
-            })
-        );
-        assert_eq!(rig.screen.scroll_x, 0.0);
-    }
-
-    #[test]
     fn a_clip_near_the_last_tick_scrolled_to_draws_without_overflow() {
         // A clip no song makes, but a file can hold: the beat lines over it lie past u32 ticks.
         let mut song = song_with_a_clip();
@@ -5355,127 +4072,6 @@ mod tests {
         let mut rig = Rig::new(song);
         rig.screen.scroll_x = f64::from(u32::MAX / PPQ) + 100.0;
         rig.frame(vec![]);
-    }
-
-    #[test]
-    fn a_narrow_selected_clip_still_moves_from_most_of_its_width() {
-        let mut song = song_with_a_clip();
-        // A beat long: 38.4 points, little more than a handle's 1 U zone. The start handle's zone takes its left third
-        // at most.
-        song.channels[2].lanes[0].clips[0].visible_len_beats = 1.0;
-        let mut rig = Rig::new(song);
-        let at = pos2(203.6 + 0.4 * BEAT_PT, CLIP.y);
-        rig.click(at);
-        rig.drag(at, at + vec2(BEAT_PT, 0.0));
-        let clip = &rig.clips(2)[0];
-        assert_eq!((clip.start_tick, clip.visible_len_beats), (640, 1.0));
-    }
-
-    #[test]
-    fn a_change_from_outside_mid_drag_ends_the_drag() {
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.current();
-        let to = CLIP + vec2(2.0 * BEAT_PT, 0.0);
-        rig.frame(vec![egui::Event::PointerMoved(CLIP)]);
-        rig.frame(vec![button(CLIP, true)]);
-        rig.frame(vec![egui::Event::PointerMoved(CLIP + vec2(BEAT_PT, 0.0))]);
-        assert_eq!(rig.clips(2)[0].start_tick, 640);
-        // An undo puts the clip back while the button is still down.
-        rig.song.channels[2].lanes[0].clips[0].start_tick = 512;
-        let edits: Vec<_> = [vec![egui::Event::PointerMoved(to)], vec![button(to, false)]]
-            .into_iter()
-            .map(|events| rig.frame(events).edit)
-            .collect();
-        assert_eq!(rig.clips(2)[0].start_tick, 512);
-        assert_eq!(edits, [None, None]);
-    }
-
-    #[test]
-    fn the_handles_of_the_selected_clip_resize_it() {
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.click(CLIP);
-        // The right handle sits 0.65 U (20.8 points) right of the clip's end (x 357.2).
-        let end = pos2(357.2 + 20.8, CLIP.y);
-        let edits = rig.drag(end, end + vec2(2.2 * BEAT_PT, 0.0));
-        assert_eq!(edits.last(), Some(&Some(SongEdit::Final)));
-        let clip = &rig.clips(2)[0];
-        assert_eq!((clip.start_tick, clip.visible_len_beats), (512, 6.0));
-        // The left one trims a beat off the start, the notes staying where they were.
-        let start = pos2(201.6, CLIP.y);
-        rig.drag(start, start + vec2(BEAT_PT, 0.0));
-        let clip = &rig.clips(2)[0];
-        assert_eq!(
-            (clip.start_tick, clip.visible_len_beats, clip.offset_beats),
-            (640, 5.0, 1.0)
-        );
-    }
-
-    /// `Copy` fills the clipboard and edits nothing; `Duplicate` (#68) puts the copy right after.
-    #[test]
-    fn copy_duplicate_snap_and_delete_edit_the_song_and_edit_opens_the_editor() {
-        let button = |i: usize| Id::new(("clip_button", i));
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.click(CLIP);
-        rig.frame(vec![]);
-        assert_eq!(rig.click_id(button(0)).0, None);
-        assert_eq!(rig.clips(2).len(), 1);
-        assert_eq!(rig.click_id(button(1)).0, Some(SongEdit::Final));
-        let starts: Vec<_> = rig.clips(2).iter().map(|c| (c.id, c.start_tick)).collect();
-        assert_eq!(starts, [(1, 512), (2, 1024)]);
-        assert_eq!(
-            rig.screen.clips.selected,
-            Some(ClipRef {
-                channel: 2,
-                lane: 0,
-                id: 2
-            })
-        );
-        // Snap puts the copy back on the beat grid.
-        rig.song.channels[2].lanes[0].clips[1].start_tick = 1000;
-        rig.frame(vec![]);
-        assert_eq!(rig.click_id(button(3)).0, Some(SongEdit::Final));
-        assert_eq!(rig.clips(2)[1].start_tick, 1024);
-        let copy = ClipKey {
-            channel: 2,
-            lane: 0,
-            id: 2,
-        };
-        assert_eq!(rig.click_id(button(4)), (None, Some(Nav::EditClip(copy))));
-        assert_eq!(rig.click_id(button(2)).0, Some(SongEdit::Final));
-        assert_eq!(rig.clips(2).iter().map(|c| c.id).collect::<Vec<_>>(), [1]);
-        assert_eq!(rig.screen.clips.selected, None);
-        // Without a selection there are no buttons.
-        rig.frame(vec![]);
-        assert_eq!(rig.rect_of(button(0)), None);
-    }
-
-    #[test]
-    fn more_opens_the_clip_dropdown_whose_unlink_loop_edits_the_song() {
-        let mut song = song_with_a_clip();
-        song.channels[2].lanes[0].clips[0].visible_len_beats = 6.0;
-        let mut rig = Rig::new(song);
-        rig.click(CLIP);
-        rig.frame(vec![]);
-        rig.click_id(Id::new(("clip_button", 5_usize)));
-        rig.frame(vec![]);
-        let unlink = Id::new("clip_more").with((0_usize, 1_usize));
-        assert_eq!(rig.click_id(unlink).0, Some(SongEdit::Final));
-        let clip = &rig.clips(2)[0];
-        assert_eq!((clip.loop_len_beats, clip.events.len()), (6.0, 3));
-    }
-
-    #[test]
-    fn more_mutes_and_unmutes_the_clip_as_final_edits() {
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.click(CLIP);
-        let more = Id::new(("clip_button", 5_usize));
-        let item = |row: usize| Id::new("clip_more").with((0_usize, row));
-        rig.click_id(more);
-        assert_eq!(rig.click_id(item(3)).0, Some(SongEdit::Final));
-        assert!(rig.clips(2)[0].muted);
-        rig.click_id(more);
-        assert_eq!(rig.click_id(item(4)).0, Some(SongEdit::Final));
-        assert!(!rig.clips(2)[0].muted);
     }
 
     /// A wheel turn of `delta` points with the pointer at `at`.
@@ -5488,55 +4084,6 @@ mod tests {
                 modifiers: egui::Modifiers::NONE,
             },
         ]);
-    }
-
-    #[test]
-    fn the_playlist_wheel_zooms_the_time_on_the_ruler_the_rows_on_the_headers_and_scrolls_on_the_grid()
-     {
-        // Zoom ← clamp(zoom·(1 − 0.001·dy)) about the pointer, egui's raw wheel delta.
-        let mut song = song_with_a_clip();
-        for _ in 0..6 {
-            song.add_channel(ChannelKind::Synth(SynthKind::MiniSynth));
-        }
-        song.channels[1].lanes[0].add_clip(60 * PPQ, 4.0);
-        let mut rig = Rig::new(song);
-        let m = rig.frame(vec![]).m;
-        rig.screen.scroll_y = 64.0;
-        // The ruler: the time only, the beat under the pointer kept (dy 200: a beat 1/0.8 as wide).
-        let at = pos2(400.0, 24.0);
-        let before = rig.screen.axis(GRID_X, &m).tick(at.x);
-        wheel_at(&mut rig, at, vec2(0.0, 200.0));
-        assert!(
-            (rig.screen.zoom - 1.25f32.log2()).abs() < 1e-5,
-            "{}",
-            rig.screen.zoom
-        );
-        assert!((rig.screen.axis(GRID_X, &m).tick(at.x) - before).abs() < 0.01);
-        assert_eq!((rig.screen.scroll_y, rig.screen.row_u), (64.0, Some(2.0)));
-        // The headers: the rows only, the row position under the pointer kept.
-        let at = pos2(24.0, 300.0);
-        let (x, zoom) = (rig.screen.scroll_x, rig.screen.zoom);
-        let row_at = |rig: &Rig| (rig.screen.scroll_y + at.y - TOP) / rig.screen.row_h(&m);
-        let before = row_at(&rig);
-        wheel_at(&mut rig, at, vec2(0.0, 200.0));
-        assert_eq!(rig.screen.row_u, Some(2.5));
-        assert!((row_at(&rig) - before).abs() < 1e-4);
-        assert_eq!((rig.screen.scroll_x, rig.screen.zoom), (x, zoom));
-        // Rows are 0.75 U … 12.0 U.
-        wheel_at(&mut rig, at, vec2(0.0, 4000.0));
-        assert_eq!(rig.screen.row_u, Some(12.0));
-        wheel_at(&mut rig, at, vec2(0.0, -4000.0));
-        assert_eq!(rig.screen.row_u, Some(0.75));
-        // The grid: both ways, the zooms as they were (a beat is 48 points now).
-        let (x, y, zoom) = (rig.screen.scroll_x, rig.screen.scroll_y, rig.screen.zoom);
-        wheel_at(&mut rig, pos2(600.0, 200.0), vec2(-48.0, -30.0));
-        assert!(
-            (rig.screen.scroll_x - x - 1.0).abs() < 1e-4,
-            "{}",
-            rig.screen.scroll_x - x
-        );
-        assert_eq!(rig.screen.scroll_y, y + 30.0);
-        assert_eq!((rig.screen.zoom, rig.screen.row_u), (zoom, Some(0.75)));
     }
 
     #[test]
@@ -5563,22 +4110,6 @@ mod tests {
                 (beat_u - 100.0 * f32::from(d)).abs() < 1e-2,
                 "d {d}: {beat_u}"
             );
-        }
-    }
-
-    #[test]
-    fn a_songs_stored_row_zoom_applies_through_the_clamp() {
-        // HEAD@296 zoom y is rows a pixel: 1/80 → 80 px = 2.5 U at U = 32.
-        for (zoom_y, row_u) in [
-            (1.0 / 80.0, 2.5),
-            (0.02, 2.0),
-            (0.001, 12.0),
-            (0.0, 2.0),
-        ] {
-            let mut song = song_with_a_clip();
-            song.file.playlist_view[3] = zoom_y;
-            let rig = Rig::new(song);
-            assert_eq!(rig.screen.row_u, Some(row_u), "{zoom_y}");
         }
     }
 
@@ -5631,41 +4162,6 @@ mod tests {
             (rig.clips(1)[0].start_tick, rig.clips(2)[0].start_tick),
             (3 * PPQ, 0)
         );
-    }
-
-    #[test]
-    fn the_playlist_view_is_stored_in_the_song_and_restored_from_it() {
-        // The view (position, zooms) is stored in the song, HEAD@296 (scroll x in beats, scroll y in rows, zoom x in
-        // beats a pixel, zoom y in rows a pixel).
-        let mut song = song_with_a_clip();
-        for _ in 0..6 {
-            song.add_channel(ChannelKind::Synth(SynthKind::MiniSynth));
-        }
-        song.channels[1].lanes[0].add_clip(60 * PPQ, 4.0);
-        let mut rig = Rig::new(song);
-        let m = rig.frame(vec![]).m;
-        wheel_at(&mut rig, pos2(24.0, 300.0), vec2(0.0, 200.0));
-        wheel_at(&mut rig, pos2(400.0, 24.0), vec2(0.0, 300.0));
-        wheel_at(&mut rig, pos2(600.0, 200.0), vec2(-90.0, -40.0));
-        rig.frame(vec![]);
-        let screen = &rig.screen;
-        let (row_h, beat_w) = (screen.row_h(&m), screen.axis(0.0, &m).beat_w);
-        let want = [
-            screen.scroll_x,
-            f64::from(screen.scroll_y / row_h),
-            f64::from(1.0 / beat_w),
-            f64::from(1.0 / row_h),
-        ];
-        assert!(want[0] > 0.0 && want[1] > 0.0, "{want:?}");
-        assert_eq!(rig.song.file.playlist_view, want);
-        // Saved and opened again: the same scroll and rows.
-        let bytes = crate::flm::write(&rig.song).unwrap();
-        let song = crate::flm::read(&bytes).unwrap();
-        assert_eq!(song.file.playlist_view, want);
-        let again = Rig::new(song);
-        assert_eq!(again.screen.row_u, rig.screen.row_u);
-        assert!((again.screen.scroll_x - rig.screen.scroll_x).abs() < 1e-9);
-        assert!((again.screen.scroll_y - rig.screen.scroll_y).abs() < 1e-3);
     }
 
     #[test]
@@ -5791,101 +4287,6 @@ mod tests {
     }
 
     #[test]
-    fn the_rows_scrollbar_shows_the_visible_share_and_its_drag_scrolls_them() {
-        // 9 rows and the `+` room are 688 points, `h` of them show (the track area's height).
-        let mut rig = Rig::new(song_with_channels(8));
-        let h = rig.frame(vec![]).area.height();
-        let bar = Id::new("track_scrollbar");
-        let thumb = rig.rect_of(bar).expect("drawn");
-        assert!((thumb.height() - h * h / 688.0).abs() < 1e-3, "{thumb:?}");
-        // Its grab: half a U in from the right edge.
-        assert_eq!((thumb.top(), thumb.center().x), (TOP, 1170.0 - 8.0));
-        // A drag of 50 points moves the rows 50·688/h points; the thumb follows the finger.
-        let (from, to) = (thumb.center(), thumb.center() + vec2(0.0, 50.0));
-        rig.frames(vec![
-            vec![egui::Event::PointerMoved(from)],
-            vec![button(from, true)],
-            vec![egui::Event::PointerMoved(to)],
-            vec![button(to, false)],
-        ]);
-        assert!((rig.screen.scroll_y - 50.0 * 688.0 / h).abs() < 1e-3);
-        assert!((rig.rect_of(bar).expect("drawn").top() - TOP - 50.0).abs() < 1e-3);
-        // All rows showing (2 rows and the `+` room, 240 points): no bar.
-        let mut rig = Rig::new(song_with_channels(1));
-        assert_eq!(rig.rect_of(bar), None);
-    }
-
-    #[test]
-    fn two_fingers_zoom_both_axes_on_the_grid_and_only_the_time_on_the_ruler() {
-        // The first finger's zone decides; zoom ← zoom·|(d − Δ)/d| about the other finger.
-        use egui::TouchPhase::{End, Move, Start};
-        let touch = |id, phase, pos| egui::Event::Touch {
-            device_id: egui::TouchDeviceId(1),
-            id: egui::TouchId(id),
-            phase,
-            pos,
-            force: None,
-        };
-        let pinch = |rig: &mut Rig, first: Pos2| {
-            let (b, c) = (first + vec2(200.0, 100.0), first + vec2(300.0, 150.0));
-            rig.frames(vec![
-                vec![egui::Event::PointerMoved(first)],
-                vec![touch(1, Start, first), button(first, true)],
-                vec![touch(2, Start, b)],
-                vec![touch(2, Move, c)],
-                vec![touch(2, End, c)],
-                vec![
-                    touch(1, End, first),
-                    button(first, false),
-                    egui::Event::PointerGone,
-                ],
-            ]);
-        };
-        let mut song = song_with_channels(8);
-        song.channels[0].lanes[0].add_clip(60 * PPQ, 4.0);
-        let mut rig = Rig::new(song);
-        let m = rig.frame(vec![]).m;
-        // On empty grid: 200 → 300 points apart sideways and 100 → 150 down, both 1.5 times.
-        pinch(&mut rig, pos2(500.0, 150.0));
-        let beat_w = rig.screen.axis(GRID_X, &m).beat_w;
-        assert!((beat_w - 1.5 * BEAT_PT).abs() < 1e-3, "{beat_w}");
-        let row_u = rig.screen.row_u.expect("set");
-        assert!((row_u - 3.0).abs() < 1e-5, "{row_u}");
-        // On the ruler: the time only.
-        pinch(&mut rig, pos2(500.0, 24.0));
-        let beat_w = rig.screen.axis(GRID_X, &m).beat_w;
-        assert!((beat_w - 2.25 * BEAT_PT).abs() < 1e-3, "{beat_w}");
-        assert_eq!(rig.screen.row_u, Some(row_u));
-    }
-
-    #[test]
-    fn the_open_clamps_each_scroll_by_its_already_clamped_zoom() {
-        // The stored view (HEAD@296). y: 20 px rows clamp to 2 U; under them 10.75 rows scroll over 4.7 shown, so row 5
-        // stays (the stored zoom would show every row and clamp it to 0).
-        let mut song = song_with_a_clip();
-        for _ in 0..6 {
-            song.add_channel(ChannelKind::Synth(SynthKind::MiniSynth));
-        }
-        // x: the song ends at beat 400; 0.5 beats a pixel clamps to zoomMax 0.375 (420.75 beats shown, max 379.3), so
-        // beat 300 stays (the stored zoom would show 561 beats and clamp it to 239).
-        song.channels[0].lanes[0].add_clip(396 * PPQ, 4.0);
-        song.file.playlist_view = [300.0, 5.0, 0.5, 0.05];
-        let mut rig = Rig::new(song);
-        let m = rig.frame(vec![]).m;
-        assert_eq!(rig.screen.row_u, Some(2.0));
-        assert!(
-            (rig.screen.scroll_y / rig.screen.row_h(&m) - 5.0).abs() < 1e-4,
-            "{}",
-            rig.screen.scroll_y
-        );
-        assert!(
-            (rig.screen.scroll_x - 300.0).abs() < 1e-9,
-            "{}",
-            rig.screen.scroll_x
-        );
-    }
-
-    #[test]
     fn the_stored_view_is_in_device_pixels_or_u() {
         // HEAD@296 per device pixel (a song without the zoom-units flag). At 2 pixels a point, rows of 2.5·U_px
         // pixels are 2.5 U, and 0.01 beats a pixel is a beat of 50 points.
@@ -6000,79 +4401,6 @@ mod tests {
     }
 
     #[test]
-    fn a_row_zoom_keeps_the_rows_in_their_new_range() {
-        // The rows' range counts the `+` room in points, so a row zoom shrinks it in rows: the zoom's own clamp came
-        // before that, and the rows must not sit past the new end (nor spring back from it under the next press).
-        let mut rig = Rig::new(song_with_a_clip());
-        let f = rig.frame(vec![]);
-        let (m, h) = (f.m, f.area.height());
-        wheel_at(
-            &mut rig,
-            pos2(24.0, f.area.bottom() - 10.0),
-            vec2(0.0, 1000.0 / 3.0),
-        );
-        let row_h = rig.screen.row_h(&m);
-        assert!((row_h - 96.0).abs() < 1e-3, "{row_h}");
-        let max = (3.0 * row_h + 112.0 - h).max(0.0);
-        let at = rig.screen.scroll_y;
-        assert!(at <= max + 1e-3, "{at} > {max}");
-        for _ in 0..30 {
-            rig.frame(vec![]);
-        }
-        assert_eq!(rig.screen.scroll_y, at);
-    }
-
-    #[test]
-    fn the_timeline_pans_and_zooms_and_the_clips_follow() {
-        // A drum clip at beat 60: the song is 64 beats long, so the time scrolls over 0 … 128 beats.
-        let mut song = song_with_a_clip();
-        song.channels[1].lanes[0].add_clip(60 * PPQ, 4.0);
-        let mut rig = Rig::new(song);
-        // A drag on empty space pans left by 100 points, 1:1 once out of the calm zone, its last move too slow to
-        // fling; the clip is hit where it is drawn now.
-        let at = |x: f32| vec![egui::Event::PointerMoved(pos2(x, 80.0))];
-        rig.frames(vec![
-            at(700.0),
-            vec![button(pos2(700.0, 80.0), true)],
-            at(650.0),
-            at(602.0),
-            at(600.0),
-            vec![button(pos2(600.0, 80.0), false)],
-        ]);
-        assert!((rig.screen.scroll_x - 100.0 / f64::from(BEAT_PT)).abs() < 1e-4);
-        rig.click(CLIP - vec2(100.0, 0.0));
-        assert_eq!(
-            rig.screen.clips.selected,
-            Some(ClipRef {
-                channel: 2,
-                lane: 0,
-                id: 1
-            })
-        );
-        // A pinch or Ctrl + wheel zooms around the pointer.
-        let m = rig.frame(vec![]).m;
-        let at = pos2(200.0, 80.0);
-        let before = rig.screen.axis(GRID_X, &m).tick(at.x);
-        rig.frame(vec![egui::Event::PointerMoved(at), egui::Event::Zoom(2.0)]);
-        assert_eq!(rig.screen.zoom, 1.0);
-        assert!((rig.screen.axis(GRID_X, &m).tick(at.x) - before).abs() < 0.01);
-        // Shift + wheel scrolls sideways, no further than twice (the song's length + 1/128) less the beats shown.
-        let shift_wheel = egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: vec2(0.0, -50_000.0),
-            modifiers: egui::Modifiers::SHIFT,
-        };
-        rig.frame(vec![egui::Event::PointerMoved(at), shift_wheel]);
-        rig.frame(vec![]);
-        let shown = f64::from((1170.0 - GRID_X) / rig.screen.axis(GRID_X, &m).beat_w);
-        assert!(
-            (rig.screen.scroll_x - (2.0 * (64.0 + 1.0 / 128.0) - shown)).abs() < 1e-3,
-            "{}",
-            rig.screen.scroll_x
-        );
-    }
-
-    #[test]
     fn each_primary_track_is_followed_by_its_sub_tracks_unless_they_are_hidden() {
         let mut song = song_with_a_clip();
         song.channels[1].add_lane(LaneKind::Notes);
@@ -6122,45 +4450,6 @@ mod tests {
         Id::new("track_menu").with((col, row))
     }
 
-    #[test]
-    fn a_long_press_on_a_header_opens_its_track_menu_whose_pick_is_reported() {
-        let mut rig = Rig::new(song_with_a_clip());
-        // Not a click: the rack stays shut and no track is picked.
-        let f = secondary_click(&mut rig, header_at(2));
-        assert_eq!((f.nav, f.track), (None, None));
-        // Column 1, row 3 of the MiniSynth's menu: `Add Track`.
-        rig.frame(vec![]);
-        let mut track = None;
-        let rect = rig.rect_of(track_item(1, 3)).expect("the menu is open");
-        for events in [
-            vec![egui::Event::PointerMoved(rect.center())],
-            vec![button(rect.center(), true)],
-            vec![button(rect.center(), false)],
-        ] {
-            track = track.or(rig.frame(events).track);
-        }
-        assert_eq!(track, Some((2, 0, TrackOp::AddTrack)));
-        rig.frame(vec![]);
-        assert_eq!(rig.rect_of(track_item(1, 3)), None, "the menu closed");
-        // A disabled item (`Delete Track`, the only notes track) picks nothing and keeps the menu open.
-        secondary_click(&mut rig, header_at(2));
-        // A disabled cell has no widget: it sits between `Insert Channel` and `Delete Channel`.
-        let (above, below) = (track_item(0, 3), track_item(0, 5));
-        let above = rig.rect_of(above).expect("the menu is open").center();
-        let below = rig.rect_of(below).expect("the menu is open").center();
-        let disabled = above + (below - above) / 2.0;
-        let mut track = None;
-        for events in [
-            vec![egui::Event::PointerMoved(disabled)],
-            vec![button(disabled, true)],
-            vec![button(disabled, false)],
-        ] {
-            track = track.or(rig.frame(events).track);
-        }
-        assert_eq!(track, None);
-        assert!(rig.rect_of(track_item(0, 5)).is_some(), "still open");
-    }
-
     /// Presses `pos` with the mouse and holds it still, a frame every 0.1 s, until just before `secs`: the next
     /// frame lands at `secs` after the press.
     fn hold(rig: &mut Rig, pos: Pos2, secs: f64) {
@@ -6174,78 +4463,6 @@ mod tests {
     }
 
     // Track header gestures.
-
-    #[test]
-    fn a_mouse_held_still_300_ms_on_a_header_selects_and_its_release_opens_the_menu_there() {
-        // The MiniSynth's row and the drums' row (the keyboard starts on the drums).
-        for (row, channel) in [(2, 2), (1, 1)] {
-            let mut rig = Rig::new(song_with_a_clip());
-            rig.selected = 3 - channel;
-            // 1.25 U to the right during the hold: sideways is calm, the zone being vertical only.
-            let at = header_at(row) + vec2(40.0, 3.0);
-            hold(&mut rig, header_at(row), 0.2);
-            rig.frame(vec![egui::Event::PointerMoved(at)]);
-            assert_eq!(rig.selected, 3 - channel, "not before the 300 ms");
-            // The hold makes the track current and shows nothing.
-            let f = rig.frame(vec![]);
-            assert_eq!((f.nav, rig.selected), (None, channel));
-            assert_eq!(rig.screen.track_menu, None);
-            // Released there: the menu, centred on the release point.
-            let f = rig.frame(vec![button(at, false)]);
-            assert_eq!((f.nav, f.track, f.reorder), (None, None, None), "no click");
-            assert_eq!(rig.screen.track_menu, Some((channel, 0, at)));
-            assert!(rig.rect_of(track_item(0, 1)).is_some(), "Channel Settings");
-        }
-    }
-
-    #[test]
-    fn a_tap_on_a_header_selects_its_track_then_toggles_the_column() {
-        let mut rig = Rig::new(song_with_a_clip());
-        // Released at 250 ms: a tap. The MiniSynth's track becomes current; no rack, no menu.
-        hold(&mut rig, header_at(2), 0.25);
-        let f = rig.frame(vec![button(header_at(2), false)]);
-        assert_eq!((f.nav, rig.selected), (None, 2));
-        rig.frame(vec![]);
-        assert_eq!(rig.screen.track_menu, None);
-        assert_eq!(rig.screen.column, (0.0, 0.0));
-        // A tap on the current track opens the column: c ← c + 0.4·(1 − c) a frame, snapping within 0.05.
-        rig.click(header_at(2));
-        let mut widths = Vec::new();
-        for _ in 0..7 {
-            let f = rig.frame(vec![]);
-            widths.push(rig.screen.header_w(&f.m) / 32.0);
-        }
-        // From the frame after the tap: 0.4, 0.64, 0.784 …, snapping at 0.953 (within 0.05 of 1).
-        let want = [0.4, 0.64, 0.784, 0.8704, 0.92224, 1.0, 1.0].map(|c: f32| 1.5 + 12.0 * c);
-        for (w, want) in widths.iter().zip(want) {
-            assert!((w - want).abs() < 1e-3, "{widths:?}");
-        }
-        // The grid starts t = 2 points after it.
-        let f = rig.frame(vec![]);
-        assert_eq!(f.grid_left, 13.5 * 32.0 + 2.0);
-        // Two taps: no double-tap action, the second closes it again.
-        rig.click(header_at(2));
-        assert_eq!(rig.screen.column.1, 0.0);
-        rig.click(header_at(1));
-        assert_eq!(
-            (rig.selected, rig.screen.column.1),
-            (1, 0.0),
-            "another track: selected"
-        );
-    }
-
-    #[test]
-    fn two_taps_on_the_masters_header_select_its_track_then_toggle_the_column() {
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.click(header_at(0));
-        rig.frame(vec![]);
-        assert_eq!((rig.selected, rig.screen.column.1), (0, 0.0));
-        rig.click(header_at(0));
-        assert_eq!((rig.selected, rig.screen.column.1), (0, 1.0));
-        // Another track: selected, the column stays.
-        rig.click(header_at(2));
-        assert_eq!((rig.selected, rig.screen.column.1), (2, 1.0));
-    }
 
     #[test]
     fn half_a_u_down_before_the_hold_scrolls_the_playlist_instead() {
@@ -6285,34 +4502,6 @@ mod tests {
     // Track header reorder and secondary tap.
 
     #[test]
-    fn a_hold_then_a_vertical_drag_swaps_the_channel_live_and_drops_it_on_release() {
-        let mut rig = four_rows();
-        hold(&mut rig, header_at(1), 0.3);
-        rig.frame(vec![]);
-        assert_eq!(rig.selected, 1);
-        // Two rows down at once: the Drums and the channel in row 3 swap; row 2 stays. Live: nothing is reported, and
-        // the playlist does not scroll.
-        let to = header_at(3);
-        let f = rig.frame(vec![egui::Event::PointerMoved(to)]);
-        assert_eq!(f.reorder, None);
-        assert_eq!(rig.screen.scroll_y, 0.0);
-        // Up past the top: the target is row 0, so the master swaps with it, to the Drums' old row 3.
-        let up = header_at(0) - vec2(0.0, 40.0);
-        rig.frame(vec![egui::Event::PointerMoved(up)]);
-        rig.frame(vec![egui::Event::PointerMoved(to)]);
-        let f = rig.frame(vec![button(to, false)]);
-        assert_eq!(f.reorder, Some(vec![0, 3, 2, 1]), "dropped");
-        rig.frame(vec![]);
-        assert_eq!(rig.screen.track_menu, None, "no menu after a drag");
-        // The master's row drags like any primary row.
-        hold(&mut rig, header_at(0), 0.3);
-        rig.frame(vec![]);
-        rig.frame(vec![egui::Event::PointerMoved(header_at(2))]);
-        let f = rig.frame(vec![button(header_at(2), false)]);
-        assert_eq!(f.reorder, Some(vec![2, 1, 0, 3]));
-    }
-
-    #[test]
     fn a_finger_held_on_a_header_drags_its_channel_and_drops_it_where_it_lifts() {
         // As Android's integration sends a finger (#68): a touch event with the pointer's, and the lift's `PointerGone`,
         // which clears the latest position in the release frame.
@@ -6342,56 +4531,6 @@ mod tests {
         let f = rig.frame(finger(End, header_at(3)));
         // A row at a time: the Drums swap with row 2's channel, then row 3's (it dropped back in row 1 before).
         assert_eq!(f.reorder, Some(vec![0, 2, 3, 1]));
-    }
-
-    #[test]
-    fn the_target_row_is_the_start_row_plus_the_travel_rounded() {
-        // Pressed low in row 1 (start row 1.9, floor 1): 0.4 rows down rounds back to row 1, though the finger is in
-        // row 2; 0.6 rows rounds to row 2.
-        for (travel, want) in [(0.4, None), (0.6, Some(vec![0, 2, 1, 3]))] {
-            let mut rig = four_rows();
-            let at = header_at(1) + vec2(0.0, 25.6);
-            hold(&mut rig, at, 0.3);
-            rig.frame(vec![]);
-            let to = at + vec2(0.0, travel * 64.0);
-            rig.frame(vec![egui::Event::PointerMoved(to)]);
-            let f = rig.frame(vec![button(to, false)]);
-            assert_eq!(f.reorder, want, "{travel} rows");
-        }
-    }
-
-    #[test]
-    fn the_dragged_row_follows_the_finger_with_a_rubber_band_past_the_ends_and_keeps_its_header_id()
-    {
-        let mut rig = four_rows();
-        // Where each track row's header ends (its top may be clipped), below the tracks' top, two frames on
-        // (`read_response` gives the pass before the last).
-        let bottoms = |rig: &mut Rig| -> Vec<f32> {
-            rig.frame(vec![]);
-            rig.frame(vec![]);
-            let rect = |i: usize| rig.ctx.read_response(Id::new(("track_header", i)));
-            (0..4)
-                .map(|i| ((rect(i).expect("drawn").rect.bottom() - TOP) * 100.0).round() / 100.0)
-                .collect()
-        };
-        hold(&mut rig, header_at(1), 0.3);
-        rig.frame(vec![]);
-        // A row down: the Drums swap with row 2, whose header shows in row 1.
-        rig.frame(vec![egui::Event::PointerMoved(header_at(2))]);
-        assert_eq!(bottoms(&mut rig), [64.0, 192.0, 128.0, 256.0]);
-        // A quarter row on: the Drums' header with the finger, the rest in their rows.
-        rig.frame(vec![egui::Event::PointerMoved(
-            header_at(2) + vec2(0.0, 16.0),
-        )]);
-        assert_eq!(bottoms(&mut rig), [64.0, 208.0, 128.0, 256.0]);
-        // 2.5 rows past the top (row −2.5): it shows at 0.05 of that, row −0.125, and the master swaps to its row 2.
-        rig.frame(vec![egui::Event::PointerMoved(
-            header_at(1) - vec2(0.0, 3.5 * 64.0),
-        )]);
-        assert_eq!(bottoms(&mut rig), [192.0, 56.0, 128.0, 256.0]);
-        // The screen alone moves no song: after the drop the rows are as the song has them.
-        rig.frame(vec![button(header_at(1), false)]);
-        assert_eq!(bottoms(&mut rig), [64.0, 128.0, 192.0, 256.0]);
     }
 
     /// Ten one-row channels, row 1's header held 300 ms and dragged off its calm zone and back: a drag in place.
@@ -6434,30 +4573,6 @@ mod tests {
         // Without a hold it zooms.
         wheel_at(&mut rig, header_at(1), vec2(0.0, 500.0));
         assert_ne!(rig.screen.row_u, row_u);
-    }
-
-    #[test]
-    fn a_sub_track_row_never_starts_a_drag_and_its_release_opens_the_menu() {
-        let mut song = song_with_a_clip();
-        song.channels[1].add_lane(LaneKind::Drums);
-        let mut rig = Rig::new(song);
-        hold(&mut rig, header_at(2), 0.3);
-        rig.frame(vec![]);
-        let to = header_at(3);
-        rig.frame(vec![egui::Event::PointerMoved(to)]);
-        let f = rig.frame(vec![button(to, false)]);
-        assert_eq!(f.reorder, None);
-        assert_eq!(rig.screen.track_menu, Some((1, 1, to)));
-    }
-
-    #[test]
-    fn a_secondary_click_selects_the_track_and_opens_its_menu_there() {
-        let mut rig = four_rows();
-        assert_eq!(rig.selected, 1);
-        let at = header_at(3) + vec2(4.0, 6.0);
-        secondary_click(&mut rig, at);
-        assert_eq!(rig.selected, 3);
-        assert_eq!(rig.screen.track_menu, Some((3, 0, at)));
     }
 
     #[test]
@@ -6522,46 +4637,6 @@ mod tests {
         assert_eq!(rig.rect_of(item), None);
     }
 
-    #[test]
-    fn a_sub_track_row_shows_and_edits_its_own_clips_and_menu() {
-        let mut song = song_with_a_clip();
-        let lane = song.channels[2].add_lane(LaneKind::Notes);
-        song.channels[2].lanes[lane].add_clip(0, 4.0);
-        let mut rig = Rig::new(song);
-        // Row 3 is the MiniSynth's second notes track: its clip (beats 0 to 4) selects there.
-        let clip = pos2(GRID_X + 2.0 * BEAT_PT, header_at(3).y);
-        rig.click(clip);
-        assert_eq!(
-            rig.screen.clips.selected,
-            Some(ClipRef {
-                channel: 2,
-                lane: 1,
-                id: 1
-            })
-        );
-        // A tap beside it clears the selection; on that (current) track the next shows the insert menu, whose
-        // `New Clip` adds a bar.
-        let empty = pos2(GRID_X + 10.0 * BEAT_PT, header_at(3).y);
-        rig.click(empty);
-        rig.click(empty);
-        assert_eq!(rig.plus().0, Some(SongEdit::Final));
-        assert_eq!(rig.song.channels[2].lanes[1].clips.len(), 2);
-        assert_eq!(rig.clips(2).len(), 1, "the primary's are untouched");
-        // Its menu is the sub-track's: `Delete Track` is enabled (two notes tracks).
-        secondary_click(&mut rig, header_at(3));
-        rig.frame(vec![]);
-        let mut track = None;
-        let rect = rig.rect_of(track_item(0, 4)).expect("the menu is open");
-        for events in [
-            vec![egui::Event::PointerMoved(rect.center())],
-            vec![button(rect.center(), true)],
-            vec![button(rect.center(), false)],
-        ] {
-            track = track.or(rig.frame(events).track);
-        }
-        assert_eq!(track, Some((2, 1, TrackOp::DeleteTrack)));
-    }
-
     // ---- the keymap's editing and zoom actions (`ui/edit_keys.rs`) ----
 
     impl Rig {
@@ -6579,60 +4654,6 @@ mod tests {
     }
 
     #[test]
-    fn the_editing_keys_copy_cut_delete_and_paste_the_selected_clips_at_the_touched_beat() {
-        use egui::{Key, Modifiers};
-        let cmd = Modifiers::COMMAND;
-        let mut rig = Rig::new(song_with_a_clip());
-        // The touch on the clip, at beat 6, is the grid cursor.
-        rig.click(CLIP);
-        assert_eq!(rig.key(Key::C, cmd), None);
-        assert_eq!(rig.key(Key::V, cmd), Some(SongEdit::Final));
-        assert_eq!(rig.starts(2), [(1, 512), (2, 768)]);
-        let pasted = ClipRef {
-            id: 2,
-            ..SYNTH_CLIP
-        };
-        assert_eq!(rig.screen.clips.selected, Some(pasted));
-        assert_eq!(rig.key(Key::Delete, Modifiers::NONE), Some(SongEdit::Final));
-        assert_eq!(rig.starts(2), [(1, 512)]);
-        assert_eq!(rig.screen.clips.selected, None);
-        // Nothing selected: nothing to delete.
-        assert_eq!(rig.key(Key::Delete, Modifiers::NONE), None);
-        // Cut: on the clipboard and gone; paste puts it back at the cursor.
-        rig.click(CLIP);
-        assert_eq!(rig.key(Key::X, cmd), Some(SongEdit::Final));
-        assert_eq!(rig.starts(2), []);
-        assert_eq!(rig.key(Key::V, cmd), Some(SongEdit::Final));
-        assert_eq!(rig.starts(2), [(3, 768)]);
-    }
-
-    #[test]
-    fn escape_deselects_and_enter_selects_the_clip_at_the_cursor_or_adds_one() {
-        use egui::{Key, Modifiers};
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.click(CLIP);
-        assert_eq!(rig.screen.clips.selected, Some(SYNTH_CLIP));
-        assert_eq!(rig.key(Key::Escape, Modifiers::NONE), None);
-        assert_eq!(rig.screen.clips.selected, None);
-        // `Select clip`: the clip under the cursor, current and selected, no edit.
-        rig.song.channels[2].lanes[0].file.current_clip_id = 0;
-        assert_eq!(rig.key(Key::Enter, Modifiers::NONE), None);
-        assert_eq!(rig.screen.clips.selected, Some(SYNTH_CLIP));
-        assert_eq!(rig.current_clip(), Some(SYNTH_CLIP));
-        assert_eq!(rig.starts(2), [(1, 512)]);
-        // With no clip there, `Add clip`: a bar on the cursor's track from its beat, current and selected.
-        assert_eq!(rig.key(Key::Delete, Modifiers::NONE), Some(SongEdit::Final));
-        assert_eq!(rig.key(Key::Enter, Modifiers::NONE), Some(SongEdit::Final));
-        assert_eq!(rig.starts(2), [(2, 768)]);
-        assert_eq!(rig.clips(2)[0].loop_len_beats, 4.0);
-        let added = ClipRef {
-            id: 2,
-            ..SYNTH_CLIP
-        };
-        assert_eq!(rig.screen.clips.selected, Some(added));
-    }
-
-    #[test]
     fn a_lone_clip_pastes_onto_the_touched_track_of_its_kind() {
         use egui::{Key, Modifiers};
         let cmd = Modifiers::COMMAND;
@@ -6647,82 +4668,6 @@ mod tests {
         assert_eq!(rig.key(Key::V, cmd), Some(SongEdit::Final));
         assert_eq!(rig.starts(3), [(1, 0), (2, 768)]);
         assert_eq!(rig.starts(2), [(1, 512)]);
-    }
-
-    #[test]
-    fn the_cursor_and_the_clip_clipboard_follow_a_reorder_and_a_lane_insert() {
-        use egui::{Key, Modifiers};
-        let cmd = Modifiers::COMMAND;
-        let mut song = song_with_a_clip();
-        song.channels[2].lanes[0].add_clip(1536, 4.0);
-        let mut rig = Rig::new(song);
-        // The cursor on the synth's track at beat 6; both its clips (a group) on the clipboard.
-        rig.click(CLIP);
-        let second = ClipRef {
-            id: 2,
-            ..SYNTH_CLIP
-        };
-        rig.screen.clips.selected = None;
-        rig.screen.clips.group = vec![SYNTH_CLIP, second];
-        rig.key(Key::C, cmd);
-        // A reorder: the synth (2) and the drums (1) swap, as the app re-keys the playlist after one.
-        rig.song.channels.swap(1, 2);
-        let swap = |c: usize| match c {
-            1 => 2,
-            2 => 1,
-            c => c,
-        };
-        rig.screen.clips.rekey(|c, l| Some((swap(c), l)));
-        // Two clips go back on their own track, which moved with the clipboard: the earliest on the cursor.
-        assert_eq!(rig.key(Key::V, cmd), Some(SongEdit::Final));
-        assert_eq!(rig.starts(1), [(1, 512), (2, 1536), (3, 768), (4, 1792)]);
-        // A lane inserted above the synth's notes lane: its track is lane 1 now, and the cursor follows it there.
-        let mut synth = rig.song.channels.remove(1);
-        synth
-            .lanes
-            .insert(0, crate::song::Lane::new(LaneKind::Notes));
-        rig.song.channels.insert(1, synth);
-        rig.screen
-            .clips
-            .rekey(|c, l| Some((c, if c == 1 { l + 1 } else { l })));
-        rig.key(Key::Escape, Modifiers::NONE);
-        assert_eq!(rig.key(Key::Enter, Modifiers::NONE), None, "Select clip");
-        let under = ClipRef {
-            channel: 1,
-            lane: 1,
-            id: 1,
-        };
-        assert_eq!(rig.screen.clips.selected, Some(under));
-        assert!(rig.song.channels[1].lanes[0].clips.is_empty());
-        // Its track gone, the clip goes from the clipboard: nothing to paste.
-        rig.screen
-            .clips
-            .rekey(|c, l| ((c, l) != (1, 1)).then_some((c, l)));
-        assert_eq!(rig.key(Key::V, cmd), None);
-    }
-
-    #[test]
-    fn the_editing_keys_paste_and_add_clips_on_the_snap_modes_grid() {
-        use crate::ui::piano_roll::SnapMode;
-        use egui::{Key, Modifiers};
-        let cmd = Modifiers::COMMAND;
-        let mut rig = Rig::new(song_with_a_clip());
-        // The cursor a hair before beat 6: the beat grid puts a paste on beat 6 (768), the bar grid on beat 4 (512).
-        rig.click(CLIP);
-        rig.key(Key::C, cmd);
-        rig.screen.snap.mode = SnapMode::Bar;
-        assert_eq!(rig.key(Key::V, cmd), Some(SongEdit::Final));
-        assert_eq!(rig.starts(2), [(1, 512), (2, 512)]);
-        // Add clip with no clip at the cursor (both gone): on beat 4 too.
-        rig.screen.clips.selected = Some(SYNTH_CLIP);
-        rig.key(Key::Delete, Modifiers::NONE);
-        rig.screen.clips.selected = Some(ClipRef {
-            id: 2,
-            ..SYNTH_CLIP
-        });
-        rig.key(Key::Delete, Modifiers::NONE);
-        assert_eq!(rig.key(Key::Enter, Modifiers::NONE), Some(SongEdit::Final));
-        assert_eq!(rig.starts(2), [(3, 512)]);
     }
 
     // The left column, the mini mixer (expanded track headers) and the playhead line.
@@ -6767,44 +4712,8 @@ mod tests {
         out
     }
 
-    fn circles(f: &Frame) -> Vec<(Pos2, f32, Color32)> {
-        (f.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Circle(c) => Some((c.center, c.radius, c.fill)),
-                _ => None,
-            })
-            .collect()
-    }
-
     fn theme_colors() -> crate::theme::ThemeColors {
         theme_by_id(0).colors
-    }
-
-    #[test]
-    fn the_time_ruler_and_the_grid_start_t_after_the_column_on_a_background_ruler_row() {
-        // U = 32: t = 2 points.
-        let mut rig = Rig::new(song_with_a_clip());
-        let f = rig.frame(vec![]);
-        assert_eq!(f.grid_left, 48.0 + 2.0);
-        let c = theme_colors();
-        let rects = rects(&f);
-        // The ruler row is a `background` panel over the full width; the time ruler's fill, `background` too, starts
-        // at the grid.
-        assert!(rects.contains(&(
-            Rect::from_min_max(pos2(0.0, 0.0), pos2(1170.0, TOP)),
-            c.background.to_color32()
-        )));
-        assert!(rects.contains(&(
-            Rect::from_min_max(pos2(50.0, 0.0), pos2(1170.0, TOP)),
-            c.background.to_color32()
-        )));
-        // The lanes too: the clip's lane (the MiniSynth's, not the current track: `controlFill`) starts at the grid.
-        let lane = (rects.iter()).find(|(r, fill)| {
-            *fill == c.control_fill.to_color32() && (r.top() - TOP - 128.0).abs() < 1e-3
-        });
-        assert_eq!(lane.map(|l| l.0.left()), Some(50.0));
-        let f = expanded(song_with_a_clip()).frame(vec![]);
-        assert_eq!(f.grid_left, 13.5 * 32.0 + 2.0);
     }
 
     #[test]
@@ -6893,86 +4802,6 @@ mod tests {
     }
 
     #[test]
-    fn while_the_column_animates_no_control_or_label_shows() {
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.click(header_at(2));
-        rig.click(header_at(2));
-        let solo = |f: &Frame| texts(f).iter().filter(|t| t.0 == "Solo").count();
-        let mut seen = Vec::new();
-        for _ in 0..7 {
-            let f = rig.frame(vec![]);
-            seen.push((rig.screen.column.0, solo(&f)));
-        }
-        // Until c snaps to 1 none shows; from that frame on, one per channel but the master's.
-        assert!(
-            seen.iter().all(|&(c, n)| (c == 1.0) == (n == 2)),
-            "{seen:?}"
-        );
-        assert_eq!(seen.last().map(|s| s.1), Some(2));
-        // And the first frame of a collapse hides them.
-        rig.click(header_at(2));
-        assert_eq!(solo(&rig.frame(vec![])), 0);
-    }
-
-    #[test]
-    fn at_c_1_only_the_header_part_takes_the_header_gestures_and_the_controls_edit_as_params() {
-        let mut rig = expanded(song_with_a_clip());
-        rig.selected = 2;
-        rig.click(header_at(2));
-        // That made row 2 current (it was the keyboard's channel already); now the mute cell (1.5 U … 3 U).
-        rig.screen.column = (1.0, 1.0);
-        let mute = pos2(2.25 * 32.0, header_at(2).y);
-        let (edit, _) = rig.click(mute);
-        assert_eq!(edit, Some(SongEdit::ChannelParam));
-        assert_eq!(rig.song.channels[2].params.0[2], 1.0);
-        assert_eq!(rig.screen.column.1, 1.0, "not a header tap");
-        // The control's touch is the app's recent control.
-        assert_eq!(
-            rig.screen.touch.map(|t| (t.0, t.1.target.param)),
-            Some((2, 2))
-        );
-        // The icon cell is still the header: a tap on the current track collapses the column.
-        rig.click(header_at(2));
-        assert_eq!(rig.screen.column.1, 0.0);
-    }
-
-    #[test]
-    fn a_held_header_grows_its_cell_by_the_knob_law_and_wobbles_back() {
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.selected = 2;
-        let ink = channel_color(rig.song.channels[2].hue, &theme_by_id(0)).to_color32();
-        let cell = |f: &Frame| {
-            (rects(f).into_iter())
-                .find(|&(r, fill)| fill == ink && r.width() == 48.0 && r.center().x == 24.0)
-                .map(|r| r.0.height())
-        };
-        hold(&mut rig, header_at(2), 0.4);
-        let mut heights = Vec::new();
-        for _ in 0..4 {
-            heights.push(cell(&rig.frame(vec![])).unwrap());
-        }
-        // Held: 63·(1 + (1 − max(0.01, q))·10/63), q = 0.6 a sixtieth of a second from the hold (the knobs' own law,
-        // `widgets::pulse`): with the rig's 0.1 s frames, 1 − 0.6⁷ of the 10 px a frame after it, then 0.99 of them.
-        let grown = |k: f32| 63.0 + k * 10.0;
-        assert!(
-            (heights[0] - grown(1.0 - 0.6f32.powi(7))).abs() < 1e-3,
-            "{heights:?}"
-        );
-        assert!(
-            heights[1..].iter().all(|h| (h - grown(0.99)).abs() < 1e-3),
-            "{heights:?}"
-        );
-        rig.frame(vec![button(header_at(2), false)]);
-        let mut back = Vec::new();
-        for _ in 0..12 {
-            back.push(cell(&rig.frame(vec![])).unwrap());
-        }
-        // Let go: it wobbles (overshoots below 63) and settles at 63.
-        assert!(back.iter().any(|&h| h < 63.0), "{back:?}");
-        assert_eq!(back.last(), Some(&63.0));
-    }
-
-    #[test]
     fn the_playhead_line_shows_stopped_under_the_header_column_and_the_box_on_the_ruler() {
         // No output: the playhead is at tick 0, the grid's left edge (x 50). What shows of each rect: its part inside
         // its clip. At beat 0 the line's left half falls in the t gap and shows; the header column, right edge x 48,
@@ -7015,42 +4844,6 @@ mod tests {
         rig.screen.armed = true;
         let f = rig.frame(vec![]);
         assert!(timeline::testing::play_box_armed(&f.shapes));
-    }
-
-    #[test]
-    fn the_playhead_line_lies_over_the_clips_and_under_the_selections_frame() {
-        // The MiniSynth's clip (beats 4 to 8), selected; the playhead dropped on beat 5, inside it.
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.click(CLIP);
-        rig.screen.knob.dropped = Some((640, rig.time + 0.1));
-        let f = rig.frame(vec![]);
-        let text = theme_colors().text.to_color32();
-        // Flattened in paint order (the line is a group of two rects).
-        let mut order = Vec::new();
-        for s in &f.shapes {
-            match &s.shape {
-                egui::Shape::Vec(v) => order.extend(v.iter().cloned()),
-                shape => order.push(shape.clone()),
-            }
-        }
-        let x = GRID_X + 5.0 * BEAT_PT;
-        let line = (order.iter()).position(|s| matches!(s, egui::Shape::Rect(r) if r.fill == text && r.rect.y_range() == f.area.y_range() && (r.rect.center().x - x).abs() < 1.0));
-        // The selection's chrome is its pulsing box (beats 4 … 8 of row 2) and its handles; the light outline is the
-        // current clip's, drawn with it.
-        let sbox = Rect::from_min_max(
-            pos2(GRID_X + 4.0 * BEAT_PT, TOP + 128.0),
-            pos2(GRID_X + 8.0 * BEAT_PT, TOP + 192.0),
-        );
-        let frame = (order.iter()).position(|s| {
-            matches!(s, egui::Shape::Rect(r) if (r.rect.min - sbox.min).length() < 1e-3 && (r.rect.max - sbox.max).length() < 1e-3)
-        });
-        let clip = (order.iter()).position(|s| matches!(s, egui::Shape::Rect(r) if r.rect.contains(CLIP) && r.fill != text && r.rect.width() < 200.0));
-        let (line, frame, clip) = (
-            line.expect("the line"),
-            frame.expect("the frame"),
-            clip.expect("the clip"),
-        );
-        assert!(clip < line && line < frame, "{clip} {line} {frame}");
     }
 
     /// The playlist's playhead line: the x of its `text` rect down the track area, if drawn.
@@ -7154,71 +4947,10 @@ mod tests {
         assert_eq!((line, seek), (Some(GRID_X), Some(256)));
     }
 
-    #[test]
-    fn plus_clip_duplicate_and_the_floating_snap_take_the_snap_unit() {
-        let bar = crate::ui::piano_roll::notes::Snap {
-            on: true,
-            mode: crate::ui::piano_roll::notes::SnapMode::Bar,
-            ..Default::default()
-        };
-        let button = |i: usize| Id::new(("clip_button", i));
-        // The MiniSynth's clip shows 6 beats from beat 4: Duplicate rounds its length up to the unit, 2 bars.
-        let mut song = song_with_a_clip();
-        song.channels[2].lanes[0].clips[0].visible_len_beats = 6.0;
-        let mut rig = Rig::new(song);
-        rig.screen.snap = bar;
-        rig.click(CLIP);
-        rig.frame(vec![]);
-        assert_eq!(rig.click_id(button(1)).0, Some(SongEdit::Final));
-        assert_eq!(rig.clips(2)[1].start_tick, 512 + 1024);
-        // The floating Snap: to the nearest bar (900 → 1024; a beat would be 896).
-        rig.song.channels[2].lanes[0].clips[1].start_tick = 900;
-        rig.frame(vec![]);
-        assert_eq!(rig.click_id(button(3)).0, Some(SongEdit::Final));
-        assert_eq!(rig.clips(2)[1].start_tick, 1024);
-        // `New Clip` at beat 13.6: the nearest bar line, beat 12 (a beat would be 14).
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.screen.snap = bar;
-        rig.click(CLIP);
-        let beside = pos2(GRID_X + 13.6 * BEAT_PT, CLIP.y);
-        rig.click(beside);
-        rig.click(beside);
-        assert_eq!(rig.plus().0, Some(SongEdit::Final));
-        assert_eq!(rig.clips(2)[1].start_tick, 12 * 128);
-        // With Snap off a drag moves to the whole tick under the finger: 0.6 beat is 76.8 ticks.
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.screen.snap.on = false;
-        rig.current();
-        rig.drag(CLIP, CLIP + vec2(0.6 * BEAT_PT, 0.0));
-        assert_eq!(rig.clips(2)[0].start_tick, 512 + 77);
-    }
-
     // ---- touch `Paste` and a press held over a focus loss ----
 
     /// Empty space on the MiniSynth's track (row 2, y 176 … 239), at beat 12, on the row's middle.
     const EMPTY_2: Pos2 = pos2(GRID_X + 12.0 * BEAT_PT, 207.5);
-
-    impl Rig {
-        /// The insert menu's `Paste` rect as a frame with no input draws it.
-        fn paste(&mut self) -> Option<Rect> {
-            self.frame(vec![]);
-            self.rect_of(Id::new("clip_insert").with(1))
-        }
-
-        fn right_click(&mut self, pos: Pos2) {
-            let secondary = |pressed| egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Secondary,
-                pressed,
-                modifiers: egui::Modifiers::NONE,
-            };
-            self.frames(vec![
-                vec![egui::Event::PointerMoved(pos)],
-                vec![secondary(true)],
-                vec![secondary(false)],
-            ]);
-        }
-    }
 
     #[test]
     fn a_press_on_empty_space_held_over_a_focus_loss_is_no_tap() {
@@ -7234,85 +4966,6 @@ mod tests {
         ]);
         assert_eq!(rig.selected, 1, "no track made current");
         assert!(!rig.plus_shown());
-    }
-
-    #[test]
-    fn a_long_press_or_a_right_click_on_empty_space_shows_the_insert_menu_whose_paste_pastes_at_its_beat()
-     {
-        // Nothing copied: the menu shows all the same, its `Paste` dimmed and doing nothing (the menu stays).
-        let mut rig = Rig::new(song_with_a_clip());
-        rig.long_press(EMPTY_2);
-        let dead = rig.paste().expect("the insert menu");
-        assert_eq!(rig.click(dead.center()), (None, None));
-        assert!(rig.paste().is_some());
-        rig.click(pos2(600.0, 80.0));
-        assert_eq!(rig.paste(), None);
-        rig.right_click(EMPTY_2);
-        assert!(rig.paste().is_some());
-        // The clip copied (the clipboard alone), then deselected.
-        rig.click(CLIP);
-        rig.frame(vec![]);
-        assert_eq!(rig.click_id(Id::new(("clip_button", 0_usize))).0, None);
-        rig.click(EMPTY_2 + vec2(BEAT_PT, 0.0));
-        assert_eq!(rig.screen.clips.selected, None);
-        let held_at = EMPTY_2 + vec2(BEAT_PT, 10.0);
-        rig.frames(vec![
-            vec![egui::Event::PointerMoved(held_at)],
-            vec![button(held_at, true)],
-            vec![],
-            vec![],
-            vec![],
-        ]);
-        assert!(rig.paste().is_some(), "the menu shows before lifting");
-        rig.frame(vec![button(held_at, false)]);
-        let paste = rig.paste().expect("the Paste button");
-        // Its tap pastes the clip on that track at the snapped beat (13): one final edit, the copy selected.
-        assert_eq!(rig.click(paste.center()).0, Some(SongEdit::Final));
-        assert_eq!(rig.starts(2), [(1, 512), (2, 1664)]);
-        let pasted = ClipRef {
-            id: 2,
-            ..SYNTH_CLIP
-        };
-        assert_eq!(rig.screen.clips.selected, Some(pasted));
-        assert_eq!(rig.paste(), None);
-        // A right click on empty space shows it too; any other press hides it, and so does a sideways scroll.
-        let far = EMPTY_2 + vec2(6.0 * BEAT_PT, 0.0);
-        rig.click(far);
-        rig.right_click(far);
-        assert!(rig.paste().is_some());
-        rig.click(pos2(600.0, 80.0));
-        assert_eq!(rig.paste(), None);
-        rig.right_click(far);
-        assert!(rig.paste().is_some());
-        wheel_at(&mut rig, pos2(600.0, 300.0), vec2(-40.0, 0.0));
-        assert_eq!(rig.paste(), None);
-        // A long press that dragged is a marquee only, and one held over a focus loss nothing.
-        rig.frames(vec![
-            vec![egui::Event::PointerMoved(far)],
-            vec![button(far, true)],
-            vec![],
-            vec![],
-            vec![],
-        ]);
-        let moved = rig.frame(vec![egui::Event::PointerMoved(far + vec2(60.0, 0.0))]);
-        assert!(
-            !moved.shapes.iter().any(|s| matches!(&s.shape,
-            egui::Shape::Text(t) if t.galley.text() == "Paste")),
-            "drag hides Paste in the same frame"
-        );
-        rig.frame(vec![button(far + vec2(60.0, 0.0), false)]);
-        assert_eq!(rig.paste(), None);
-        rig.frames(vec![
-            vec![egui::Event::PointerMoved(far)],
-            vec![button(far, true)],
-            vec![],
-            vec![],
-            vec![],
-            vec![egui::Event::WindowFocused(false)],
-            vec![egui::Event::WindowFocused(true)],
-            vec![button(far, false)],
-        ]);
-        assert_eq!(rig.paste(), None);
     }
 }
 

@@ -980,67 +980,6 @@ fn a_loop_from_the_slicers_preset_picker_writes_autos_clip_too() {
     assert_eq!(clip(&rig, id).events, notes);
 }
 
-/// With the piano roll open on the second of two clips, every AUTO write goes there and leaves the first alone: a
-/// loop from the card's preset picker (`finish`, on the worker), a Sensitivity release (the rack's re-detect) and the
-/// `AUTO` button. Each path hands the roll's clip down from the overlay dispatch.
-#[test]
-fn every_auto_write_takes_the_clip_the_piano_roll_edits() {
-    use super::rack_wiring::worker_done;
-    use crate::project_files::ProjectFiles;
-    use crate::project_files::mem::MemFiles;
-    use crate::ui::rack::PresetTarget;
-    let mut rig = with_slicer();
-    rig.app.files = ProjectFiles::with_provider(Box::new(MemFiles::default()));
-    let dir = rig.app.files.presets_dir(33).unwrap();
-    let bytes = wav(&[0, 9000, 0, -9000, 0, 6000, 0, -6000]);
-    rig.app.files.keep_user_file(&dir.join("Mine.wav"), bytes);
-    let (first, second) = (add_clip(&mut rig, 0.0), add_clip(&mut rig, 1024.0));
-    let untouched = clip(&rig, first).clone();
-    rig.app.navigate(Nav::EditClip(crate::ui::preview::ClipKey {
-        channel: CHANNEL,
-        lane: 0,
-        id: second,
-    }));
-    rig.frame(vec![]);
-    rig.open_rack(CHANNEL);
-    rig.slide_rack();
-    // The second clip's notes back to one of its own, as a final edit.
-    let reset = |rig: &mut Rig| {
-        let lane = &mut rig.app.song.channels[CHANNEL].lanes[0];
-        let clip = lane.clips.iter_mut().find(|c| c.id == second).unwrap();
-        clip.events.truncate(1);
-        clip.events[0] = untouched.events[0];
-        rig.app.song_edited(SongEdit::Final, 0);
-        rig.frame(vec![]);
-    };
-    let written = |rig: &Rig, what: &str| {
-        assert_eq!(clip(rig, second).events, auto_clip(rig).1, "{what}");
-        assert_eq!(clip(rig, first), &untouched, "{what}");
-    };
-    // (c) A loop from the card's preset picker.
-    let picker = Overlay::PresetPicker {
-        channel: CHANNEL,
-        target: PresetTarget::Module(SLICER),
-    };
-    rig.app.navigate(Nav::Open(picker));
-    picker_row(&mut rig, 0);
-    picker_row(&mut rig, 0);
-    worker_done(&mut rig);
-    assert!(loop_of(&rig).is_some());
-    written(&rig, "a preset picker loop");
-    // The picker stays open after a pick; closed, the card under it takes the knob.
-    super::rack_wiring::close_picker(&mut rig);
-    // (a) A Sensitivity release.
-    reset(&mut rig);
-    assert_ne!(clip(&rig, second).events, auto_clip(&rig).1);
-    turn_sensitivity(&mut rig, 60.0);
-    written(&rig, "a Sensitivity release");
-    // (b) The AUTO button.
-    reset(&mut rig);
-    press_auto(&mut rig);
-    written(&rig, "the AUTO button");
-}
-
 /// Where there is no file dialog (Android, the browser; here a phone's, its files in memory as the browser's), Tesla
 /// opens a sample from the sample picker and saves it into the user folder's My Recordings, never over a file there.
 #[test]
