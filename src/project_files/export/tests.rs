@@ -509,6 +509,68 @@ fn the_archive_finds_the_user_files_of_stretched_slots_soundfonts_and_dw_program
     assert_eq!(entries[2].data, b"c4");
 }
 
+/// #168: a built-in Lemon sampler names its samples in its plugin's state; the archive takes those in the user folder,
+/// and the song it opens plays them from there.
+#[test]
+fn the_archive_takes_the_samples_of_the_lemon_samplers() {
+    use crate::project_files::lemon_samples::files_of;
+    use crate::project_files::lemon_samples::tests::{drums, plugins_in, sampler, slicer, song_of};
+    let (mut files, mem) = files();
+    let samples = [
+        "My Samples/a.wav",
+        "My Samples/loop.wav",
+        "My Samples/Kit/snare.wav",
+        "My Samples/Unused.wav",
+    ];
+    for path in samples {
+        files.keep_user_file(Path::new(path), path.as_bytes().to_vec());
+    }
+    let song = song_of(vec![
+        sampler("My Samples/a.wav"),
+        slicer("My Samples/loop.wav", ""),
+        // A sample that is gone stays out.
+        drums(
+            &[(2, "My Samples/Kit/snare.wav"), (3, "My Samples/gone.wav")],
+            &[],
+        ),
+    ]);
+    files.export(&song, Zip, "Kit", false);
+    let zip = written(&mem, "My Songs/Kit.zip").expect("written");
+    let entries = crate::zip::read(&zip, 1 << 30).unwrap();
+    let names: Vec<_> = entries.iter().map(|e| e.path.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Kit.flm",
+            "My Samples/Kit/snare.wav",
+            "My Samples/a.wav",
+            "My Samples/loop.wav"
+        ]
+    );
+    assert_eq!(entries[2].data, b"My Samples/a.wav");
+    // Opened elsewhere, each path leads to the archive's copy.
+    let mut other = ProjectFiles::with_provider(Box::new(MemFiles::with_file("Kit.zip", &zip)));
+    other.open();
+    let opened = other.poll(&mut Song::default()).expect("the song opens");
+    let here = |parts: &[&str]| {
+        let dir = Path::new(crate::project_files::UNZIPPED_FOLDER).join("Kit");
+        let file = parts.iter().fold(dir, |at, part| at.join(part));
+        file.to_string_lossy().into_owned()
+    };
+    let named: Vec<_> = plugins_in(&opened).into_iter().map(files_of).collect();
+    assert_eq!(
+        named,
+        [
+            vec![here(&["My Samples", "a.wav"])],
+            vec![here(&["My Samples", "loop.wav"])],
+            vec![
+                here(&["My Samples", "Kit", "snare.wav"]),
+                "My Samples/gone.wav".to_owned()
+            ],
+        ]
+    );
+}
+
 #[test]
 fn a_test_slice_is_spent_after_a_fixed_number_of_blocks() {
     let mut over = slice();
