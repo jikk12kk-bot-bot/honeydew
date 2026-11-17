@@ -119,14 +119,12 @@ fn older_version(a: &str, b: &str) -> bool {
 /// ([`BUILD`]) takes the highest-numbered `android-debug-<n>`, any other build the newest versioned release that is
 /// no pre-release. Drafts never.
 fn choose(all: Vec<Release>) -> Option<Release> {
-    let all = all.into_iter().filter(|r| !r.draft);
+    let mut all = all.into_iter().filter(|r| !r.draft);
     match build_number() {
         Some(_) => all
             .filter(|r| debug_number(&r.tag_name).is_some())
             .max_by_key(|r| debug_number(&r.tag_name)),
-        None => all
-            .filter(|r| !r.prerelease && debug_number(&r.tag_name).is_none())
-            .next(),
+        None => all.find(|r| !r.prerelease && debug_number(&r.tag_name).is_none()),
     }
 }
 

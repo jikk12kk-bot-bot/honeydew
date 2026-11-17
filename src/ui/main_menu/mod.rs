@@ -64,8 +64,6 @@ const PAD: f32 = 0.5;
 const GAP: f32 = 0.25;
 /// `Help`'s and the close X's cells at the header's ends.
 const HEADER_CELL: f32 = 2.0;
-/// The close X's icon size factor.
-const CLOSE_ICON: f32 = 0.6;
 /// A tab under the mouse: `text` at this alpha over its cell.
 const TAB_HOVER_ALPHA: f32 = 0.05;
 /// A tab label too wide for its cell keeps this many characters after its middle ellipsis.

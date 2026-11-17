@@ -39,6 +39,7 @@ pub struct Media {
     #[cfg(feature = "video")]
     player: Option<crate::video::player::Player>,
     video: Option<TextureHandle>,
+    #[cfg(feature = "video")]
     serial: u64,
     black: bool,
     /// The video's length in seconds and size, once known.

@@ -155,7 +155,7 @@ pub fn all() -> &'static [Preset] {
             .chain(citrus)
             .filter_map(|(rel, bytes)| parse(rel, bytes))
             .collect();
-        all.sort_by_cached_key(|p| order(p));
+        all.sort_by_cached_key(order);
         all
     })
 }

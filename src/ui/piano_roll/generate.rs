@@ -196,8 +196,7 @@ pub(crate) fn show(
         m,
         rect,
     );
-    let backdrop = crate::ui::backdrop(ctx, id);
-    let outside = backdrop.clicked() || backdrop.secondary_clicked();
+    let outside = crate::ui::backdrop_open_to_play(ctx, id);
     let mut close = (crate::ui::close_pressed(ctx) || outside).then_some(Close::Cancel);
     Area::new(id)
         .order(Order::Foreground)

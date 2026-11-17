@@ -2107,6 +2107,8 @@ impl HoneydewApp {
         // The unsaved changes are kept for the next start, written before the app is gone.
         let _ = self.files.keep_session(&self.song, f64::INFINITY, true);
         self.files.finish_session();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.files.join_autosave();
         // The plugins' editors close before their windows go.
         crate::plugins::song_replaced();
         if self.settings_unflushed

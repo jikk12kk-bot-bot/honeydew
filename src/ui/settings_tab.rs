@@ -532,13 +532,13 @@ impl SettingsTab {
         let rows: Vec<_> = rows
             .iter()
             .filter(|r| {
-                let web = cfg!(target_arch = "wasm32");
+                let (web, desktop) = (cfg!(target_arch = "wasm32"), cfg!(desktop));
                 !(web
                     && matches!(
                         r.kind,
                         Kind::Dropdown(Choice::SampleMemory) | Kind::AudioInput
                     ))
-                    && (cfg!(desktop)
+                    && (desktop
                         || !matches!(
                             r.kind,
                             Kind::Dropdown(Choice::SoundMode) | Kind::InstallSounds

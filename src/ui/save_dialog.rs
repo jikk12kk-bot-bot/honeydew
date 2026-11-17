@@ -362,6 +362,8 @@ impl SaveDialog {
     }
 
     /// FLP's `Include rendered audio` (the song's dialog) or MIDI's `Apply note effects` shows, level with `Save`.
+    // Not consulted by the layout at the moment (see the save dialog's narrow-band tests).
+    #[allow(dead_code)]
     fn shows_toggle(&self) -> bool {
         let song = self.preset.is_none() && self.fixed.is_none();
         self.format == ExportFormat::Midi || (song && self.format == ExportFormat::Flp)
