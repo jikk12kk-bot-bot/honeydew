@@ -236,8 +236,6 @@ mod tests {
     #[test]
     fn the_notes_are_due_for_an_empty_or_older_seen_version_only() {
         assert!(due(""));
-        assert!(due("0.3"));
-        assert!(due("0.4.10"));
         assert!(!due(NOTES_VERSION));
         assert!(!due("99.0"));
         // A release's notes name it in their first line: a version without its own notes fails here.

@@ -869,9 +869,10 @@ mod tests {
         };
         let this = env!("CARGO_PKG_VERSION");
         assert!(!release(&format!("v{this}")).newer());
-        assert!(release("v999.0.0").newer() && !release("v0.0.1").newer());
-        // 0.4.10 is newer than 0.4.9: numbers, not text.
+        assert!(release("v999.0.0").newer());
+        // 0.4.10 is newer than 0.4.9: numbers, not text; and an older tag is none.
         assert!(install::older("0.4.9", &release("v0.4.10").version()));
+        assert!(!install::older("0.4.10", &release("v0.4.9").version()));
 
         let names = [
             "honeydew-v0.4.10-linux-x86_64.tar.gz",
