@@ -1,0 +1,69 @@
+name: Diagnose (temporary)
+
+on:
+  push:
+    branches: ["arena/3864cc73-honeydew"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.0
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            tools/content-build
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libclang-dev
+      - name: Run gates and report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          report() { # name, logfile, status
+            body=$(printf '### linux: %s (exit %s)\n```\n%s\n```\n' "$1" "$3" "$(grep -vE '^\s*(Compiling|Checking|Downloaded|Downloading|Fresh) ' "$2" | tail -c 60000)")
+            gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" -f body="$body" >/dev/null
+          }
+          run() { local n=$1; shift; set +e; "$@" > "/tmp/$n.log" 2>&1; s=$?; set -e; report "$n" "/tmp/$n.log" "$s"; }
+          run fmt cargo fmt --check
+          run clippy cargo clippy --workspace --all-targets -- -D warnings
+          run test cargo test --workspace
+          run wasm cargo check --workspace --target wasm32-unknown-unknown
+          run content cargo test --manifest-path tools/content-build/Cargo.toml
+
+  multicore:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.0
+      - uses: Swatinem/rust-cache@v2
+      - name: libclang
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $llvm = 'C:\Program Files\LLVM\bin'
+          if (-not (Test-Path "$llvm\libclang.dll")) { choco install llvm -y --no-progress }
+          "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
+      - name: Test and report
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          cargo test --locked --lib parallel_racks_match_sequential_through_sends_and_live_toggle > /tmp/mc.log 2>&1
+          s=$?
+          body=$(printf '### %s: multicore (exit %s)\n```\n%s\n```\n' "$RUNNER_OS" "$s" "$(grep -vE '^\s*(Compiling|Checking|Downloaded|Downloading|Fresh) ' /tmp/mc.log | tail -c 60000)")
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" -f body="$body" >/dev/null
