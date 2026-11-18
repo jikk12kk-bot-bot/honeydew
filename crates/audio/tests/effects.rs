@@ -245,7 +245,10 @@ fn parametric_equalizer_band_sits_at_its_shown_frequency() {
     let (at, low, high) = (gain_db(1500.0), gain_db(750.0), gain_db(3000.0));
     // The most lift there, and an octave off either way far less: none sits an octave low.
     assert!(at > 10.0, "1.5 kHz: {at} dB");
-    assert!(at > low + 6.0 && at > high + 6.0, "{low} / {at} / {high} dB");
+    assert!(
+        at > low + 6.0 && at > high + 6.0,
+        "{low} / {at} / {high} dB"
+    );
 }
 
 #[test]
