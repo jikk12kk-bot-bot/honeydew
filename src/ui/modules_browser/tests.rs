@@ -318,6 +318,8 @@ fn search_keeps_matching_entries_and_hides_empty_sections() {
             "Transistor Bass",
             "ECHO",
             "Trance Delay",
+            "FILTER",
+            "Spectral Ceiling",
             "MISC",
             "Tremolo",
             "NOTE EFFECT",
