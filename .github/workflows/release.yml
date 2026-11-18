@@ -9,6 +9,12 @@ on:
         description: Existing release tag to rebuild
         required: true
         type: string
+      platforms:
+        description: What to build (android = the signed Android APKs only)
+        required: false
+        default: all
+        type: choice
+        options: [all, android]
 
 permissions:
   contents: write
@@ -26,6 +32,7 @@ env:
 
 jobs:
   desktop:
+    if: inputs.platforms != 'android'
     strategy:
       fail-fast: false
       matrix:
@@ -140,6 +147,7 @@ jobs:
   # Alpine and other musl Linux: built in the pinned Alpine image (tools/alpine-build.sh), packaged as the glibc Linux
   # tarballs are, without an AppImage.
   alpine:
+    if: inputs.platforms != 'android'
     strategy:
       fail-fast: false
       matrix:
@@ -168,6 +176,7 @@ jobs:
   # The sound library on its own, once per release: the parts joined, `content/` at its top, without the web's
   # gzipped copies (`*.gz`). A job of its own, so no build's failure can cost it, nor its upload a build's downloads.
   sounds:
+    if: inputs.platforms != 'android'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -220,6 +229,7 @@ jobs:
           gh release edit "$rel" --draft=false
 
   web:
+    if: inputs.platforms != 'android'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -324,6 +334,7 @@ jobs:
   # iOS (experimental): two unsigned IPAs, with and without the sounds (tools/ios-dist.sh), which AltStore, SideStore and
   # Sideloadly sign with the user's own Apple ID.
   ios:
+    if: inputs.platforms != 'android'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
