@@ -782,7 +782,7 @@ impl MainScreen {
                 Id::new(("track_header", i)),
                 Sense::click(),
             );
-            let track = (i, channel, lane, at);
+            let track = (i, channel, lane, at, header);
             self.header_gestures(ui, app, &mut response, track, scroll, tracks, actions);
             // A folder row's lane holds no clips of its own.
             if !visible(at) || tracks[i].folder_row.is_some() {
@@ -1057,9 +1057,11 @@ impl MainScreen {
         }
     }
 
-    /// The gestures of the header of track row `i` (track `lane` of `channel`) of `tracks`, with a vertical-only calm
-    /// zone ([`gesture::vertical`]):
-    /// - a tap makes a track current (and its channel), and on the current track toggles the header column;
+    /// The gestures of the header `header` (unclipped) of track row `i` (track `lane` of `channel`) of `tracks`, with a
+    /// vertical-only calm zone ([`gesture::vertical`]):
+    /// - a tap makes a track current (and its channel), and on the current track toggles the header column; on a track
+    ///   folder's row, a tap on its disclosure triangle opens or closes the folder, and anywhere else (its folder glyph)
+    ///   toggles the header column ([`mini_mixer::folder_cell`]);
     /// - a hold (300 ms) makes the track current and shows nothing; released without dragging it opens the track's menu
     ///   at the release point; a channel's primary row (any channel's) dragged vertically moves the channel, live by
     ///   [`drag_step`], and its drop is [`ScreenActions::reorder`];
@@ -1071,7 +1073,7 @@ impl MainScreen {
         ui: &egui::Ui,
         app: &mut AppCtx,
         response: &mut egui::Response,
-        (i, channel, lane, at): (usize, usize, usize, f32),
+        (i, channel, lane, at, header): (usize, usize, usize, f32, Rect),
         scroll: f32,
         tracks: &[TrackRow],
         actions: &mut ScreenActions,
@@ -1079,12 +1081,26 @@ impl MainScreen {
         let (m, row_h) = (app.cx.m, self.row_h(app.cx.m));
         let p = gesture::press(ui, response, m, gesture::vertical);
         self.header_busy |= p.long || p.held;
-        // A track folder's row: a tap opens or closes it, a hold drags the whole folder or opens its menu.
+        // Where the press went down: egui forgets it in the release frame.
+        let origin_id = response.id.with("press origin");
+        if response.is_pointer_button_down_on()
+            && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+        {
+            ui.data_mut(|d| d.insert_temp(origin_id, origin));
+        }
+        // A track folder's row: a tap on its triangle opens or closes it, on its glyph the header column; a hold drags
+        // the whole folder or opens its menu.
         let folder = tracks[i].folder_row;
         let whole = folder.is_some();
         if p.tap {
+            let origin = ui.data(|d| d.get_temp::<Pos2>(origin_id));
+            let tapped = origin.or(response.interact_pointer_pos());
+            let triangle = mini_mixer::folder_cell(header, m).1;
             if let Some(f) = folder {
-                actions.folder = Some((f, FolderOp::Toggle));
+                match tapped.is_some_and(|pos| triangle.contains(pos)) {
+                    true => actions.folder = Some((f, FolderOp::Toggle)),
+                    false => self.column.1 = 1.0 - self.column.1,
+                }
             } else if (channel, lane) == self.clips.current_track(app) {
                 self.column.1 = 1.0 - self.column.1;
             } else {

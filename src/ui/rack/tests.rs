@@ -437,7 +437,7 @@ fn an_instrument_the_channel_cannot_take_is_skipped_and_counted() {
 
 #[test]
 fn a_rack_preset_skips_module_ids_above_52_like_paste_and_counts_them() {
-    // Module ids above 52 are skipped, by the same attach routine as `Paste`.
+    // Unknown module ids above 52 are skipped, by the same attach routine as `Paste`.
     let end = Some(InsertAt::End);
     let cases: [(_, &[u16]); 3] = [
         (None, &[11]),
@@ -475,6 +475,48 @@ fn a_rack_preset_skips_module_ids_above_52_like_paste_and_counts_them() {
         (Outcome::ChainChanged, 1)
     );
     assert_eq!(types(&ch.rack), [52]);
+}
+
+#[test]
+fn a_rack_preset_loads_honeydews_own_modules_and_plugins() {
+    use crate::song::plugin::{PLUGIN_EFFECT, PLUGIN_INSTRUMENT};
+    use honeydew_audio::{de_esser::DE_ESSER, dynamic_eq::DYNAMIC_EQ, lemon::REVERB};
+    // A Lemon plugin effect, Lemon Reverb, the Dynamic EQ and the De-esser: none is skipped any more.
+    let own = [PLUGIN_EFFECT, REVERB, DYNAMIC_EQ, DE_ESSER];
+    let mut ch = channel(ChannelKind::Rack, &[0, 6]);
+    assert_eq!(
+        load_rack(&mut ch, &preset(&own), None),
+        (Outcome::ChainChanged, 0)
+    );
+    assert_eq!(
+        types(&ch.rack),
+        [0, PLUGIN_EFFECT, REVERB, DYNAMIC_EQ, DE_ESSER]
+    );
+    // A plugin instrument (a Lemon sampler) is an instrument: it takes the channel's instrument's place, under the
+    // note effects, above the effects ...
+    let mut ch = channel(ChannelKind::Rack, &[51, 0, 6]);
+    assert_eq!(
+        load_rack(&mut ch, &preset(&[PLUGIN_INSTRUMENT, 11]), None),
+        (Outcome::ChainChanged, 0)
+    );
+    assert_eq!(types(&ch.rack), [PLUGIN_INSTRUMENT, 11]);
+    let mut ch = channel(ChannelKind::Rack, &[51]);
+    load_rack(&mut ch, &preset(&[11, PLUGIN_INSTRUMENT]), None);
+    assert_eq!(types(&ch.rack), [PLUGIN_INSTRUMENT, 11]);
+    // ... and is skipped where no instrument goes, as a synth is; a paste follows the same rule.
+    let mut ch = channel(ChannelKind::EffectTrack, &[]);
+    assert_eq!(
+        load_rack(&mut ch, &preset(&[PLUGIN_INSTRUMENT, PLUGIN_EFFECT]), None),
+        (Outcome::ChainChanged, 1)
+    );
+    assert_eq!(types(&ch.rack), [PLUGIN_EFFECT]);
+    let mut ch = channel(ChannelKind::Drums, &[]);
+    let clipboard = preset(&[PLUGIN_INSTRUMENT, PLUGIN_EFFECT, REVERB]);
+    assert_eq!(
+        paste(&mut ch, &clipboard, InsertAt::End),
+        Outcome::ChainChanged
+    );
+    assert_eq!(types(&ch.rack), [PLUGIN_EFFECT, REVERB]);
 }
 
 #[test]

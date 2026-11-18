@@ -5,7 +5,9 @@
 //! A right label is drawn in full from 1.7 U, past the rect when it is longer (`HQ`, `Pulse Mode`, `Inv. Fdbk`):
 //! plain text, like every widget text.
 
-use eframe::egui::{Align2, Pos2, Rect, Response, Sense, Ui, WidgetInfo, WidgetType, pos2, vec2};
+use eframe::egui::{
+    Align2, Pos2, Rect, Response, Sense, Ui, Vec2, WidgetInfo, WidgetType, pos2, vec2,
+};
 
 use super::{Control, clean, context_menu, toggle_on};
 use crate::metrics::Metrics;
@@ -39,6 +41,26 @@ fn switch(center: Pos2, on: bool, flat: bool, t: f32) -> (Rect, Pos2) {
     };
     let pill = Rect::from_center_size(center, size);
     (pill, center + if on { step } else { -step })
+}
+
+/// The scale of the pill's t that fits it in the room `half` it has around its centre (the distance to the nearer edge
+/// on each axis): 1 when it fits as it is, else shrunk, both ways alike, until it does (a short mixer row, a drum strip
+/// at a small zoom), so a neighbour's pill never runs into it and a clip never leaves only its dot.
+fn fit(flat: bool, half: Vec2, t: f32) -> f32 {
+    // Half the pill: 5 t × 9 t standing, 9 t × 5 t flat.
+    let need = t * if flat { vec2(9.0, 5.0) } else { vec2(5.0, 9.0) };
+    (half.x / need.x).min(half.y / need.y).clamp(0.0, 1.0)
+}
+
+/// The pill's room around `center`: to `c.rect`'s nearer edge on each axis (a label-above toggle's pill may cross its
+/// strips, as it always has; only the rect bounds it).
+fn room(c: &Control, center: Pos2) -> Vec2 {
+    let r = c.rect;
+    vec2(
+        (center.x - r.left()).min(r.right() - center.x),
+        (center.y - r.top()).min(r.bottom() - center.y),
+    )
+    .max(Vec2::ZERO)
 }
 
 /// The pill's centre and, for a right label, the left-centre point the label hangs from. A label-above toggle has
@@ -114,7 +136,7 @@ pub fn pill_toggle(
         let font = m.font_id(c.label_font);
         painter.text(at, Align2::LEFT_CENTER, c.label, font, c.channel);
     }
-    let t = m.t();
+    let t = m.t() * fit(pill.flat, room(c, center), m.t());
     let on = toggle_on(v) != pill.inverted;
     let (pill, dot) = switch(center, on, pill.flat, t);
     painter.rect_filled(pill, 5.0 * t, colors.control_fill.to_color32());
@@ -142,6 +164,20 @@ mod tests {
         let (pill_off, off) = switch(c, false, false, 2.0);
         assert_eq!(pill_off, pill);
         assert_eq!(off, pos2(50.0, 68.0));
+    }
+
+    #[test]
+    fn a_pill_too_big_for_its_room_shrinks_to_fit() {
+        let t = 2.0;
+        // Room enough (half the pill is 10 × 18 standing, 18 × 10 flat): as it is.
+        assert_eq!(fit(false, vec2(24.0, 20.0), t), 1.0);
+        assert_eq!(fit(true, vec2(24.0, 20.0), t), 1.0);
+        // A short row: shrunk to its height, whichever way it lies.
+        assert_eq!(fit(false, vec2(24.0, 9.0), t), 0.5);
+        assert_eq!(fit(true, vec2(24.0, 5.0), t), 0.5);
+        // A narrow one: to its width.
+        assert_eq!(fit(false, vec2(5.0, 30.0), t), 0.5);
+        assert_eq!(fit(false, vec2(0.0, 0.0), t), 0.0);
     }
 
     #[test]
