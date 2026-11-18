@@ -432,12 +432,7 @@ fn removing_a_drum_row_clears_the_undo_history() {
     rig.click_id(steps("delete").with((0_usize, 1_usize)));
     assert_eq!(rig.kit().slots.len(), 3);
     // The menu made the Hat's row current, which sounds nothing.
-    assert_eq!(
-        rig.take(),
-        [
-            "ReplaceSong adopting no-resync"
-        ]
-    );
+    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
     assert!(!rig.app.history.can_undo());
     assert!(!rig.app.history.can_redo());
 }
@@ -453,12 +448,7 @@ fn clear_and_fill_take_hits_away_with_no_re_sync() {
     // Fill each 4 step: the hit on step 1 goes. The menu makes the Snare's row current, silently.
     rig.row_menu(1, (1, 2));
     assert_eq!(rig.hits(), [(1, 0), (1, 128), (1, 256), (1, 384)]);
-    assert_eq!(
-        rig.take(),
-        [
-            "ReplaceSong adopting no-resync"
-        ]
-    );
+    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
     rig.row_menu(1, (1, 3));
     assert_eq!(rig.hits(), []);
     assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
@@ -492,12 +482,7 @@ fn the_row_menu_edits_the_pattern_and_the_kit_through_the_funnel() {
     // Fill each 4 step, on the Snare, whose row the menu makes current (silently).
     rig.row_menu(1, (1, 2));
     assert_eq!(rig.hits(), [(1, 0), (1, 128), (1, 256), (1, 384)]);
-    assert_eq!(
-        rig.take(),
-        [
-            "ReplaceSong adopting no-resync"
-        ]
-    );
+    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
     // Clone: the Snare's copy is the kit's pad 2 and gets the Snare's hits; the later pads move down.
     rig.row_menu(1, (0, 3));
     let names =
@@ -2846,9 +2831,7 @@ mod samples {
             // The menu made the Snare's row current, silently.
             assert_eq!(
                 rig.take(),
-                [
-                    "ReplaceSong adopting no-resync"
-                ],
+                ["ReplaceSong adopting no-resync"],
                 "grid {grid}"
             );
             rig.click(pos2(1000.0, 300.0));

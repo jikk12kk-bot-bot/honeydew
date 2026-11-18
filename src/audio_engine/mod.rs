@@ -1742,7 +1742,10 @@ impl SongAudioEngine {
     /// sustain pedal), a covered one sounds on. The pads ring on as they are (a one-shot rings out by itself).
     pub(super) fn release_orphan_notes(&mut self) {
         for channel in 0..self.held.len() {
-            for row in 0..self.instruments[channel].len().min(self.held[channel].len()) {
+            for row in 0..self.instruments[channel]
+                .len()
+                .min(self.held[channel].len())
+            {
                 let id = self.instruments[channel][row].0;
                 for key in 0..=127 {
                     let k = usize::from(key);
