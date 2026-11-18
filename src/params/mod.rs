@@ -19,6 +19,7 @@ mod inst_tests;
 mod instruments;
 mod lemon;
 mod modulator;
+mod spectral_ceiling;
 #[cfg(test)]
 mod spec_rows;
 #[cfg(test)]
@@ -44,6 +45,8 @@ pub(crate) use instruments::GMSYNTH_WAVESHAPES;
 pub use lemon::MODULES as LEMON_MODULES;
 /// The Modulator, Honeydew's own effect (`honeydew_audio::modulator`).
 pub use modulator::MODULE as MODULATOR;
+/// Spectral Ceiling, Honeydew's own effect (`honeydew_audio::spectral_ceiling`).
+pub use spectral_ceiling::MODULE as SPECTRAL_CEILING;
 
 /// What a module does with the signal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -312,13 +315,15 @@ pub fn instruments() -> impl Iterator<Item = &'static ModuleSpec> {
 }
 
 /// The module with type id `id` (effect, note effect, instrument, a plugin module, one of Lemon Studio's effects, the
-/// Dynamic EQ, the Modulator, the De-esser, Denoise or Half Time), or `None` for ids that are not registered.
+/// Dynamic EQ, the Modulator, the De-esser, Denoise, Half Time or Spectral Ceiling), or `None` for ids that are not
+/// registered.
 pub fn module_spec(id: u16) -> Option<&'static ModuleSpec> {
     modules()
         .chain(instruments())
         .chain(&PLUGINS)
         .chain(&LEMON_MODULES)
         .chain([&DYNAMIC_EQ, &MODULATOR, &DE_ESSER, &DENOISE, &HALF_TIME])
+        .chain([&SPECTRAL_CEILING])
         .find(|m| m.id == id)
 }
 

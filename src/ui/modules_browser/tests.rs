@@ -54,6 +54,7 @@ const SPEC: &[(&str, &[&str])] = &[
             "Filter",
             "Graphic EQ",
             "Spacer",
+            "Spectral Ceiling",
             "Spreader",
             "Stereoizer",
             "Tuned EQ",
@@ -178,6 +179,7 @@ fn every_current_effect_is_listed_once_and_legacy_ids_never() {
     let current: Vec<u16> = (params::modules().chain(&params::LEMON_MODULES))
         .chain([&params::DYNAMIC_EQ, &params::MODULATOR])
         .chain([&params::DE_ESSER, &params::DENOISE, &params::HALF_TIME])
+        .chain([&params::SPECTRAL_CEILING])
         .filter(|m| !m.legacy)
         .map(|m| m.id)
         .collect();
@@ -938,7 +940,7 @@ fn top_level_lists_the_actions_then_the_instruments_then_the_effects_each_by_typ
             "Randomizer",
             "Scale",
             "Arpeggiator",
-            // Honeydew's own: 1002 … 1008, then the built-in plugin.
+            // Honeydew's own: 1002 … 1009, then the built-in plugin.
             "Lemon Reverb",
             "Lemon Limiter",
             "Dynamic EQ",
@@ -946,6 +948,7 @@ fn top_level_lists_the_actions_then_the_instruments_then_the_effects_each_by_typ
             "De-esser",
             "Denoise",
             "Half Time",
+            "Spectral Ceiling",
             "Lemon Balance",
             "Lemon Chorus",
             "Lemon Delay",
