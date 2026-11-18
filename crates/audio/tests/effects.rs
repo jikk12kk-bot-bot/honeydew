@@ -225,6 +225,33 @@ fn parametric_equalizer_can_target_only_the_left_channel() {
 }
 
 #[test]
+fn parametric_equalizer_band_sits_at_its_shown_frequency() {
+    // Band 1 a full-gain peak, 0.25 octave wide, at 32·608.8^0.6 ≈ 1.50 kHz (the panel's "1.50 kHz").
+    let gain_db = |hz: f32| {
+        let mut effect = AudioEffect::new(3, CTX.sample_rate).unwrap();
+        settle_common(&mut effect);
+        effect.set_parameter(1, 1.0).unwrap();
+        effect.set_parameter(2, 0.6).unwrap();
+        effect.set_parameter(3, 0.0).unwrap();
+        effect.set_parameter(4, 0.5).unwrap();
+        let tone: Vec<f32> = (0..48_000)
+            .map(|i| 0.1 * (std::f32::consts::TAU * hz * i as f32 / CTX.sample_rate).sin())
+            .collect();
+        let (mut left, mut right) = (tone.clone(), tone.clone());
+        effect.process(&mut left, &mut right, CTX).unwrap();
+        let rms = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
+        20.0 * (rms(&left[24_000..]) / rms(&tone[24_000..])).log10()
+    };
+    let (at, low, high) = (gain_db(1500.0), gain_db(750.0), gain_db(3000.0));
+    // The most lift there, and an octave off either way far less: none sits an octave low.
+    assert!(at > 10.0, "1.5 kHz: {at} dB");
+    assert!(
+        at > low + 6.0 && at > high + 6.0,
+        "{low} / {at} / {high} dB"
+    );
+}
+
+#[test]
 fn equalizer_channel_and_kind_truncate_between_steps() {
     // Channel trunc(4v), Kind trunc(2v); Channel 0.2 is Both, Kind 0.3
     // LowShelf (the panel shows Left and Peak there).

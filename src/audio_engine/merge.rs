@@ -76,8 +76,22 @@ impl SongAudioEngine {
         } else {
             self.set_changed_params(old);
             self.keep_bend(old);
+            self.release_orphans();
         }
         self.sync_controllers(old);
+    }
+
+    /// Without a re-sync, while the transport rolls: each key an instrument holds for the sequencer that no note of
+    /// this song covers at the playhead any more gets its note-off ([`Self::release_orphan_notes`]), so no note is left
+    /// without one, to hang (a Quiet edit's new note that stretched its clip's loop moves the repeats' notes, and
+    /// their note-offs with them). A key still covered sounds on untouched, the pads ring on, and nothing starts.
+    fn release_orphans(&mut self) {
+        let held = |rows: &Vec<[u8; 128]>| rows.iter().any(|row| row.iter().any(|&n| n > 0));
+        if self.rolling() && (self.held.iter().any(held) || self.held_keys.iter().any(|&k| k != 0))
+        {
+            self.cover_to(self.action_index);
+            self.release_orphan_notes();
+        }
     }
 
     /// Without a re-sync, a live Pitch Bend or Aftertouch plays on as `old` had it: only a re-sync and Stop put it back

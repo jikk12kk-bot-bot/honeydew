@@ -66,6 +66,9 @@ impl HoneydewApp {
         };
         match job {
             Ok(job) => {
+                // The busy screen hides the editors, which will not see their sounds end: every note the keys,
+                // the pads and the shown roll sound stops now, as when the app is hidden.
+                self.stop_edit_sounds();
                 self.navigate(Nav::Open(Overlay::Busy { title: job.title() }));
                 self.export = Some(job.with_tags(tags));
             }
