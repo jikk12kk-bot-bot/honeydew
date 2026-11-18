@@ -844,3 +844,53 @@ fn a_tremolo_max_tracks_slider_below_min_lowers_min_in_the_song() {
     assert!((params[3] - 0.3).abs() < 1e-3, "{}", params[3]);
     assert_eq!(params[4], params[3], "Min follows Max down");
 }
+
+// ---- zoomed out ----
+
+#[test]
+fn a_folder_cell_stacks_the_triangle_under_the_glyph_or_beside_it_in_a_short_row() {
+    let m = m(1.0);
+    // The cell is 1.5 U right of the 0.25 U (8 px) folder bar: x 8–48.
+    let (glyph, triangle) = folder_cell(r(0.0, 0.0, 13.5 * U, 60.0), &m);
+    assert_eq!((glyph, triangle), (r(8.0, 0.0, 48.0, 36.0), r(8.0, 36.0, 48.0, 60.0)));
+    // Shorter than wide: side by side, the triangle on the right.
+    let (glyph, triangle) = folder_cell(r(0.0, 100.0, 1.5 * U, 120.0), &m);
+    assert_eq!(
+        (glyph, triangle),
+        (r(8.0, 100.0, 30.0, 120.0), r(30.0, 100.0, 48.0, 120.0))
+    );
+}
+
+#[test]
+fn the_disclosure_triangle_fits_a_small_part() {
+    let part = r(0.0, 0.0, 40.0, 40.0);
+    let c = part.center();
+    // Room enough: 2 t from the centre, pointing down while open.
+    assert_eq!(
+        disclosure(part, true, T),
+        [
+            c + vec2(-2.0 * T, -T),
+            c + vec2(2.0 * T, -T),
+            c + vec2(0.0, 2.0 * T)
+        ]
+    );
+    // A 10-point part: 2.5 points, right while closed.
+    let small = r(0.0, 0.0, 10.0, 10.0);
+    let c = small.center();
+    assert_eq!(
+        disclosure(small, false, T),
+        [c + vec2(-1.25, -2.5), c + vec2(2.5, 0.0), c + vec2(-1.25, 2.5)]
+    );
+}
+
+#[test]
+fn a_row_too_short_for_its_name_over_the_controls_shows_none() {
+    let m = m(1.0);
+    let font = m.font_id(FontSize::Pt8).size;
+    assert_eq!(font, 16.0);
+    // Half the row must take t, the 8 pt line and the 6 t the controls reach from the middle: 30 points.
+    assert!(name_fits(r(0.0, 0.0, 10.0, ROW_H - 1.0), font, &m));
+    assert!(name_fits(r(0.0, 0.0, 10.0, 60.0), font, &m));
+    assert!(!name_fits(r(0.0, 0.0, 10.0, 59.0), font, &m));
+    assert!(!name_fits(r(0.0, 0.0, 10.0, 1.5 * U), font, &m));
+}

@@ -2031,3 +2031,30 @@ fn save_as_midi_proposes_the_channel_name_made_a_file_name() {
         std::path::Path::new("My MIDI").join(format!("{name}.mid"))
     );
 }
+
+#[test]
+fn a_folder_rows_triangle_opens_and_closes_it_and_its_glyph_the_header_column() {
+    let mut rig = Rig::new();
+    rig.app.song.add_channel(crate::song::ChannelKind::Drums);
+    let channel = rig.app.song.channels.len() - 1;
+    let folder = rig.app.song.new_folder(Some(channel)).expect("a folder");
+    rig.frame(vec![]);
+    let rows = crate::ui::main_screen::track_rows(&rig.app.song);
+    let row = (rows.iter().position(|r| r.folder_row == Some(folder))).expect("its row");
+    // The collapsed column's cell, right of the 0.25 U folder bar: the glyph in its top 60 %, the triangle under it.
+    let top = RULER + row as f32 * 2.0 * U;
+    let (glyph, triangle) = (pos2(0.9 * U, top + 0.5 * U), pos2(0.9 * U, top + 1.6 * U));
+    let open = |rig: &Rig| rig.app.song.file.folders[folder].open;
+    rig.click(triangle);
+    assert!(!open(&rig));
+    assert_eq!(rig.app.main_screen.column.1, 0.0);
+    rig.click(triangle);
+    assert!(open(&rig));
+    // The glyph opens the header column (fader, pan, mute, solo), and closes it again; the folder stays open.
+    rig.click(glyph);
+    assert_eq!(rig.app.main_screen.column.1, 1.0);
+    assert!(open(&rig));
+    rig.click(glyph);
+    assert_eq!(rig.app.main_screen.column.1, 0.0);
+    assert!(open(&rig));
+}

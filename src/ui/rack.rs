@@ -643,9 +643,9 @@ pub fn insert(rack: &mut Rack, type_id: u16, at: InsertAt) -> Outcome {
 /// - With `at` they go where [`paste`] puts the same modules: from `+` appended at the bottom, else at `at`, in file
 ///   order.
 ///
-/// A module is skipped by the rule `Paste` follows ([`attaches`]): an id above 52, and an instrument where the channel
-/// does not take one ([`takes_instruments`]: Master, Effect Track, audio, Drums), as the browser's SYNTH rows do; a
-/// channel that does takes all the instruments, beside the ones it has. Returns whether the chain changed (never when
+/// A module is skipped by the rule `Paste` follows ([`attaches`]): a module type this app does not know, and an
+/// instrument (a plugin instrument too) where the channel does not take one ([`takes_instruments`]: Master, Effect
+/// Track, audio, Drums), as the browser's SYNTH rows do; a channel that does takes all the instruments, beside the ones it has. Returns whether the chain changed (never when
 /// every module is skipped, or there are none) and how many modules were skipped. [`load_rack_into`] also names the
 /// channel after the instrument taken.
 pub(crate) fn load_rack(
@@ -661,7 +661,7 @@ pub(crate) fn load_rack(
     if skipped == modules.len() {
         return (Outcome::Nothing, skipped);
     }
-    let is_instrument = |m: &ModuleInstance| instrument(m.type_id).is_some();
+    let is_instrument = |m: &ModuleInstance| is_instrument_type(m.type_id);
     let takes = room && modules.iter().any(is_instrument);
     let rack = &mut channel.rack;
     rack.modules.retain(|m| is_instrument(m) && !takes);
@@ -798,7 +798,7 @@ fn named(ch: &Channel, auto: &str) -> bool {
 /// in, in clipboard order, as a new module with a fresh id and its copied settings: from the rack's add-module `+`,
 /// appended at the bottom; from `Insert above` / `Insert below`, at that position; from `Replace`, in place of that
 /// module, which is deleted. Instrument modules go only into a channel whose primary lane is a notes lane (not drum and
-/// audio channels); module ids above 52 are skipped.
+/// audio channels); a module type this app does not know is skipped ([`attaches`]).
 ///
 /// Each module after the first goes below the one before, and the bottom is the bottom for a note effect too (a pick
 /// goes up to the note effects instead). With nothing compatible it returns [`Outcome::Nothing`] and the rack is as it
@@ -839,10 +839,38 @@ pub fn takes(channel: &Channel) -> Takes {
     }
 }
 
-/// Whether a channel takes `module`, the one routine `Paste` and a rack preset's load share: module ids above 52 are
-/// skipped, and an instrument goes only where `notes` (the channel [takes instruments](takes_instruments)).
+/// Whether a channel takes `module`, the one routine `Paste` and a rack preset's load share: a module type this app
+/// does not know (an id above 52 that is none of Honeydew's own: plugins, Lemon Studio's effects, the Dynamic EQ …)
+/// is skipped, and an instrument ([`is_instrument_type`]) goes only where `notes` (the channel
+/// [takes instruments](takes_instruments)).
 fn attaches(module: &ModuleInstance, notes: bool) -> bool {
-    module.type_id <= 52 && (notes || instrument(module.type_id).is_none())
+    let t = module.type_id;
+    let known = t <= 52 || module_spec(t).is_some();
+    known && (notes || !is_instrument_type(t))
+}
+
+/// Whether module type `type_id` is an instrument: one of the synths, or a plugin instrument (Lemon Studio's built-in
+/// samplers and synths among them).
+pub(crate) fn is_instrument_type(type_id: u16) -> bool {
+    instrument(type_id).is_some() || type_id == crate::song::plugin::PLUGIN_INSTRUMENT
+}
+
+/// `modules` of the channel with id `channel_id` as they are now: a plugin module's state is its running plugin's
+/// (the song's copy is brought up to date only at a save), so a copy or a rack preset keeps what the plugin holds now,
+/// its samples among it.
+pub(crate) fn with_live_states(
+    channel_id: i32,
+    mut modules: Vec<ModuleInstance>,
+) -> Vec<ModuleInstance> {
+    for module in &mut modules {
+        let id = module.instance_id;
+        if let Some(plugin) = module.file.plugin.as_deref_mut()
+            && let Some(state) = crate::plugins::live_state(channel_id, id)
+        {
+            plugin.state = state.into();
+        }
+    }
+    modules
 }
 
 /// The ≡ menu of a card of module type `type_id`, two columns, every item enabled. An instrument's adds `Set Range`
@@ -2823,16 +2851,13 @@ impl RackPanel {
                 Some(Outcome::Browse(at)) => actions.open_browser = Some(at),
                 Some(Outcome::Minimized) => actions.minimized = true,
                 Some(Outcome::Copied) => {
-                    actions.copy = channel.rack.get(id).cloned().map(|m| vec![m])
+                    let module = channel.rack.get(id).cloned().into_iter().collect();
+                    actions.copy = Some(with_live_states(channel.id, module))
                 }
                 Some(Outcome::SavePreset) => {
-                    let mut module = channel.rack.get(id).cloned();
                     // A plugin module's preset is its running plugin's state now.
-                    if let Some(plugin) = module.as_mut().and_then(|m| m.file.plugin.as_deref_mut())
-                        && let Some(state) = crate::plugins::live_state(channel.id, id)
-                    {
-                        plugin.state = state.into();
-                    }
+                    let module = channel.rack.get(id).cloned().into_iter().collect();
+                    let module = with_live_states(channel.id, module).pop();
                     actions.preset = module.map(PresetSource::Module)
                 }
                 _ => {}
@@ -2890,11 +2915,16 @@ impl RackPanel {
                 }
                 Some(RackItem::LoadPreset) => actions.picker = Some(PresetTarget::RackReplace),
                 Some(RackItem::LoadDrumset) => actions.picker = Some(PresetTarget::Drumset),
-                Some(RackItem::CopyRack) => actions.copy = Some(channel.rack.modules.clone()),
+                Some(RackItem::CopyRack) => {
+                    let modules = channel.rack.modules.clone();
+                    actions.copy = Some(with_live_states(channel.id, modules))
+                }
                 Some(RackItem::SavePreset) => {
+                    // The plugins' states as they are now, as a song save writes them.
+                    let modules = channel.rack.modules.clone();
                     actions.preset = Some(PresetSource::Rack {
                         name: channel.name.clone(),
-                        modules: channel.rack.modules.clone(),
+                        modules: with_live_states(channel.id, modules),
                     });
                 }
                 _ => {}

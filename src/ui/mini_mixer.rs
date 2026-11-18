@@ -10,7 +10,7 @@
 //!   | pan 2.75 U | level 6 U + a 0.25 U right margin. The master has no mute or `Solo`: `Unsolo All` takes their 3 U
 //!   (1.25 U tall at most, centred), so its pan and level line up with the others'. A sub-track row is header (flex) |
 //!   slider 8.75 U + 0.25 U. Behind the stack the row's name (8 pt, right and top, channel colour, middle-truncated
-//!   keeping 5 characters).
+//!   keeping 5 characters), in a row tall enough for it over the controls ([`name_fits`]; zoomed out, none).
 //! - **Bindings** (the mixer strip's): level param 0 (reset 0.85312), pan 1 (reset 0.5), mute 2 (the inverted pill: dot
 //!   up in the channel colour while audible), `Solo` 3 (two-state tap, then smart solo: [`mixer::smart_solo`]);
 //!   `Unsolo All` is [`mixer::unsolo_all`]; the sliders take the drag law of
@@ -21,7 +21,7 @@
 //! cell); the sub-tracks triangle and the current sub-track's triangle show collapsed too (they are neither controls
 //! nor labels); the expanded meters are drawn under the level slider, the left peak on the lower bar.
 
-use eframe::egui::{Align2, Color32, Id, Rect, Shape, Stroke, Ui, UiBuilder, pos2, vec2};
+use eframe::egui::{Align2, Color32, Id, Pos2, Rect, Shape, Stroke, Ui, UiBuilder, pos2, vec2};
 use honeydew_audio::device::ModuleMeter;
 
 use crate::icons::{draw_icon, icon_edge};
@@ -277,7 +277,10 @@ pub fn show(
         let label = rect.shrink2(vec2(m.u(LABEL_INSET), m.t()));
         let font = m.font_id(FontSize::Pt8);
         let placed = parts(kind, rect, true, m);
-        widgets::truncated(&painter, label, Align2::RIGHT_TOP, name, font, ink, 5);
+        // A row too short for the name over its controls shows none: the clip in the playlist names the track.
+        if name_fits(rect, font.size, m) {
+            widgets::truncated(&painter, label, Align2::RIGHT_TOP, name, font, ink, 5);
+        }
         if kind == RowKind::Sub {
             sub_slider(&mut ui, cx, song, row, &placed, ink, &mut out);
         } else {
@@ -310,11 +313,54 @@ pub fn show(
     out
 }
 
+/// Whether a row `row` tall has room for its name (`font_size` tall, t from the top) over its controls, which reach 6 t
+/// from its middle (the level thumb at its largest; the mute pill lies down in a short row).
+fn name_fits(row: Rect, font_size: f32, m: &Metrics) -> bool {
+    let t = m.t();
+    0.5 * row.height() >= t + font_size + 6.0 * t
+}
+
+/// The parts of the icon cell of a folder's row `row` (the row's rect, or any with its left edge and height): the
+/// glyph's, where a tap opens or closes the header column as a track icon's does, and the disclosure triangle's, where a
+/// tap opens or closes the folder ([`crate::ui::main_screen`]). The cell is the 1.5 U right of the folder bar; the
+/// triangle's part is under the glyph's in a cell at least as tall as it is wide, else right of it (a short row).
+pub fn folder_cell(row: Rect, m: &Metrics) -> (Rect, Rect) {
+    let bar = m.round_px(m.u(CLOSED_FOLDER_BAR_W)).max(1.0 / m.ppp());
+    let cell = Rect::from_x_y_ranges(row.left() + bar..=row.left() + m.u(CELL_W), row.y_range());
+    if cell.height() >= cell.width() {
+        let split = cell.top() + 0.6 * cell.height();
+        (cell.with_max_y(split), cell.with_min_y(split))
+    } else {
+        let split = cell.left() + 0.55 * cell.width();
+        (cell.with_max_x(split), cell.with_min_x(split))
+    }
+}
+
+/// The disclosure triangle centred in `part`: pointing down while `open`, right while closed; 2 t from its centre at
+/// most, a quarter of the part's smaller side in a small part.
+fn disclosure(part: Rect, open: bool, t: f32) -> Vec<Pos2> {
+    let (x, y) = (part.center().x, part.center().y);
+    let d = (2.0 * t).min(part.width().min(part.height()) / 4.0);
+    match open {
+        true => vec![
+            pos2(x - d, y - d * 0.5),
+            pos2(x + d, y - d * 0.5),
+            pos2(x, y + d),
+        ],
+        false => vec![
+            pos2(x - d * 0.5, y - d),
+            pos2(x + d, y),
+            pos2(x - d * 0.5, y + d),
+        ],
+    }
+}
+
 /// Draws folder `folder`'s row in `rect` and runs its controls: the `moduleFill` row with the wide folder bar in the
-/// folder's colour at its left edge, then in the 1.5 U cell the folder glyph in that colour with the disclosure triangle
-/// under it (pointing down while open, right while closed); at c = 1 (`expanded`) the folder's name at the top right
-/// of its header part and its track count under it, then the folder's Mute pill and `Solo` button, drawn as a
-/// primary row's, lit while every member has it ([`folder_switch`]); a tap switches every member's.
+/// folder's colour at its left edge, then in the 1.5 U cell the folder glyph in that colour and the disclosure triangle
+/// (pointing down while open, right while closed), each in its part ([`folder_cell`]); at c = 1 (`expanded`) the
+/// folder's name at the top right of its header part and its track count under it (on one line, `name · count`, in a
+/// row too short for two), then the folder's Mute pill and `Solo` button, drawn as a primary row's, lit while every
+/// member has it ([`folder_switch`]); a tap switches every member's.
 fn folder_row(
     ui: &mut Ui,
     cx: &UiCtx,
@@ -333,35 +379,23 @@ fn folder_row(
     painter.rect_filled(rect, 0.0, c.module_fill.to_color32());
     let w = m.round_px(m.u(CLOSED_FOLDER_BAR_W)).max(1.0 / m.ppp());
     painter.rect_filled(rect.with_max_x(rect.left() + w), 0.0, ink);
-    // The glyph: a tab and a body, in the cell's upper part.
     let cell = rect
         .with_max_x(rect.left() + m.u(CELL_W))
         .with_min_x(rect.left() + w);
     let t = m.t();
-    let body = Rect::from_center_size(
-        cell.center() - vec2(0.0, cell.height() * 0.12),
-        vec2(cell.width() * 0.5, cell.height() * 0.32),
-    );
+    // The glyph, a tab over a body, as large as its part lets it be; the triangle in its own part.
+    let (glyph, toggle) = folder_cell(rect, m);
+    let body_w = (0.5 * glyph.width()).min(0.75 * glyph.height());
+    let tab_h = (2.0 * t).min(0.25 * body_w);
+    let body_h = body_w.min(glyph.height() - tab_h).max(0.0);
+    let body = Rect::from_center_size(glyph.center() + vec2(0.0, 0.5 * tab_h), vec2(body_w, body_h));
     let tab = Rect::from_min_size(
-        body.left_top() - vec2(0.0, 2.0 * t),
-        vec2(body.width() * 0.45, 2.0 * t + 1.0),
+        body.left_top() - vec2(0.0, tab_h),
+        vec2(body.width() * 0.45, tab_h + 1.0 / m.ppp()),
     );
     painter.rect_filled(tab, t * 0.5, ink);
     painter.rect_filled(body, t * 0.5, ink);
-    // The disclosure triangle.
-    let (x, y, d) = (cell.center().x, body.bottom() + 5.0 * t, 2.0 * t);
-    let points = match f.open {
-        true => vec![
-            pos2(x - d, y - d * 0.5),
-            pos2(x + d, y - d * 0.5),
-            pos2(x, y + d),
-        ],
-        false => vec![
-            pos2(x - d * 0.5, y - d),
-            pos2(x + d, y),
-            pos2(x - d * 0.5, y + d),
-        ],
-    };
+    let points = disclosure(toggle, f.open, t);
     painter.add(Shape::convex_polygon(points, ink, Stroke::NONE));
     if !expanded {
         return;
@@ -372,21 +406,20 @@ fn folder_row(
     let members = song.folder_members(folder).len();
     let label = (header.with_min_x(cell.right())).shrink2(vec2(m.u(LABEL_INSET), m.t()));
     let font = m.font_id(FontSize::Pt8);
-    widgets::truncated(
-        &painter,
-        label,
-        Align2::RIGHT_TOP,
-        &f.name,
-        font.clone(),
-        ink,
-        5,
-    );
     let count = match members {
         1 => "1 track".to_owned(),
         n => format!("{n} tracks"),
     };
-    let dim = c.text.to_color32().gamma_multiply(0.6);
-    widgets::truncated(&painter, label, Align2::RIGHT_BOTTOM, &count, font, dim, 5);
+    if label.height() >= 2.25 * font.size {
+        let name = f.name.as_str();
+        widgets::truncated(&painter, label, Align2::RIGHT_TOP, name, font.clone(), ink, 5);
+        let dim = c.text.to_color32().gamma_multiply(0.6);
+        widgets::truncated(&painter, label, Align2::RIGHT_BOTTOM, &count, font, dim, 5);
+    } else {
+        // Two lines would overlap: one, the name and its count.
+        let line = format!("{} · {count}", f.name);
+        widgets::truncated(&painter, label, Align2::RIGHT_CENTER, &line, font, ink, 5);
+    }
     if members == 0 {
         return;
     }
