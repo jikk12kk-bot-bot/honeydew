@@ -71,6 +71,8 @@ enum Kind {
     DynamicEq,
     /// Modulator: its signal now.
     Modulator,
+    /// Spectral Ceiling: each band's tilted level, then each band's reduction now, dB.
+    SpectralCeiling,
 }
 
 impl Probe {
@@ -99,6 +101,9 @@ impl Probe {
             ),
             crate::dynamic_eq::DYNAMIC_EQ => (Kind::DynamicEq, crate::dynamic_eq::BANDS),
             crate::modulator::MODULATOR => (Kind::Modulator, 1),
+            crate::spectral_ceiling::SPECTRAL_CEILING => {
+                (Kind::SpectralCeiling, 2 * crate::spectral_ceiling::BANDS)
+            }
             _ => (Kind::None, 0),
         };
         let mut probe = Self {
@@ -142,6 +147,10 @@ impl Probe {
             Kind::Tuner(detector) => detector.reset(),
             Kind::Pitcher | Kind::Pitcher2 => self.slab[1] = -1.0,
             Kind::Analyzer(analyzer) => analyzer.reset(&mut self.slab),
+            Kind::SpectralCeiling => {
+                let levels = &mut self.slab[..crate::spectral_ceiling::BANDS];
+                levels.fill(crate::spectral_ceiling::FLOOR_DB);
+            }
             Kind::None | Kind::Tremolo | Kind::Waveshaper | Kind::DynamicEq | Kind::Modulator => {}
         }
     }
@@ -221,6 +230,7 @@ impl Probe {
                 slab.copy_from_slice(&state.dynamic_db())
             }
             (Kind::Modulator, Processor::Modulator(state)) => slab[0] = state.signal(),
+            (Kind::SpectralCeiling, Processor::SpectralCeiling(state)) => state.view(slab),
             _ => {}
         }
     }
@@ -621,6 +631,13 @@ pub fn modulator(slab: &[f32]) -> Option<f32> {
         &[signal] => Some(signal),
         _ => None,
     }
+}
+
+/// Spectral Ceiling: each band's tilted level (dB, what its threshold is compared with) and each band's reduction now
+/// (dB, positive), band `k` at [`crate::spectral_ceiling::band_hz`]`(k)`.
+pub fn spectral_ceiling(slab: &[f32]) -> Option<(&[f32], &[f32])> {
+    (slab.len() == 2 * crate::spectral_ceiling::BANDS)
+        .then(|| slab.split_at(crate::spectral_ceiling::BANDS))
 }
 
 /// Spacer: the input's and the output's correlation, −1…1.

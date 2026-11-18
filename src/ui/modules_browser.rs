@@ -198,6 +198,7 @@ const SECTIONS: [(Option<&str>, &[Entry]); 7] = [
             M(9),
             M(7),
             M(34),
+            M(honeydew_audio::spectral_ceiling::SPECTRAL_CEILING),
             M(44),
             M(15),
             M(30),

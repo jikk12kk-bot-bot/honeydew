@@ -56,6 +56,7 @@ pub(super) mod dynamic_eq;
 pub(super) mod half_time;
 pub(super) mod lemon;
 pub(super) mod modulator;
+pub(super) mod spectral_ceiling;
 
 modules! {
     3 => equalizer,

@@ -41,6 +41,7 @@ pub mod sequencer;
 pub mod sfz;
 pub mod slicer;
 pub mod soundfont;
+pub mod spectral_ceiling;
 mod spreader;
 pub mod stream;
 pub mod supersaw;
@@ -112,6 +113,7 @@ pub fn effect_info(id: u16) -> Option<EffectInfo> {
         de_esser::DE_ESSER => ("De-esser", de_esser::PARAMS),
         denoise::DENOISE => ("Denoise", denoise::PARAMS),
         half_time::HALF_TIME => ("Half Time", half_time::PARAMS),
+        spectral_ceiling::SPECTRAL_CEILING => ("Spectral Ceiling", spectral_ceiling::PARAMS),
         _ => return None,
     };
     Some(EffectInfo {
@@ -536,6 +538,14 @@ impl AudioEffect {
                     Processor::HalfTime(Box::new(state)),
                 )
             }
+            spectral_ceiling::SPECTRAL_CEILING => {
+                let defaults = &spectral_ceiling::DEFAULTS;
+                let state = spectral_ceiling::SpectralCeilingState::new(defaults, sample_rate);
+                (
+                    defaults.to_vec(),
+                    Processor::SpectralCeiling(Box::new(state)),
+                )
+            }
             _ => return Err(EffectError::UnsupportedEffect(id)),
         };
         let mut effect = Self {
@@ -948,6 +958,7 @@ enum Processor {
     DeEsser(Box<de_esser::DeEsserState>),
     Denoise(Box<denoise::DenoiseState>),
     HalfTime(Box<half_time::HalfTimeState>),
+    SpectralCeiling(Box<spectral_ceiling::SpectralCeilingState>),
     Monitor,
 }
 
@@ -994,6 +1005,7 @@ impl Processor {
             Self::DeEsser(state) => state.refresh(params, sample_rate),
             Self::Denoise(state) => state.refresh(params, sample_rate),
             Self::HalfTime(state) => state.refresh(params, sample_rate),
+            Self::SpectralCeiling(state) => state.refresh(params, sample_rate),
             Self::Monitor => {}
         }
     }
@@ -1074,6 +1086,7 @@ impl Processor {
             Self::DeEsser(state) => state.process_frame(l, r),
             Self::Denoise(state) => state.process_frame(l, r),
             Self::HalfTime(state) => state.process_frame(l, r),
+            Self::SpectralCeiling(state) => state.process_frame(l, r),
             Self::Monitor => (l, r),
         }
     }
@@ -1135,6 +1148,7 @@ impl Processor {
             Self::DeEsser(state) => state.reset(),
             Self::Denoise(state) => state.reset(),
             Self::HalfTime(state) => state.reset(),
+            Self::SpectralCeiling(state) => state.reset(),
             Self::Monitor => {}
         }
     }
@@ -1144,6 +1158,7 @@ impl Processor {
             Self::Compressor(state) => state.gain_reduction_db,
             Self::DeEsser(state) => state.reduction_db(),
             Self::Denoise(state) => state.reduction_db(),
+            Self::SpectralCeiling(state) => state.reduction_db(),
             _ => 0.0,
         }
     }
