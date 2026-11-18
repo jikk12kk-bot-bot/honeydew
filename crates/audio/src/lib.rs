@@ -1240,20 +1240,21 @@ impl EqState {
                 }
             };
             match self.kind {
+                // At the rate it runs at: designed at twice it, every band sat an octave low (1.5 kHz at 750 Hz).
                 EqKind::Param => {
                     self.bands[i][0].set_parametric_response(
                         response,
                         hz,
                         q,
                         left_gain,
-                        sample_rate * 2.0,
+                        sample_rate,
                     );
                     self.bands[i][1].set_parametric_response(
                         response,
                         hz,
                         q,
                         right_gain,
-                        sample_rate * 2.0,
+                        sample_rate,
                     );
                 }
                 EqKind::Tuned => {

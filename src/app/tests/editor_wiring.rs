@@ -291,10 +291,11 @@ fn the_drum_editor_toggles_and_swings_steps_through_the_funnel() {
     );
     rig.frame(vec![]);
     assert_eq!(rig.take(), ["NoteOff 1 48"]);
-    // A tap on another row's header makes it current and sounds its pad (the Hat, 50); the step's deletion is silent.
+    // A tap on another row's header (the drum names) makes it current and sounds nothing; the step's deletion is
+    // silent.
     rig.click_id(egui::Id::new("step_seq").with(("row", 2_usize)));
     rig.frame(vec![]);
-    assert_eq!(rig.take(), ["NoteOn 1 50 127", "NoteOff 1 50"]);
+    assert_eq!(rig.take(), Vec::<String>::new());
     rig.click(rig.step(0, 1));
     assert_eq!(rig.take(), ["ReplaceSong adopting"]);
     rig.click(rig.step(0, 1));

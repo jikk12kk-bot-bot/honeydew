@@ -1922,15 +1922,7 @@ impl HoneydewApp {
     /// until its release (`ui::primary_down_live`). Not left to eframe's own focus loss: it queues none while the
     /// canvas is unfocused, as after a first touch before any release.
     pub fn on_hidden(&mut self) {
-        self.stop_notes();
-        // The roll shown: what it sounds, as at its hide.
-        if let View::PianoRoll(channel) = self.shown
-            && let Some(roll) = self.slots.piano_roll.rolls.get_mut(&channel)
-        {
-            for key in roll.silence() {
-                self.audio.send(AudioCommand::NoteOff { channel, key });
-            }
-        }
+        self.stop_edit_sounds();
         // Not in `stop_notes`, which a song load runs too: a load keeps the typed notes.
         for (channel, key, _) in self.typed.lose_focus() {
             self.key_off(channel, key);
@@ -1948,6 +1940,18 @@ impl HoneydewApp {
     /// `beforeunload`).
     pub fn unsaved(&self) -> bool {
         self.files.modified()
+    }
+
+    /// [`Self::stop_notes`], and what the roll shown sounds, as at its hide: the app hidden, an export starting.
+    fn stop_edit_sounds(&mut self) {
+        self.stop_notes();
+        if let View::PianoRoll(channel) = self.shown
+            && let Some(roll) = self.slots.piano_roll.rolls.get_mut(&channel)
+        {
+            for key in roll.silence() {
+                self.audio.send(AudioCommand::NoteOff { channel, key });
+            }
+        }
     }
 
     /// Stops every note the keyboard, the pads and MIDI sound: held, or tapped within its gate.

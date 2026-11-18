@@ -1,0 +1,64 @@
+name: zz-diagnose
+
+on:
+  push:
+    branches: [arena/fef93e3e-honeydew]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.0
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libclang-dev
+      - name: fmt
+        run: |
+          cargo fmt
+          if ! git diff --quiet; then
+            git config user.name jikk12kk-bot-bot
+            git config user.email 259327750+jikk12kk-bot-bot@users.noreply.github.com
+            git commit -am "cargo fmt"
+            git push
+          fi
+      - name: clippy
+        id: clippy
+        continue-on-error: true
+        run: set -o pipefail; cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee clippy.txt
+      - name: test
+        id: test
+        continue-on-error: true
+        run: set -o pipefail; cargo test --workspace --no-fail-fast 2>&1 | tee test.txt
+      - name: wasm
+        id: wasm
+        continue-on-error: true
+        run: set -o pipefail; cargo check --workspace --target wasm32-unknown-unknown 2>&1 | tee wasm.txt
+      - name: report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "clippy: ${{ steps.clippy.outcome }} / test: ${{ steps.test.outcome }} / wasm: ${{ steps.wasm.outcome }}"
+            echo '```'
+            grep -E "^(error|warning)" -A12 clippy.txt | head -150 || true
+            echo '```'
+            echo '```'
+            grep -E "panicked|FAILED|failed|^test result|error\[|^error" test.txt | head -150 || true
+            echo '```'
+            echo '```'
+            grep -E "^error" -A10 wasm.txt | head -60 || true
+            echo '```'
+          } > report.md
+          gh api repos/${{ github.repository }}/commits/$(git rev-parse HEAD)/comments -F body=@report.md
+          test "${{ steps.clippy.outcome }}${{ steps.test.outcome }}${{ steps.wasm.outcome }}" = "successsuccesssuccess"

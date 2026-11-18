@@ -336,6 +336,9 @@ pub struct PianoRoll {
     knob: PlayheadKnob,
     /// The clip is a take being recorded ([`RollOptions::recording`]): nothing edits it.
     recording: bool,
+    /// The transport plays ([`RollOptions::playing`], Preview's too): an edit sounds nothing then (a new note, a
+    /// dragged key), so no edit's note plays over the song or outlives an engine handover.
+    playing: bool,
     /// The `Generate` panel as it was last left: GENERATE opens it so again (its rows, its seed), not afresh. An app
     /// setting (`pianoRollGenerate`), kept over restarts (`views::piano_roll`); `Reset` brings the defaults back.
     pub(crate) generate_memory: Option<generate::Panel>,
@@ -480,6 +483,7 @@ impl PianoRoll {
             pending: Vec::new(),
             knob: PlayheadKnob::default(),
             recording: false,
+            playing: false,
             generate_memory: None,
         }
     }
@@ -609,11 +613,12 @@ impl PianoRoll {
         let grid = body.with_min_x(keys.right() + m.t());
         let id = Id::new("piano_roll");
         self.recording = opts.recording;
+        self.playing = opts.playing;
         let mut actions = std::mem::take(&mut self.pending);
-        // A new note's sound ends after its gate.
+        // A new note's sound ends after its gate, or as the transport plays.
         let now = ui.input(|i| i.time);
         if let Some((key, off)) = self.gate {
-            if now >= off {
+            if now >= off || self.playing {
                 self.gate = None;
                 actions.push(PianoRollAction::Note {
                     key,
@@ -723,7 +728,7 @@ impl PianoRoll {
             &self.selected,
             &self.ghosts(song, opts, view, px),
             past,
-            color,
+            (color, project_scale(song)),
             cx,
         );
         // The playhead line's slot: over the notes, under their handles, the marquee and the floating row.
@@ -1410,7 +1415,11 @@ impl PianoRoll {
             let (down, up) = transpose_range(&edit.orig, &edit.which);
             let dk = (-(delta.y / g.row_h).round() as i32).max(down).min(up);
             let key = (i32::from(low) + dk) as u8;
-            if key != edit.sound.unwrap_or(low) {
+            // While the transport plays a drag sounds nothing, and one sounding since before stops.
+            if self.playing {
+                self.stop_sound(edit, actions);
+                edit.sound = None;
+            } else if key != edit.sound.unwrap_or(low) {
                 self.stop_sound(edit, actions);
                 actions.push(PianoRollAction::Note {
                     key,
@@ -1530,6 +1539,10 @@ impl PianoRoll {
                 key,
                 velocity: None,
             });
+        }
+        // No sound while the transport plays: the song is heard, not the edit.
+        if self.playing {
+            return;
         }
         actions.push(PianoRollAction::Note {
             key,
@@ -2666,7 +2679,8 @@ fn paint_marks(
     }
 }
 
-/// Grid background steps 7–9: the ghost notes, black α 0.15 `past` the clip's loop end, then the notes.
+/// Grid background steps 7–9: the ghost notes, black α 0.15 `past` the clip's loop end, then the notes: in `color`,
+/// but a note off the project scale `(root, mask)` in [`gray`] (every key is in Chromatic).
 #[allow(clippy::too_many_arguments)]
 fn paint_notes(
     painter: &egui::Painter,
@@ -2675,7 +2689,7 @@ fn paint_notes(
     selected: &[bool],
     ghosts: &[Ghost],
     past: Option<Rect>,
-    color: Rgba,
+    (color, (root, mask)): (Rgba, (u8, u16)),
     cx: &UiCtx,
 ) {
     let (theme, m) = (cx.theme, cx.m);
@@ -2703,12 +2717,19 @@ fn paint_notes(
         color.to_color32(),
         mix(color, theme.colors.text, graph_lane::SELECTED_TINT),
     );
+    let off = gray(color);
+    let (off_normal, off_pale) = (
+        off.to_color32(),
+        mix(off, theme.colors.text, graph_lane::SELECTED_TINT),
+    );
     for (i, e) in events.iter().enumerate() {
         if let Some(r) = g.note_rect(e) {
-            let fill = if selected.get(i) == Some(&true) {
-                pale
-            } else {
-                normal
+            let in_key = !matches!(*e, Event::Note { key, .. } if !in_scale(key, root, mask));
+            let fill = match (selected.get(i) == Some(&true), in_key) {
+                (true, true) => pale,
+                (false, true) => normal,
+                (true, false) => off_pale,
+                (false, false) => off_normal,
             };
             painter.rect_filled(cell(r), 0.0, fill);
             if matches!(e, Event::Note { slide: true, .. }) {
@@ -2716,6 +2737,12 @@ fn paint_notes(
             }
         }
     }
+}
+
+/// An off-scale note's colour: `color`'s gray, of the same luma.
+pub(crate) fn gray(color: Rgba) -> Rgba {
+    let luma = 0.299 * color.r + 0.587 * color.g + 0.114 * color.b;
+    Rgba::rgb(luma, luma, luma)
 }
 
 /// A slide note's look over its fill in `r` (#130, #102): `ink` stripes slanting up to the right, and an `ink` ▶ at its

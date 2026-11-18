@@ -1671,6 +1671,19 @@ mod component {
     }
 
     #[test]
+    fn while_the_transport_plays_a_new_note_and_a_dragged_key_sound_nothing() {
+        let mut rig = Rig::new(vec![n(128, 64.0, 70)]);
+        rig.opts.playing = true;
+        rig.tap(at(300.0, 66));
+        assert_eq!(spans(rig.events()).len(), 2);
+        let from = at(140.0, 70);
+        rig.drag(from, from + vec2(0.0, -32.0));
+        assert_eq!(spans(rig.events())[0], (128, 64.0, 72));
+        rig.frame_after(0.2, vec![]);
+        assert!(rig.sounds.is_empty(), "{:?}", rig.sounds);
+    }
+
+    #[test]
     fn dragging_a_note_moves_it_by_whole_snaps_and_reports_the_end() {
         let mut rig = Rig::new(vec![n(128, 64.0, 70)]);
         // 70 points right = 140 ticks: 268 rounds to 256. Two rows up.

@@ -267,14 +267,6 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, app: &mut AppCtx, channel: usi
     grid.levels.clone_from(&levels);
     step_view.levels = levels;
     step_view.follow = app.settings.continuous_scroll;
-    let row = |state: &State| {
-        if steps {
-            state.step.selected
-        } else {
-            state.grid.current
-        }
-    };
-    let was = row(state);
     let step = if steps {
         state.step.show(&mut ui, &app.cx, app.song, channel, kit)
     } else {
@@ -286,18 +278,8 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, app: &mut AppCtx, channel: usi
         app.settings.grid_size = state.grid.snap.size;
         shown
     };
-    // A row made current in the view (a header's touch) sounds its pad; not a row a removal left past the kit.
+    // A row made current in the view (a touch on the drum names) sounds nothing: the pads play the kit.
     let now = ui.input(|i| i.time);
-    let current = row(state);
-    if current != was && was < kit.slots.len() {
-        audition(
-            &mut state.pads,
-            app.audio,
-            channel,
-            kit.pad_note(current),
-            now,
-        );
-    }
     // The mixer as the shown view laid it out this frame: its room, and the tabs once it is fully out.
     let (mixer_w, c, band, graph) = if steps {
         let s = &state.step;
@@ -490,7 +472,9 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, app: &mut AppCtx, channel: usi
             let at = (state.step.lane, state.step.clip);
             state.grid.apply(app.song, channel, at, &action);
         }
-        if let Some(pad) = tapped.filter(|_| hits(app.song) > before) {
+        // Not while the transport plays (Preview too): the song is heard, not the edit.
+        let quiet = app.playing;
+        if let Some(pad) = tapped.filter(|_| !quiet && hits(app.song) > before) {
             let kit = app.song.channels[channel].drum_kit.as_ref();
             let key = kit.and_then(|k| k.pad_note(usize::from(pad)));
             audition(&mut state.pads, app.audio, channel, key, now);
