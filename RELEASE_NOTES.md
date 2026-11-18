@@ -1,8 +1,7 @@
-Honeydew 0.0.1: a new effect, Spectral Ceiling, and fixes to the main menu, the mixer, rack presets and ZIP projects.
+Honeydew 0.0.2: quieter editing during playback, no more stuck notes, gray off-key notes and a Parametric EQ fix.
 
-- Spectral Ceiling. A new effect (FILTER section) that turns down only the frequencies poking above a tilted threshold line, read like the Analyzer's Spectrum, and leaves everything under the line untouched. Threshold, its own Tilt, Ratio, Clip (a hard ceiling over the line), Attack, Release, Depth, a Low–High range and Delta (hear only what is removed), with a live spectrum display. It adds no latency, live or rendered.
-- Main menu. A triangle close button.
-- Mixer. The track pills fit when the mixer is zoomed out.
-- Tracks. The folder glyph and the triangle are separate taps.
-- Rack presets. A rack preset loads its plugins and Honeydew's own modules too.
-- Projects. ZIP projects keep the samples loaded in Lemon Sampler, Lemon Slicer and Lemon Drum Sampler (upstream issue #168).
+- Editing while playing. While the project or Preview plays, a new note, a dragged note and a new drum hit make no sound. The piano roll's key column and the drum pads still play.
+- Drum editor. Tapping a drum's name (Kick, Snare…) in the step sequencer or drum grid no longer sounds it.
+- Stuck notes. A note no longer keeps sounding after an edit while playing (a tapped note that stretched its clip's loop), or when an export starts.
+- Piano roll. Notes off the project scale are drawn gray.
+- Parametric EQ. Each band now works at the frequency it shows (a 1.5 kHz band acted at 750 Hz).
