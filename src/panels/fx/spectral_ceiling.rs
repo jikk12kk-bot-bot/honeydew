@@ -122,7 +122,10 @@ fn graph(
     let text = colors.text.to_color32();
     let font = m.font_id(FontSize::Pt6);
     let y = y_of(threshold);
-    painter.line_segment([pos2(left, y), pos2(right, y)], Stroke::new(m.u(FAINT_U), text));
+    painter.line_segment(
+        [pos2(left, y), pos2(right, y)],
+        Stroke::new(m.u(FAINT_U), text),
+    );
     let label = format!("{threshold:.1} dB");
     let at = pos2(left + m.u(0.15), y - m.u(0.05));
     painter.text(at, Align2::LEFT_BOTTOM, label, font.clone(), text);
@@ -132,7 +135,13 @@ fn graph(
         let stroke = Stroke::new(px, text.gamma_multiply(0.6));
         painter.line_segment([pos2(left, y), pos2(right, y)], stroke);
         let at = pos2(right - m.u(0.15), y - m.u(0.05));
-        painter.text(at, Align2::RIGHT_BOTTOM, "Clip", font, text.gamma_multiply(0.6));
+        painter.text(
+            at,
+            Align2::RIGHT_BOTTOM,
+            "Clip",
+            font,
+            text.gamma_multiply(0.6),
+        );
     }
     Vec::new()
 }

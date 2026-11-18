@@ -39,11 +39,7 @@ static PARAM_SPECS: [P; PARAMS] = {
         },
     );
     p[RATIO] = P::cont("Ratio", DEFAULTS[RATIO], Display::exp(1.0, 20.0, 1, ":1"));
-    p[CLIP] = P::cont(
-        "Clip",
-        DEFAULTS[CLIP],
-        CLIP_TEXT,
-    );
+    p[CLIP] = P::cont("Clip", DEFAULTS[CLIP], CLIP_TEXT);
     p[DEPTH] = P::cont(
         "Depth",
         DEFAULTS[DEPTH],

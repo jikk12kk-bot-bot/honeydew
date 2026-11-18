@@ -272,7 +272,11 @@ impl SpectralCeilingState {
             let nearest = ((hz / bin_hz).round() as usize).clamp(1, BINS - 1);
             let lo = ((hz / half / bin_hz).ceil() as usize).clamp(1, BINS - 1);
             let hi = ((hz * half / bin_hz).floor() as usize).clamp(1, BINS - 1);
-            (band.lo, band.hi) = if lo <= hi { (lo, hi) } else { (nearest, nearest) };
+            (band.lo, band.hi) = if lo <= hi {
+                (lo, hi)
+            } else {
+                (nearest, nearest)
+            };
             let w0 = (std::f64::consts::TAU * hz / rate).min(0.99 * std::f64::consts::PI);
             let sin = w0.sin();
             band.cos = w0.cos();
@@ -460,8 +464,12 @@ mod tests {
         let mut params = DEFAULTS;
         params[TILT] = 0.5;
         params[CLIP] = 0.0;
-        let low: Vec<f32> = (0..2 * RATE as usize).map(|i| sine(300.0, 0.01, i)).collect();
-        let loud: Vec<f32> = (0..2 * RATE as usize).map(|i| sine(4630.0, 0.3, i)).collect();
+        let low: Vec<f32> = (0..2 * RATE as usize)
+            .map(|i| sine(300.0, 0.01, i))
+            .collect();
+        let loud: Vec<f32> = (0..2 * RATE as usize)
+            .map(|i| sine(4630.0, 0.3, i))
+            .collect();
         let input: Vec<f32> = low.iter().zip(&loud).map(|(a, b)| a + b).collect();
         let output = run(&params, &input);
         // Take the low tone back out with the same filters' view: a 300 Hz correlation.
@@ -478,7 +486,10 @@ mod tests {
         let kept = 20.0 * (corr(&output) / corr(&input)).log10();
         assert!(kept.abs() < 0.2, "300 Hz changed by {kept} dB");
         let resonance = 20.0 * (rms(&output) / rms(&input)).log10();
-        assert!(resonance < -6.0, "the resonance only came down {resonance} dB");
+        assert!(
+            resonance < -6.0,
+            "the resonance only came down {resonance} dB"
+        );
     }
 
     #[test]

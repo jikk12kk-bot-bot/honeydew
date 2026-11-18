@@ -19,9 +19,9 @@ mod inst_tests;
 mod instruments;
 mod lemon;
 mod modulator;
-mod spectral_ceiling;
 #[cfg(test)]
 mod spec_rows;
+mod spectral_ceiling;
 #[cfg(test)]
 mod step_tests;
 #[cfg(test)]
