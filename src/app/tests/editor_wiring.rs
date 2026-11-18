@@ -431,12 +431,10 @@ fn removing_a_drum_row_clears_the_undo_history() {
     rig.frame(vec![]);
     rig.click_id(steps("delete").with((0_usize, 1_usize)));
     assert_eq!(rig.kit().slots.len(), 3);
-    // The menu made the Hat's row current, which sounded it.
+    // The menu made the Hat's row current, which sounds nothing.
     assert_eq!(
         rig.take(),
         [
-            "NoteOn 1 50 127",
-            "NoteOff 1 50",
             "ReplaceSong adopting no-resync"
         ]
     );
@@ -452,14 +450,12 @@ fn clear_and_fill_take_hits_away_with_no_re_sync() {
     assert_eq!(rig.hits(), [(1, 32)]);
     rig.frame(vec![]);
     rig.take();
-    // Fill each 4 step: the hit on step 1 goes. The menu makes the Snare's row current, which sounds it.
+    // Fill each 4 step: the hit on step 1 goes. The menu makes the Snare's row current, silently.
     rig.row_menu(1, (1, 2));
     assert_eq!(rig.hits(), [(1, 0), (1, 128), (1, 256), (1, 384)]);
     assert_eq!(
         rig.take(),
         [
-            "NoteOn 1 49 127",
-            "NoteOff 1 49",
             "ReplaceSong adopting no-resync"
         ]
     );
@@ -493,14 +489,12 @@ fn a_step_tapped_on_does_not_re_sync_though_it_shrinks_the_loop() {
 #[test]
 fn the_row_menu_edits_the_pattern_and_the_kit_through_the_funnel() {
     let mut rig = drum_rig();
-    // Fill each 4 step, on the Snare, whose row the menu makes current (it sounds).
+    // Fill each 4 step, on the Snare, whose row the menu makes current (silently).
     rig.row_menu(1, (1, 2));
     assert_eq!(rig.hits(), [(1, 0), (1, 128), (1, 256), (1, 384)]);
     assert_eq!(
         rig.take(),
         [
-            "NoteOn 1 49 127",
-            "NoteOff 1 49",
             "ReplaceSong adopting no-resync"
         ]
     );
@@ -2849,12 +2843,10 @@ mod samples {
                 pad: Some(1),
             };
             assert_eq!(rig.overlays(), [open]);
-            // The menu made the Snare's row current, which sounded it.
+            // The menu made the Snare's row current, silently.
             assert_eq!(
                 rig.take(),
                 [
-                    "NoteOn 1 49 127",
-                    "NoteOff 1 49",
                     "ReplaceSong adopting no-resync"
                 ],
                 "grid {grid}"
@@ -2945,8 +2937,6 @@ mod samples {
         assert_eq!(
             rig.take(),
             [
-                "NoteOn 1 49 127",
-                "NoteOff 1 49",
                 "Preview 4410 frames from 0",
                 "ReplaceSong adopting no-resync"
             ]
@@ -3008,7 +2998,7 @@ mod samples {
             let file = crate::flm::read_drumset(&rig.app.files.read_user_file(path).unwrap());
             assert_eq!(names(&file.unwrap()), names(rig.kit()));
             assert_eq!(rig.app.song, song);
-            assert_eq!(rig.take(), ["NoteOn 1 50 127", "NoteOff 1 50"]);
+            assert_eq!(rig.take(), Vec::<String>::new());
         }
     }
 
@@ -3786,13 +3776,11 @@ fn create_fx_channel_is_a_change() {
 fn clear_and_fill_are_changes() {
     // Their step (the `Quiet` edit) is an undo step saved, which sets the flag.
     let mut rig = drum_rig();
-    // The first menu makes the Snare's row current, which sounds it.
-    let sound = ["NoteOn 1 49 127", "NoteOff 1 49"];
-    for (item, sounds) in [((1, 2), &sound[..]), ((1, 3), &[])] {
+    // The first menu makes the Snare's row current, which sounds nothing.
+    for item in [(1, 2), (1, 3)] {
         rig.app.files.saved();
         rig.row_menu(1, item);
-        let log = [sounds, &["ReplaceSong adopting no-resync"]].concat();
-        assert_eq!(rig.take(), log);
+        assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
         assert!(rig.app.files.modified(), "{item:?}");
     }
 }

@@ -81,14 +81,15 @@ impl SongAudioEngine {
         self.sync_controllers(old);
     }
 
-    /// Without a re-sync, while the transport rolls: each key or pad the sequencer holds that no note of this song
-    /// covers at the playhead any more gets its note-off ([`Self::release_uncovered`]), so no note is left without one
-    /// (a Quiet edit's new note that stretched its clip's loop moves the repeats' notes, and their note-offs with
-    /// them). A key still covered sounds on untouched, and nothing starts: only the orphans end.
+    /// Without a re-sync, while the transport rolls: each key an instrument holds for the sequencer that no note of
+    /// this song covers at the playhead any more gets its note-off ([`Self::release_orphan_notes`]), so no note is left
+    /// without one, to hang (a Quiet edit's new note that stretched its clip's loop moves the repeats' notes, and
+    /// their note-offs with them). A key still covered sounds on untouched, the pads ring on, and nothing starts.
     fn release_orphans(&mut self) {
-        if self.rolling() && self.holds_any() {
+        let held = |rows: &Vec<[u8; 128]>| rows.iter().any(|row| row.iter().any(|&n| n > 0));
+        if self.rolling() && self.held.iter().any(held) {
             self.cover_to(self.action_index);
-            self.release_uncovered(true);
+            self.release_orphan_notes();
         }
     }
 

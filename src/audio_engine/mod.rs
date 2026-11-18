@@ -1737,6 +1737,38 @@ impl SongAudioEngine {
         }
     }
 
+    /// [`Self::release_uncovered`] at the playhead for the instruments' keys alone, against the cover of
+    /// [`Self::cover_to`]: a key an instrument holds that no note covers any more gets its note-off (through the
+    /// sustain pedal), a covered one sounds on. The pads ring on as they are (a one-shot rings out by itself).
+    pub(super) fn release_orphan_notes(&mut self) {
+        for channel in 0..self.held.len() {
+            for row in 0..self.instruments[channel].len().min(self.held[channel].len()) {
+                let id = self.instruments[channel][row].0;
+                for key in 0..=127 {
+                    let k = usize::from(key);
+                    let (held, covered) = (self.held[channel][row][k], self.cover[channel][row][k]);
+                    if held == 0 || covered > 0 {
+                        continue;
+                    }
+                    let starts = |action| match action {
+                        Action::NoteOn {
+                            instance_id,
+                            key: k,
+                            ..
+                        } => instance_id == id && k == key,
+                        _ => false,
+                    };
+                    if !self.starts_now(channel, starts) {
+                        for _ in 0..held {
+                            self.key_up(channel, Some(id), key);
+                        }
+                    }
+                    self.held[channel][row][k] = 0;
+                }
+            }
+        }
+    }
+
     /// An action of `channel` exactly at the playhead, still to play, matches `of`.
     fn starts_now(&self, channel: usize, of: impl Fn(Action) -> bool) -> bool {
         let frame = self.frame;
