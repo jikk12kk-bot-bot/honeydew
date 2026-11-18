@@ -1753,7 +1753,10 @@ impl SongAudioEngine {
             }
             self.sounding[channel] &= !uncovered;
             self.held_keys[channel] &= !uncovered;
-            for row in 0..self.instruments[channel].len().min(self.held[channel].len()) {
+            for row in 0..self.instruments[channel]
+                .len()
+                .min(self.held[channel].len())
+            {
                 let id = self.instruments[channel][row].0;
                 for key in 0..=127 {
                     let k = usize::from(key);
