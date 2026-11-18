@@ -852,7 +852,10 @@ fn a_folder_cell_stacks_the_triangle_under_the_glyph_or_beside_it_in_a_short_row
     let m = m(1.0);
     // The cell is 1.5 U right of the 0.25 U (8 px) folder bar: x 8–48.
     let (glyph, triangle) = folder_cell(r(0.0, 0.0, 13.5 * U, 60.0), &m);
-    assert_eq!((glyph, triangle), (r(8.0, 0.0, 48.0, 36.0), r(8.0, 36.0, 48.0, 60.0)));
+    assert_eq!(
+        (glyph, triangle),
+        (r(8.0, 0.0, 48.0, 36.0), r(8.0, 36.0, 48.0, 60.0))
+    );
     // Shorter than wide: side by side, the triangle on the right.
     let (glyph, triangle) = folder_cell(r(0.0, 100.0, 1.5 * U, 120.0), &m);
     assert_eq!(
@@ -879,7 +882,11 @@ fn the_disclosure_triangle_fits_a_small_part() {
     let c = small.center();
     assert_eq!(
         disclosure(small, false, T),
-        [c + vec2(-1.25, -2.5), c + vec2(2.5, 0.0), c + vec2(-1.25, 2.5)]
+        [
+            c + vec2(-1.25, -2.5),
+            c + vec2(2.5, 0.0),
+            c + vec2(-1.25, 2.5)
+        ]
     );
 }
 

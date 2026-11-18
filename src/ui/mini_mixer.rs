@@ -388,7 +388,10 @@ fn folder_row(
     let body_w = (0.5 * glyph.width()).min(0.75 * glyph.height());
     let tab_h = (2.0 * t).min(0.25 * body_w);
     let body_h = body_w.min(glyph.height() - tab_h).max(0.0);
-    let body = Rect::from_center_size(glyph.center() + vec2(0.0, 0.5 * tab_h), vec2(body_w, body_h));
+    let body = Rect::from_center_size(
+        glyph.center() + vec2(0.0, 0.5 * tab_h),
+        vec2(body_w, body_h),
+    );
     let tab = Rect::from_min_size(
         body.left_top() - vec2(0.0, tab_h),
         vec2(body.width() * 0.45, tab_h + 1.0 / m.ppp()),
@@ -412,7 +415,15 @@ fn folder_row(
     };
     if label.height() >= 2.25 * font.size {
         let name = f.name.as_str();
-        widgets::truncated(&painter, label, Align2::RIGHT_TOP, name, font.clone(), ink, 5);
+        widgets::truncated(
+            &painter,
+            label,
+            Align2::RIGHT_TOP,
+            name,
+            font.clone(),
+            ink,
+            5,
+        );
         let dim = c.text.to_color32().gamma_multiply(0.6);
         widgets::truncated(&painter, label, Align2::RIGHT_BOTTOM, &count, font, dim, 5);
     } else {

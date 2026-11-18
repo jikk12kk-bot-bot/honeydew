@@ -488,7 +488,10 @@ fn a_rack_preset_loads_honeydews_own_modules_and_plugins() {
         load_rack(&mut ch, &preset(&own), None),
         (Outcome::ChainChanged, 0)
     );
-    assert_eq!(types(&ch.rack), [0, PLUGIN_EFFECT, REVERB, DYNAMIC_EQ, DE_ESSER]);
+    assert_eq!(
+        types(&ch.rack),
+        [0, PLUGIN_EFFECT, REVERB, DYNAMIC_EQ, DE_ESSER]
+    );
     // A plugin instrument (a Lemon sampler) is an instrument: it takes the channel's instrument's place, under the
     // note effects, above the effects ...
     let mut ch = channel(ChannelKind::Rack, &[51, 0, 6]);
