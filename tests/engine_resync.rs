@@ -822,3 +822,26 @@ fn the_loop_wrap_force_releases_only_the_sequencers_keys() {
     assert!(peak(&engine, 2) > 0.01, "the live key sounds on");
     assert_eq!((engine.sounding(1), engine.sounding(2)), (0, 1 << 69));
 }
+
+/// An edit taken over without a re-sync that leaves a held key with no note covering it (a Quiet edit whose new note
+/// stretched its clip's loop, moving the repeats' notes) releases it: no note hangs. A key still covered sounds on.
+#[test]
+fn an_edit_without_a_re_sync_releases_a_key_no_note_covers_any_more() {
+    let song = synth(&[note(0.0, 4.0, 57), note(0.0, 4.0, 64)]);
+    let mut edited = song.clone();
+    // The A3 is gone from where the playhead is; the E4 stays.
+    edited.channels[1].lanes[0].clips[0].events.remove(0);
+    let mut old = engine(&song);
+    old.play();
+    render(&mut old, 1.0);
+    assert_eq!(old.sounding(1), 1 << 57 | 1 << 64);
+    let mut new = engine(&edited).adopting_edit(false, Vec::new());
+    new.take_over(&mut old);
+    assert_eq!(new.sounding(1), 1 << 64);
+    // The A3 ends (its release tail aside): a beat later far less sounds than with both still held.
+    let tail = render(&mut new, 2.0);
+    let both = &played(&song, 3.0)[BEAT..];
+    let late = BEAT..2 * BEAT;
+    let (now, held) = (energy(&tail[late.clone()]), energy(&both[late]));
+    assert!(now > 0.01 && now < 0.8 * held, "{now} vs {held}");
+}
