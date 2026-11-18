@@ -1094,10 +1094,10 @@ impl MainScreen {
         let whole = folder.is_some();
         if p.tap {
             let origin = ui.data(|d| d.get_temp::<Pos2>(origin_id));
-            let at = origin.or(response.interact_pointer_pos());
+            let tapped = origin.or(response.interact_pointer_pos());
             let triangle = mini_mixer::folder_cell(header, m).1;
             if let Some(f) = folder {
-                match at.is_some_and(|at| triangle.contains(at)) {
+                match tapped.is_some_and(|pos| triangle.contains(pos)) {
                     true => actions.folder = Some((f, FolderOp::Toggle)),
                     false => self.column.1 = 1.0 - self.column.1,
                 }

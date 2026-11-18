@@ -314,7 +314,7 @@ pub fn show(
 }
 
 /// Whether a row `row` tall has room for its name (`font_size` tall, t from the top) over its controls, which reach 6 t
-/// from its middle (the level thumb at its largest; the mute pill lies down in a short row).
+/// from its middle (the level thumb at its largest; the mute pill shrinks to fit a short row).
 fn name_fits(row: Rect, font_size: f32, m: &Metrics) -> bool {
     let t = m.t();
     0.5 * row.height() >= t + font_size + 6.0 * t

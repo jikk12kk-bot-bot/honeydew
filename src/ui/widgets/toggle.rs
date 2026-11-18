@@ -48,7 +48,7 @@ fn switch(center: Pos2, on: bool, flat: bool, t: f32) -> (Rect, Pos2) {
 /// at a small zoom), so a neighbour's pill never runs into it and a clip never leaves only its dot.
 fn fit(flat: bool, half: Vec2, t: f32) -> f32 {
     // Half the pill: 5 t × 9 t standing, 9 t × 5 t flat.
-    let need = if flat { vec2(9.0, 5.0) } else { vec2(5.0, 9.0) } * t;
+    let need = t * if flat { vec2(9.0, 5.0) } else { vec2(5.0, 9.0) };
     (half.x / need.x).min(half.y / need.y).clamp(0.0, 1.0)
 }
 
