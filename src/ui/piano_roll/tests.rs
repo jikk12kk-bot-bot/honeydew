@@ -4215,13 +4215,28 @@ mod grid {
         let past = Rect::from_min_max(pos2(304.0, 48.0), pos2(1170.0, 349.0));
         let events = [n(0, 128.0, 60)];
         let (rects, ..) = painted(1.0, &|p, _, g, cx| {
-            paint_notes(p, g, &events, &[false], &[], Some(past), RED, cx);
+            paint_notes(p, g, &events, &[false], &[], Some(past), (RED, (0, 0xFFF)), cx);
         });
         assert_eq!(
             rects.iter().map(|r| r.1).collect::<Vec<_>>(),
             [Color32::from_black_alpha(38), RED.to_color32()]
         );
         assert_eq!(rects[0].0, past);
+    }
+
+    #[test]
+    fn a_note_off_the_project_scale_is_gray() {
+        // C major (0xAD5): C4 in the channel colour, C#4 in its gray.
+        let events = [n(0, 128.0, 60), n(0, 128.0, 61)];
+        let (rects, ..) = painted(1.0, &|p, _, g, cx| {
+            paint_notes(p, g, &events, &[false, false], &[], None, (RED, (0, 0xAD5)), cx);
+        });
+        let gray = crate::ui::piano_roll::gray(RED).to_color32();
+        assert_eq!(
+            rects.iter().map(|r| r.1).collect::<Vec<_>>(),
+            [RED.to_color32(), gray]
+        );
+        assert_ne!(gray, RED.to_color32());
     }
 
     #[test]
