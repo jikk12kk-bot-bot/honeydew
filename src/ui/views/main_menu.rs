@@ -17,7 +17,7 @@
 //!   closes the menu; `Attach` hides it and leaves the menu open (the monitor is the app's: it keeps its state over a
 //!   song load).
 //! - The menu's header has `Quit` ([`quit_question`]): asks whether to exit the app (`Yes` closes
-//!   the window or exits on Android). `Help` is disabled.
+//!   the window or exits on Android).
 //! - SETTINGS shows the user folder and the Original Content folder in it ([`ProjectFiles::content_dir`]); `Open user
 //!   folder` and `Open folder` show them in the system's file manager (the SONGS `Show in file browser...` helper),
 //!   and a failure shows its message.
@@ -337,7 +337,6 @@ pub fn show(
             state.asked = Some(PURGE_TAG);
             nav = Some(message(PURGE_TAG, vec![question], "Yes", "No"));
         }
-        MainMenuAction::WhatsNew => nav = Some(Nav::Open(Overlay::WhatsNew)),
         MainMenuAction::ViewVersions => nav = Some(Nav::Open(Overlay::Versions)),
         // On Linux the file manager opens the folder that holds the file, elsewhere it selects it.
         #[cfg(not(target_arch = "wasm32"))]

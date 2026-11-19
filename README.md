@@ -38,7 +38,7 @@ FL Studio Mobile demo projects, opened as `.flm` files.
 
 ## Download
 
-Get the latest build from [Releases](https://github.com/daijro/honeydew/releases/latest).
+Get the latest build from [Releases](https://github.com/jikk12kk-bot-bot/honeydew/releases/latest).
 
 | Platform | Download |
 |---|---|
