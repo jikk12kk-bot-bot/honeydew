@@ -50,11 +50,12 @@ pub const TOKEN_FILE: &str = "github-token";
 /// What GitHub's API answers in: JSON, and a release asset's file.
 const JSON: &str = "application/vnd.github+json";
 const OCTETS: &str = "application/octet-stream";
-/// The repository whose releases hold the sound library (`sounds-<version>`): upstream's, which this fork shares.
-pub const SOUNDS_REPO: &str = "daijro/honeydew";
+/// The repository whose releases hold the sound library (`sounds-<version>`): this fork's own, as upstream's is
+/// gone.
+pub const SOUNDS_REPO: &str = "jikk12kk-bot-bot/honeydew";
 /// Its sound library releases' tags (`sounds-<version>`), each made when its release is published.
 const SOUNDS_TAGS: &str =
-    "https://api.github.com/repos/daijro/honeydew/git/matching-refs/tags/sounds-";
+    "https://api.github.com/repos/jikk12kk-bot-bot/honeydew/git/matching-refs/tags/sounds-";
 /// An automatic check asks GitHub at most this often, in seconds; `Check now` at most once a [`MANUAL_EVERY`].
 const CHECK_EVERY: u64 = 6 * 3600;
 const MANUAL_EVERY: u64 = 60;

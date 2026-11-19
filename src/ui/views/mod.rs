@@ -165,7 +165,7 @@ pub enum Overlay {
     MidiImport,
     /// The `Sound credits` screen (SETTINGS' `Sound credits`): the bundled sounds' sources and the app's own credits.
     Credits,
-    /// The What's New dialog (Help → `What's new`, or by itself once per notes version).
+    /// The What's New dialog (by itself once per notes version).
     WhatsNew,
     /// `Add MIDI CC track…`'s picker of the MIDI CCs, for a lane on this channel.
     CcPicker(usize),

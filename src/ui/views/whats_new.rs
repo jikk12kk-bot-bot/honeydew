@@ -1,6 +1,5 @@
-//! The What's New dialog: this version's release notes, the ones its release page shows (#81). Help → `What's new`
-//! opens it, and on phones and tablets it opens once by itself at the first start of a new version ([`due`]), but not
-//! on a fresh install.
+//! The What's New dialog: this version's release notes, the ones its release page shows (#81). On phones and tablets
+//! it opens once by itself at the first start of a new version ([`due`]), but not on a fresh install.
 //!
 //! The notes are `RELEASE_NOTES.md`, built in: a release's notes on its page are that file
 //! (`gh release edit <tag> --notes-file RELEASE_NOTES.md`), so there is one copy, and the dialog needs no network. Its

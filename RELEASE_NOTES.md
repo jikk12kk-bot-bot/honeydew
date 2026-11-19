@@ -1,7 +1,6 @@
-Honeydew 0.0.2: quieter editing during playback, no more stuck notes, gray off-key notes and a Parametric EQ fix.
+Honeydew 0.0.3: video in the Displayer and MP4 export.
 
-- Editing while playing. While the project or Preview plays, a new note, a dragged note and a new drum hit make no sound. The piano roll's key column and the drum pads still play.
-- Drum editor. Tapping a drum's name (Kick, Snare…) in the step sequencer or drum grid no longer sounds it.
-- Stuck notes. A note no longer keeps sounding after an edit while playing (a tapped note that stretched its clip's loop), or when an export starts.
-- Piano roll. Notes off the project scale are drawn gray.
-- Parametric EQ. Each band now works at the frequency it shows (a 1.5 kHz band acted at 750 Hz).
+- Displayer video. The Displayer plays videos (MP4, MOV, MKV, WebM) with the song, with their own sound, Volume and Mute, instead of "This version shows images only".
+- MP4 export. The Save dialog's MP4 format renders the song with the Displayer's picture into a video.
+- Sound library downloads. The sounds now download from Honeydew's own releases, as the old source is gone.
+- Main menu. The Help button is gone.

@@ -312,12 +312,13 @@ fn the_header_names_the_app_and_its_version_and_the_tabs_run_in_order() {
     let rig = Rig::new(Tab::Songs);
     let panel = shell_layout(Rect::from_min_size(Pos2::ZERO, SIZE.into()), &m()).panel;
     let version = env!("CARGO_PKG_VERSION");
-    for text in [APP_NAME, version, "Help"] {
+    for text in [APP_NAME, version] {
         assert!(panel.contains_rect(rig.find(text)), "{text}");
     }
-    // `Help` at the left; our name and version centred as a group, the version on the name's line, to its right.
+    // No `Help`; our name and version centred as a group, the version on the name's line, to its right.
+    assert!(!rig.has("Help"));
     let (name, ver) = (rig.find(APP_NAME), rig.find(version));
-    assert!(rig.find("Help").right() < name.left() && name.right() < ver.left());
+    assert!(name.right() < ver.left());
     assert!(name.y_range().contains(ver.center().y));
     let xs: Vec<f32> = Tab::ALL
         .iter()
@@ -966,14 +967,14 @@ fn outside_the_panel_and_escape_close_the_menu() {
 }
 
 #[test]
-fn the_close_triangle_left_of_help_closes_the_menu() {
+fn the_close_triangle_at_the_left_closes_the_menu() {
     let mut rig = Rig::new(Tab::Songs);
     let l = shell_layout(Rect::from_min_size(Pos2::ZERO, SIZE.into()), &m());
     let close = Rect::from_x_y_ranges(
         l.panel.left()..=l.panel.left() + m().u(CLOSE_CELL),
         l.header.y_range(),
     );
-    assert!(close.right() <= rig.find("Help").left());
+    assert!(close.right() <= rig.find(crate::APP_NAME).left());
     let ink = rig.shapes.iter().any(|c| match &c.shape {
         egui::Shape::Path(p) => {
             p.points.len() == 3 && p.points.iter().all(|&at| close.contains(at))
@@ -985,13 +986,8 @@ fn the_close_triangle_left_of_help_closes_the_menu() {
 }
 
 #[test]
-fn help_opens_its_menu_the_quit_button_asks_quit_and_the_header_does_nothing() {
+fn the_quit_button_asks_quit_and_the_header_does_nothing() {
     let mut rig = Rig::new(Tab::Project);
-    assert_eq!(rig.click_text("Help"), None);
-    assert_eq!(rig.click_text("What's new"), Some(MainMenuAction::WhatsNew));
-    rig.click_text("Help");
-    let manual = MainMenuAction::OpenLink(HELP_LINKS[0].1.into());
-    assert_eq!(rig.click_text("User manual"), Some(manual));
     assert_eq!(rig.click_text(crate::APP_NAME), None);
     assert!(rig.has("Quit"));
     assert_eq!(rig.click_text("Quit"), Some(MainMenuAction::Quit));

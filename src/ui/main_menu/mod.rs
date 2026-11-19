@@ -1,6 +1,6 @@
 //! The main menu, opened from the app logo. It is a `menuFill` panel on the right of the screen, 20 U wide or the whole
 //! screen if that is narrower:
-//! - a header with the close ◀ and `Help` at the left, `Quit` at the right, and centred between them the logo glyph,
+//! - a header with the close ◀ at the left, `Quit` at the right, and centred between them the logo glyph,
 //!   [`APP_NAME`] and our version;
 //! - the tab row `SONGS PROJECT SETTINGS UPDATES` across the panel in equal cells, the active tab underlined in `text`
 //!   (no UPDATES on the web, which is always current; #66);
@@ -10,8 +10,7 @@
 //! (opening, saving …). The close ◀, a click outside the panel (none when the panel is the whole screen, as on a phone
 //! held upright), or Escape (Back) closes the menu; the rest of the header does not.
 //! SETTINGS shows the [`SettingsTab`] in [`shell_layout`]'s content rect; its `Theme creator` `Edit` shows the THEME
-//! CREATOR page there ([`theme_creator`]), with SETTINGS still underlined and the app behind undimmed. `Help` opens
-//! the Help menu.
+//! CREATOR page there ([`theme_creator`]), with SETTINGS still underlined and the app behind undimmed.
 
 use eframe::egui::{
     Align, Align2, Color32, Id, Painter, Pos2, Rect, Response, RichText, Sense, Shape, Stroke,
@@ -24,7 +23,6 @@ use crate::metrics::{FontSize, Metrics};
 use crate::settings::Settings;
 use crate::theme::DISABLED_ALPHA;
 use crate::ui::buttons::{boxed_circle_button, filled_circle_button, outline_circle_button};
-use crate::ui::popup::{PopupItem, PopupResult};
 use crate::ui::scroller::{Axis, Scroller, Y, Zones};
 use crate::ui::settings_tab::SettingsTab;
 use crate::ui::widgets::{Button, button, text_label, truncated};
@@ -63,9 +61,9 @@ const TAB_H: f32 = 1.25;
 /// Inset of the header, tab strip and content from the panel's edges, and the gap under the tab strip.
 const PAD: f32 = 0.5;
 const GAP: f32 = 0.25;
-/// `Help`'s and `Quit`'s cells at the header's ends.
+/// `Quit`'s cell at the header's right.
 const HEADER_CELL: f32 = 2.0;
-/// The close ◀'s cell, at the header's left before `Help`'s.
+/// The close ◀'s cell, at the header's left.
 const CLOSE_CELL: f32 = 1.25;
 /// A tab under the mouse: `text` at this alpha over its cell.
 const TAB_HOVER_ALPHA: f32 = 0.05;
@@ -172,8 +170,6 @@ pub enum MainMenuAction {
     /// SETTINGS `Restore demo songs`: write our demo songs into the library again
     /// ([`crate::content::restore_demo_songs`]).
     RestoreDemoSongs,
-    /// Help → `What's new`: show the What's New dialog.
-    WhatsNew,
     /// The theme creator's `Save`: write this theme into the user's themes ([`crate::theme::THEMES_FOLDER`]).
     SaveTheme(crate::theme::Theme),
     /// The theme creator's `Export`: write this theme where the user puts it.
@@ -189,24 +185,6 @@ pub enum MainMenuAction {
     SendToPlaylist(Vec<std::path::PathBuf>),
     /// PROJECT Performance `Clear`: the app's counters start from zero (#124).
     ClearPerformance,
-}
-
-/// The Help menu's links, after `What's new`: the project's own pages.
-pub const HELP_LINKS: [(&str, &str); 2] = [
-    ("User manual", "https://github.com/daijro/honeydew#readme"),
-    (
-        "Report a problem",
-        "https://github.com/daijro/honeydew/issues",
-    ),
-];
-
-/// The Help menu at `at`: `What's new` (item 0), then [`HELP_LINKS`].
-fn help_menu(ctx: &eframe::egui::Context, cx: &UiCtx, id: Id, at: Pos2) -> PopupResult<usize> {
-    let labels = std::iter::once("What's new").chain(HELP_LINKS.iter().map(|l| l.0));
-    let items: Vec<PopupItem<usize>> = (labels.enumerate())
-        .map(|(row, label)| PopupItem::new(row, 0, row, label))
-        .collect();
-    crate::ui::preset_picker::modal(ctx, cx, id, at, &items)
 }
 
 /// Where the menu's parts go on a screen.
@@ -254,8 +232,6 @@ pub struct MainMenu {
     project: project::ProjectTab,
     #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
     updates: updates::UpdatesTab,
-    /// The Help menu, open at this point (the `Help` button's centre).
-    help_menu: Option<Pos2>,
     creator: theme_creator::ThemeCreator,
 }
 
@@ -403,12 +379,11 @@ impl MainMenu {
         ui.painter()
             .rect_filled(header, 0.0, c.module_fill.to_color32());
 
-        // Header: the close ◀ in a 1.25 U cell at the left, then `Help` in a 2 U cell, `Quit` in one at the right, and
-        // between them, centred as a group, the logo, our name and the version. The header itself is no button.
+        // Header: the close ◀ in a 1.25 U cell at the left, `Quit` in a 2 U cell at the right, and between them,
+        // centred as a group, the logo, our name and the version. The header itself is no button.
         let cell =
             |left: f32, w: f32| Rect::from_x_y_ranges(left..=left + m.u(w), header.y_range());
         let close = cell(header.left(), CLOSE_CELL);
-        let help = cell(close.right(), HEADER_CELL);
         let quit = cell(header.right() - m.u(HEADER_CELL), HEADER_CELL);
         // The close ◀: the way back to the song where nothing is left of the panel to click (a phone held upright).
         let close_response =
@@ -425,19 +400,6 @@ impl MainMenu {
         (ui.painter()).add(Shape::convex_polygon(triangle.to_vec(), text, Stroke::NONE));
         if close_response.clicked() {
             action = Some(MainMenuAction::Close);
-        }
-        // `Help`: plain text, opening the Help menu.
-        text_label(
-            ui,
-            cx,
-            help,
-            "Help",
-            FontSize::Pt10,
-            Align2::CENTER_CENTER,
-            text,
-        );
-        if crate::ui::focus::interact(ui, help, id.with("Help"), Sense::click()).clicked() {
-            self.help_menu = Some(help.center());
         }
         let quit_response = crate::ui::focus::interact(ui, quit, id.with("Quit"), Sense::click());
         if crate::ui::widgets::hovered(ui, &quit_response) {
@@ -463,18 +425,8 @@ impl MainMenu {
         self.title(
             ui,
             cx,
-            header.with_min_x(help.right()).with_max_x(quit.left()),
+            header.with_min_x(close.right()).with_max_x(quit.left()),
         );
-        if let Some(at) = self.help_menu {
-            let picked = help_menu(ui.ctx(), cx, id.with("help_menu"), at);
-            if picked.close {
-                self.help_menu = None;
-            }
-            action = picked.selected.map(|i| match i {
-                0 => MainMenuAction::WhatsNew,
-                i => MainMenuAction::OpenLink(HELP_LINKS[i - 1].1.into()),
-            });
-        }
 
         // Tab row: equal cells, each label 10 pt and centred in its cell, a middle ellipsis keeping 5 tail characters
         // when the cell is too narrow. The current tab is underlined (2t) along its cell's bottom; under the mouse a
