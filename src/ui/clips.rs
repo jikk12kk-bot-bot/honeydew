@@ -5402,7 +5402,10 @@ mod tests {
         );
         assert_eq!(at_wall(15.5).len(), 2);
         // Away from the wall it never meets the end one.
-        assert_eq!(parts(Rect::from_min_size(b.min, vec2(1.0, 192.0)), false).len(), 2);
+        assert_eq!(
+            parts(Rect::from_min_size(b.min, vec2(1.0, 192.0)), false).len(),
+            2
+        );
     }
 
     #[test]
