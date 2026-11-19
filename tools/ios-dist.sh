@@ -23,8 +23,14 @@ mkdir -p "${CARGO_TARGET_DIR:-target}"
 out=$(cd "${CARGO_TARGET_DIR:-target}" && pwd)
 export IPHONEOS_DEPLOYMENT_TARGET=14.0
 
+# The Displayer's video and the MP4 render need FFmpeg (tools/build-ffmpeg.sh ios, for the device only); without it
+# the app shows images only.
+features=
+if [ "$target" = aarch64-apple-ios ] && [ -n "${HONEYDEW_FFMPEG_DIR_aarch64_apple_ios:-}" ]; then
+    features="--features video"
+fi
 # winit runs UIKit's application from the native binary's `main`, so the binary is the app's executable.
-cargo build --release --locked --target "$target" --bin honeydew-native
+cargo build --release --locked --target "$target" --bin honeydew-native $features
 
 work=$out/ios
 rm -rf "$work"

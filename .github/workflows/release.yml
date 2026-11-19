@@ -40,15 +40,16 @@ jobs:
         # built for x86-64-v3 (AVX2: Intel since 2013, AMD since 2015). Arm builds use the default aarch64 target. Linux
         # builds on the oldest runners, so its downloads run on glibc 2.35 or newer (Ubuntu 22.04, Debian 12). macOS is
         # Apple Silicon only. GitHub has no FreeBSD runners: that build is cross-built (tools/freebsd-cross.sh).
+        # `ffmpeg` is the tools/build-ffmpeg.sh target of the build's FFmpeg (video playback and MP4 render).
         include:
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, name: linux-x86_64 }
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, name: linux-x86_64-avx2, rustflags: -Ctarget-cpu=x86-64-v3 }
-          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, name: linux-aarch64 }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc, name: windows-x86_64 }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc, name: windows-x86_64-avx2, rustflags: -Ctarget-cpu=x86-64-v3 }
-          - { os: windows-11-arm, target: aarch64-pc-windows-msvc, name: windows-arm64 }
-          - { os: macos-latest, target: aarch64-apple-darwin, name: macos-arm64 }
-          - { os: ubuntu-24.04, target: x86_64-unknown-freebsd, name: freebsd-x86_64 }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, name: linux-x86_64, ffmpeg: host }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, name: linux-x86_64-avx2, rustflags: -Ctarget-cpu=x86-64-v3, ffmpeg: host }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, name: linux-aarch64, ffmpeg: host }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, name: windows-x86_64, ffmpeg: windows-x86_64 }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, name: windows-x86_64-avx2, rustflags: -Ctarget-cpu=x86-64-v3, ffmpeg: windows-x86_64 }
+          - { os: windows-11-arm, target: aarch64-pc-windows-msvc, name: windows-arm64, ffmpeg: windows-arm64 }
+          - { os: macos-latest, target: aarch64-apple-darwin, name: macos-arm64, ffmpeg: host }
+          - { os: ubuntu-24.04, target: x86_64-unknown-freebsd, name: freebsd-x86_64, ffmpeg: freebsd }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -78,9 +79,46 @@ jobs:
           $llvm = 'C:\Program Files\LLVM\bin'
           if (-not (Test-Path "$llvm\libclang.dll")) { choco install llvm -y --no-progress }
           "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
-      - run: cargo build --release --locked --target ${{ matrix.target }} --bins
+      # The static FFmpeg (with x264) of the Displayer's video and the MP4 render (the `video` feature), built by
+      # tools/build-ffmpeg.sh and cached until that changes. Windows builds it with MSVC in an MSYS2 shell.
+      - name: FFmpeg cache
+        id: ffmpeg
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg
+          key: ffmpeg-${{ matrix.ffmpeg }}-${{ matrix.os }}-${{ hashFiles('tools/build-ffmpeg.sh') }}
+      - name: MSYS2
+        if: runner.os == 'Windows' && steps.ffmpeg.outputs.cache-hit != 'true'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          path-type: inherit
+          update: false
+          install: make diffutils pkgconf tar
+      - name: Visual Studio environment
+        if: runner.os == 'Windows' && steps.ffmpeg.outputs.cache-hit != 'true'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.ffmpeg == 'windows-arm64' && 'arm64' || 'amd64' }}
+      - name: FFmpeg (Windows)
+        if: runner.os == 'Windows' && steps.ffmpeg.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: tools/ci-ffmpeg.sh "$(cygpath -u "$RUNNER_TEMP")/ffmpeg/out" ${{ matrix.ffmpeg }}
+      - name: FFmpeg
+        if: runner.os != 'Windows' && steps.ffmpeg.outputs.cache-hit != 'true'
+        shell: bash
+        run: tools/ci-ffmpeg.sh "$RUNNER_TEMP/ffmpeg/out" ${{ matrix.ffmpeg }}
+      # Saved at once, so that a later failure of the app's build does not build FFmpeg again.
+      - name: FFmpeg cache save
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg
+          key: ffmpeg-${{ matrix.ffmpeg }}-${{ matrix.os }}-${{ hashFiles('tools/build-ffmpeg.sh') }}
+      - run: cargo build --release --locked --target ${{ matrix.target }} --bins --features video
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
+          HONEYDEW_FFMPEG_DIR: ${{ runner.temp }}/ffmpeg/out
       # Each build twice: the full download, and the app alone (`-no-sounds`), which uses the sound library installed
       # in the app data folder (the release's own `honeydew-<tag>-sounds.zip`, uploaded by the `sounds` job).
       - name: Package
@@ -162,7 +200,23 @@ jobs:
       - name: Sound library
         shell: bash
         run: bash tools/fetch-sounds.sh
-      - run: docker run --rm -v "$PWD:/src" -w /src "$ALPINE_IMAGE" sh tools/alpine-build.sh
+      # FFmpeg for the video (built in the container by tools/alpine-build.sh when the cache has none).
+      - name: FFmpeg cache
+        id: ffmpeg
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg
+          key: ffmpeg-musl-${{ matrix.os }}-${{ hashFiles('tools/build-ffmpeg.sh') }}
+      - run: |
+          mkdir -p "$RUNNER_TEMP/ffmpeg"
+          docker run --rm -v "$PWD:/src" -v "$RUNNER_TEMP/ffmpeg:/ffmpeg" -e HONEYDEW_FFMPEG_DIR=/ffmpeg/out -w /src \
+            "$ALPINE_IMAGE" sh tools/alpine-build.sh
+      - name: FFmpeg cache save
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg
+          key: ffmpeg-musl-${{ matrix.os }}-${{ hashFiles('tools/build-ffmpeg.sh') }}
       - name: Package
         run: bash tools/package-desktop.sh "honeydew-${TAG}-${{ matrix.name }}" target/release
       - uses: softprops/action-gh-release@v2
@@ -298,6 +352,28 @@ jobs:
           sudo apt-get update && sudo apt-get install -y libclang-dev
           sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.0.13004108'
           cargo install cargo-ndk --version 4.1.2 --locked
+      # The static FFmpeg (with x264) of the Displayer's video and the MP4 render, per ABI; cached until the script
+      # changes (the same cache as android-apk.yml's).
+      - name: FFmpeg cache
+        id: ffmpeg
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg
+          key: ffmpeg-android-${{ hashFiles('tools/build-ffmpeg.sh') }}
+      - name: FFmpeg
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/28.0.13004108
+        run: |
+          for abi in arm64 armv7; do
+            tools/ci-ffmpeg.sh "$RUNNER_TEMP/ffmpeg/$abi" android-$abi
+          done
+      - name: FFmpeg cache save
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg
+          key: ffmpeg-android-${{ hashFiles('tools/build-ffmpeg.sh') }}
       # Twice: with the sounds (-arm.apk), and without them (-arm-base.apk), which downloads them from the sound
       # library's release and is what the in-app updater installs.
       - name: Build signed APKs with and without sounds
@@ -306,6 +382,9 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # With both, tools/android-dist.sh builds with the `video` feature.
+          HONEYDEW_FFMPEG_DIR_aarch64_linux_android: ${{ runner.temp }}/ffmpeg/arm64
+          HONEYDEW_FFMPEG_DIR_armv7_linux_androideabi: ${{ runner.temp }}/ffmpeg/armv7
         run: |
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.0.13004108"
           # An ANDROID_KEY_ALIAS that names no key in a keystore holding just one: that key (the alias is no secret).
@@ -349,7 +428,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ios
+      - name: FFmpeg cache
+        id: ffmpeg
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg
+          key: ffmpeg-ios-${{ hashFiles('tools/build-ffmpeg.sh') }}
+      - name: FFmpeg
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        run: tools/ci-ffmpeg.sh "$RUNNER_TEMP/ffmpeg/out" ios
+      - name: FFmpeg cache save
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg
+          key: ffmpeg-ios-${{ hashFiles('tools/build-ffmpeg.sh') }}
+      # With it, tools/ios-dist.sh builds with the `video` feature.
       - run: tools/ios-dist.sh
+        env:
+          HONEYDEW_FFMPEG_DIR_aarch64_apple_ios: ${{ runner.temp }}/ffmpeg/out
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}

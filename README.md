@@ -142,7 +142,7 @@ with the song, runs in real time whatever the tempo, and can be trimmed
 and looped; its sound is for listening only and is never in an audio render. The files stay where they are: if one
 moves, the panel offers Relink. The Save dialog's MP4 format renders the whole song with the Displayer's picture into
 a video (720p or 1080p, 30 or 60 fps, 16:9, 9:16 or 1:1). Video playback and MP4 need a build with FFmpeg (the
-Android APKs have it; see `tools/build-ffmpeg.sh` and the `video` feature); the web version shows images only.
+release downloads have it; see `tools/build-ffmpeg.sh` and the `video` feature); the web version shows images only.
 
 **Multi core processing:** On Linux, macOS and Windows desktop builds, SETTINGS → Multi core processing can run independent channel racks on separate CPU cores. Sends still run before their target bus, and each rack's modules stay in order. The setting takes effect during playback without a restart. It is off by default and falls back to sequential processing for short segments, a single-core machine or a song with no independent channels. It does not split one plugin instance (including Vital) across cores; with one active instrument, leave it off. If enabling it increases underruns on your audio setup, turn it off again.
 
@@ -276,7 +276,7 @@ Honeydew is an independent project, not affiliated with or endorsed by Image-Lin
 - **Code:** [GPL-3.0-or-later](LICENSE). Copyright (c) 2026 The Honeydew contributors.
 - **Plugin hosting, FLP support, Lemon Reverb, Lemon Limiter, Lemon Trio, Lemon Sampler, Lemon Parametric EQ, Citrus, Lemon Drum Sampler and Lemon Slicer:** from Lemon Studio by ItsAlphaNeon; see [Code from Lemon Studio](#code-from-lemon-studio) below.
 - **Lemon Studio's small effects, Lemon Delay, Lemon Vocoder, Press and Pulp Filter:** from Lemon Studio by ItsAlphaNeon too.
-- **Video (Android builds with the `video` feature):** [FFmpeg](https://ffmpeg.org) 7.1.1 (LGPL-2.1-or-later, built with
+- **Video (builds with the `video` feature):** [FFmpeg](https://ffmpeg.org) 7.1.1 (LGPL-2.1-or-later, built with
   `--enable-gpl`) and [x264](https://www.videolan.org/developers/x264.html) (GPL-2.0-or-later), linked statically; the
   combination is GPL-2.0-or-later, which the app's GPL-3.0-or-later takes. Their sources are fetched by
   [`tools/build-ffmpeg.sh`](tools/build-ffmpeg.sh) at the versions it names.
