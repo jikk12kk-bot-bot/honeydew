@@ -214,6 +214,12 @@ impl Media {
         Some((t.id(), t.size_vec2()))
     }
 
+    /// The video has played its trimmed part, unlooped: nothing to show until the song is back in it.
+    pub fn over(&self) -> bool {
+        let video = matches!(&self.loaded, Some((Source::Video, _)));
+        video && self.black && self.status == Status::Ready
+    }
+
     /// The name to show of the file at `location`, asked once per file.
     pub fn file_name(&mut self, location: &str) -> String {
         match &self.name {
@@ -370,5 +376,31 @@ mod web {
         });
         input.set_onchange(Some(on_change.unchecked_ref()));
         input.click();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_ready_video_on_black_is_over() {
+        let mut media = Media {
+            loaded: Some((Source::Video, "clip.mp4".into())),
+            status: Status::Ready,
+            black: true,
+            ..Media::default()
+        };
+        assert!(media.over());
+        media.black = false;
+        assert!(!media.over(), "a picture shows");
+        media.black = true;
+        media.status = Status::Loading;
+        assert!(!media.over(), "still opening");
+        media.status = Status::Ready;
+        media.loaded = Some((Source::Image, "photo.png".into()));
+        assert!(!media.over(), "an image is never over");
+        media.loaded = None;
+        assert!(!media.over());
     }
 }
