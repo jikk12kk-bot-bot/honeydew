@@ -129,6 +129,10 @@ pub fn over_views(
                 let at = at.clamp(area.min, (area.max - size).max(area.min));
                 Rect::from_min_size(at, size)
             };
+            // Maxi over a video whose part is over: nothing at all, as the background is then, rather than black.
+            if s.maxi && state.media.over() {
+                return;
+            }
             let id = Id::new("displayer window");
             // Mini takes the drags that move it; Maxi takes nothing, the views under it keep their taps.
             let body = (!s.maxi).then(|| ui.interact(rect, id, Sense::drag()));

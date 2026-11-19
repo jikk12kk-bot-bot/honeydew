@@ -231,7 +231,10 @@ fn picture_thread(shared: &Shared, file: &Arc<MediaFile>) {
             if !black_sent {
                 publish(shared, None);
                 black_sent = true;
-                p.shown = None;
+                // Nothing decoded so far counts any more: the next picture asked for seeks afresh. A picture kept
+                // ahead (`next`, past the part's end) would otherwise hold back every earlier one for good, as a jump
+                // back to before it was never seen as one.
+                (p.shown, p.next) = (None, None);
             }
             std::thread::sleep(Duration::from_millis(10));
             continue;
