@@ -147,13 +147,13 @@ pub(crate) fn paint_marquee(painter: &Painter, rect: Rect, cx: &UiCtx) {
 
 // The selection overlay; sizes in U.
 /// A selection handle is a vertical capsule this wide and tall, plus 2 px each ([`capsule`]); its touch zone is
-/// [`ZONE`] wide (the start handle's at most a third of the selection wide, so a narrow clip still moves from most of
-/// its width).
+/// [`ZONE`] wide (the start handle's, when it is pushed inside the selection, at most a third of the selection wide, so
+/// a narrow clip still moves from most of its width).
 const HANDLE: [f32; 2] = [0.42, 1.41];
 const ZONE: f32 = 1.0;
-/// The start handle's right edge is this far inside the selection box's left edge; the end handle's left edge this far
-/// right of its right edge.
-const START_IN: f32 = 0.5;
+/// The end handle's left edge is this far right of the selection box's right edge, and the start handle's right edge
+/// as far left of its left edge: in front of the clip, not over its name. Never closer to the grid's left edge (the
+/// track headers' wall) than this either: there it moves inside the clip.
 const END_OFF: f32 = 0.15;
 /// The third (audio scale) handle: a bar this wide and tall (plus 2 px), centred on the selection box's right edge, its
 /// top this far below the box.
@@ -691,7 +691,8 @@ impl Clips {
         self.shown = (sbox.is_some() && !body).then(|| self.shown.unwrap_or(now));
         let mut handles = Vec::new();
         let shown_box = sbox.filter(|_| !self.quiet);
-        for (part, rect) in shown_box.map_or(Vec::new(), |b| handle_rects(b, scale, m)) {
+        let rects = shown_box.map_or(Vec::new(), |b| handle_rects(b, grid.left(), scale, m));
+        for (part, rect) in rects {
             // The right handle's drag hides the third, the third's the other two.
             let hidden = match self.held.map(|h| h.0) {
                 Some(Part::End) => part == Part::Scale,
@@ -1733,13 +1734,15 @@ fn selection_box(
         .filter(|_| !rows.is_empty())
 }
 
-/// The selection box `b`'s handles as drawn: the start capsule ending 0.5 U inside its left edge (none when it would
-/// touch the end one), the end capsule from 0.15 U right of its right edge, both centred on it vertically; with
+/// The selection box `b`'s handles as drawn: the start capsule ending 0.15 U left of its left edge, but starting no
+/// nearer than 0.15 U to `wall` (the grid's left edge), so the track headers never hide it (none when it would then
+/// touch the end one); the end capsule from 0.15 U right of its right edge; both centred on it vertically. With
 /// `scale`, the third handle's bar centred on its right edge, 0.12 U below it.
-fn handle_rects(b: Rect, scale: bool, m: &Metrics) -> Vec<(Part, Rect)> {
+fn handle_rects(b: Rect, wall: f32, scale: bool, m: &Metrics) -> Vec<(Part, Rect)> {
     let end = end_handle(b, m);
     let size = capsule(m);
-    let start = Rect::from_min_size(pos2(b.left() + m.u(START_IN) - size.x, end.top()), size);
+    let left = (b.left() - m.u(END_OFF) - size.x).max(wall + m.u(END_OFF));
+    let start = Rect::from_min_size(pos2(left, end.top()), size);
     let mut handles = Vec::new();
     if start.right() < end.left() {
         handles.push((Part::Start, start));
@@ -1770,10 +1773,11 @@ pub(crate) fn end_handle(b: Rect, m: &Metrics) -> Rect {
     )
 }
 
-/// Its touch zone, centred on it: as tall as a capsule and [`ZONE`] wide (the start one at most a third of the
-/// selection box `b`), or for the bar as wide as it and [`ZONE`] tall.
+/// Its touch zone, centred on it: as tall as a capsule and [`ZONE`] wide (the start one, when the wall pushed it into
+/// the selection box `b`, at most a third of `b`), or for the bar as wide as it and [`ZONE`] tall.
 fn handle_zone(part: Part, rect: Rect, b: Rect, m: &Metrics) -> Rect {
     let size = match part {
+        Part::Start if rect.right() <= b.left() => vec2(m.u(ZONE), rect.height()),
         Part::Start => vec2(m.u(ZONE).min(b.width() / 3.0), rect.height()),
         Part::Scale => vec2(rect.width(), m.u(ZONE)),
         Part::End | Part::Body => vec2(m.u(ZONE), rect.height()),
@@ -5367,31 +5371,41 @@ mod tests {
     }
 
     #[test]
-    fn the_capsules_end_0_5_u_inside_and_start_0_15_u_outside_and_the_start_one_hides_when_they_would_touch()
-     {
+    fn the_capsules_sit_outside_both_edges_and_off_the_wall() {
         // U = 32: a capsule is 15.44 × 47.12 (0.42 U + 2 px by 1.41 U + 2 px), centred on the box vertically.
         let m = m1();
         let b = Rect::from_min_max(pos2(164.0, 48.0), pos2(420.0, 240.0));
         let near =
             |a: Rect, b: Rect| (a.min - b.min).length() < 1e-3 && (a.max - b.max).length() < 1e-3;
         let capsule = |x: f32| Rect::from_min_size(pos2(x, 144.0 - 23.56), vec2(15.44, 47.12));
-        let (start, end) = (capsule(164.0 + 16.0 - 15.44), capsule(420.0 + 4.8));
+        let (start, end) = (capsule(164.0 - 4.8 - 15.44), capsule(420.0 + 4.8));
         // The audio bar: 1 U × (0.56 U + 2 px), centred on the right edge, 0.12 U below the box.
         let bar = Rect::from_min_size(pos2(404.0, 243.84), vec2(32.0, 19.92));
-        let parts = |b: Rect, scale| handle_rects(b, scale, &m);
+        let parts = |b: Rect, scale| handle_rects(b, 0.0, scale, &m);
         let got = parts(b, true);
         let want = [(Part::Start, start), (Part::End, end), (Part::Scale, bar)];
         assert_eq!(got.len(), 3);
         for ((p, r), (q, w)) in got.into_iter().zip(want) {
             assert!(p == q && near(r, w), "{p:?} {r:?} vs {w:?}");
         }
-        // 0.35 U wide, the start capsule's right edge would meet the end one's left: it hides. Any wider, it shows.
-        let narrow = |w: f32| parts(Rect::from_min_size(b.min, vec2(w, 192.0)), false);
+        // A box at the wall (the grid's left edge): the start capsule 0.15 U right of the wall, over the clip.
+        let at_wall = |w: f32| {
+            let b = Rect::from_min_size(b.min, vec2(w, 192.0));
+            handle_rects(b, 164.0, false, &m)
+        };
+        let got = at_wall(256.0);
+        assert!(got[0].0 == Part::Start && near(got[0].1, capsule(164.0 + 4.8)));
+        // Pushed in like that, at most a capsule wide, its right edge would meet the end one's left: it hides.
         assert_eq!(
-            narrow(11.2).iter().map(|h| h.0).collect::<Vec<_>>(),
+            at_wall(15.4).iter().map(|h| h.0).collect::<Vec<_>>(),
             [Part::End]
         );
-        assert_eq!(narrow(11.3).len(), 2);
+        assert_eq!(at_wall(15.5).len(), 2);
+        // Away from the wall it never meets the end one.
+        assert_eq!(
+            parts(Rect::from_min_size(b.min, vec2(1.0, 192.0)), false).len(),
+            2
+        );
     }
 
     #[test]
