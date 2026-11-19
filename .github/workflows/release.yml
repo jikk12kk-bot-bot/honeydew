@@ -24,7 +24,8 @@ env:
   TAG: ${{ inputs.tag || github.ref_name }}
   TRUNK_VERSION: v0.21.14
   # Where the sound library comes from when the repository tracks no sounds/ parts (tools/fetch-sounds.sh).
-  # Upstream (daijro/honeydew) is gone: the library is this repository's own, from its v0.0.0 release.
+  # The library is tracked in sounds/ (from 9ji7/honeydew, as upstream daijro/honeydew is gone); this is only the
+  # fallback for a checkout without it: this repository's own v0.0.0 release.
   SOUNDS_REPO: jikk12kk-bot-bot/honeydew
   SOUNDS_TAG: v0.0.0
   BINARYEN_VERSION: version_133
