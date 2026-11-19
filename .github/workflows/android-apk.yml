@@ -25,7 +25,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  SOUNDS_TAG: v0.4.7
+  SOUNDS_TAG: v0.0.0
 
 jobs:
   apk:
@@ -90,7 +90,7 @@ jobs:
         if: inputs.variant == 'full'
         run: |
           mkdir -p target/android/assets
-          url="https://github.com/daijro/honeydew/releases/download/$SOUNDS_TAG/honeydew-$SOUNDS_TAG-sounds.zip"
+          url="https://github.com/jikk12kk-bot-bot/honeydew/releases/download/$SOUNDS_TAG/honeydew-$SOUNDS_TAG-sounds.zip"
           curl -sSfL --retry 3 -o "$RUNNER_TEMP/sounds.zip" "$url"
           unzip -q "$RUNNER_TEMP/sounds.zip" 'content/*' -x '*.gz' -d target/android/assets
           rm -f "$RUNNER_TEMP/sounds.zip"

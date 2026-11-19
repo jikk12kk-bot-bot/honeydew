@@ -24,8 +24,9 @@ env:
   TAG: ${{ inputs.tag || github.ref_name }}
   TRUNK_VERSION: v0.21.14
   # Where the sound library comes from when the repository tracks no sounds/ parts (tools/fetch-sounds.sh).
-  SOUNDS_REPO: daijro/honeydew
-  SOUNDS_TAG: v0.5.4
+  # Upstream (daijro/honeydew) is gone: the library is this repository's own, from its v0.0.0 release.
+  SOUNDS_REPO: jikk12kk-bot-bot/honeydew
+  SOUNDS_TAG: v0.0.0
   BINARYEN_VERSION: version_133
   # The Alpine builds' image, pinned by its multi-arch digest.
   ALPINE_IMAGE: alpine:3.22.7@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
@@ -257,9 +258,8 @@ jobs:
       # an app release that leaves the sounds as they were costs no one a download. A prerelease, so never the latest
       # release the apps' update check reads. Only what is missing is uploaded before it is published: a run cut short
       # is finished by the next.
+      # Made from a downloaded library too: upstream's releases, where the apps got it before, are gone.
       - name: Sound library release
-        # A library downloaded from SOUNDS_REPO is already published there, where the apps get it.
-        if: env.SOUNDS_DOWNLOADED != '1'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
