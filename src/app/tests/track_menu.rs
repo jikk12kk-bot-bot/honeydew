@@ -1278,21 +1278,6 @@ impl Rig {
     }
 }
 
-/// Two frames on, the channel each playlist row shows, top to bottom, read from where each track row's header is (its
-/// widget keeps the track row's id wherever it shows; `read_response` gives the pass before the last).
-fn shown(rig: &mut Rig) -> Vec<usize> {
-    rig.frame(vec![]);
-    rig.frame(vec![]);
-    let tracks = track_rows(&rig.app.song);
-    let top = |i: usize| {
-        let id = Id::new(("track_header", i));
-        rig.ctx.read_response(id).expect("drawn").rect.top()
-    };
-    let mut rows: Vec<usize> = (0..tracks.len()).collect();
-    rows.sort_by(|&a, &b| top(a).total_cmp(&top(b)));
-    rows.iter().map(|&i| tracks[i].channel).collect()
-}
-
 const NAMES: [&str; 4] = ["MASTER", "Drums", "MiniSynth", "MiniSynth 2"];
 
 #[test]

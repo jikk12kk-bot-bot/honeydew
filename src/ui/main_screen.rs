@@ -2755,7 +2755,6 @@ mod tests {
     use crate::project_files::mem::MemFiles;
     use crate::song::{Event, LaneKind, Song, SynthKind};
     use crate::theme::theme_by_id;
-    use crate::ui::clips::ClipRef;
     use crate::ui::offscreen::Offscreen;
     use crate::ui::views::{AppCtx, SongEdit};
 
@@ -3503,8 +3502,6 @@ mod tests {
         song
     }
 
-    /// Beat 6 of the MiniSynth's clip (beats 4 … 8 of track 2).
-    const CLIP: Pos2 = pos2(278.4, 207.5);
     /// A beat's width in the rig: [`Rig::new`] stores it as the song's view (HEAD@296 zoom x, at ppp 1), which a song
     /// at least 15 beats long keeps (the range/view cap).
     const BEAT_PT: f32 = 38.4;
@@ -3540,11 +3537,6 @@ mod tests {
             };
             rig.frame(vec![]);
             rig
-        }
-
-        /// The current clip: the current track's own.
-        fn current_clip(&self) -> Option<ClipRef> {
-            self.screen.clips.clip_for(&self.song, self.selected)
         }
 
         fn frame(&mut self, events: Vec<egui::Event>) -> Frame {
@@ -3590,28 +3582,8 @@ mod tests {
             self.click(rect.center())
         }
 
-        /// Presses at `from`, moves to `to` in two steps and releases there. Returns each frame's edit.
-        fn drag(&mut self, from: Pos2, to: Pos2) -> Vec<Option<SongEdit>> {
-            let mid = from + (to - from) / 2.0;
-            [
-                vec![egui::Event::PointerMoved(from)],
-                vec![button(from, true)],
-                vec![egui::Event::PointerMoved(mid)],
-                vec![egui::Event::PointerMoved(to)],
-                vec![button(to, false)],
-            ]
-            .into_iter()
-            .map(|events| self.frame(events).edit)
-            .collect()
-        }
-
         fn clips(&self, channel: usize) -> &[crate::song::Clip] {
             &self.song.channels[channel].lanes[0].clips
-        }
-
-        /// Taps the insert menu's `New Clip`.
-        fn plus(&mut self) -> (Option<SongEdit>, Option<Nav>) {
-            self.click_id(Id::new("clip_insert").with(0))
         }
 
         /// The insert menu is drawn, a frame on.
@@ -3621,13 +3593,6 @@ mod tests {
                 .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.text() == "New Clip"))
         }
     }
-
-    /// The MiniSynth's clip of [`song_with_a_clip`].
-    const SYNTH_CLIP: ClipRef = ClipRef {
-        channel: 2,
-        lane: 0,
-        id: 1,
-    };
 
     /// On the ruler, over beat `b`.
     fn ruler(b: f32) -> Pos2 {
@@ -3678,61 +3643,6 @@ mod tests {
     }
 
     // ---- the rows and clips as the playlist draws them ----
-
-    /// The selection's fill boxes (`text` at α 0.10 … 0.20) the frame drew, with their alpha.
-    fn selection_fills(f: &Frame) -> Vec<(Rect, u8)> {
-        let [tr, tg, tb, _] = theme_colors().text.to_color32().to_srgba_unmultiplied();
-        (rects(f).into_iter())
-            .filter_map(|(r, fill)| {
-                let [cr, cg, cb, a] = fill.to_srgba_unmultiplied();
-                // Unmultiplied from about 26/255 of alpha: a few steps off.
-                let near = |x: u8, y: u8| x.abs_diff(y) <= 8;
-                let text = near(cr, tr) && near(cg, tg) && near(cb, tb);
-                // Over the track rows (the transport's dividers are `text` too).
-                (text && (25..=52).contains(&a) && f.area.contains_rect(r)).then_some((r, a))
-            })
-            .collect()
-    }
-
-    /// A press held on empty space at `from`, then dragged to `to` and released: a marquee.
-    fn marquee(rig: &mut Rig, [from, to]: [Pos2; 2]) {
-        rig.frame(vec![egui::Event::PointerMoved(from)]);
-        rig.frame(vec![button(from, true)]);
-        rig.frames(vec![vec![]; 4]);
-        rig.frame(vec![egui::Event::PointerMoved(to)]);
-        rig.frame(vec![button(to, false)]);
-    }
-
-    /// From the master's empty row (x 400) to (100, 200): across the Drums clip of [`grouped`] and the MiniSynth's.
-    const ACROSS: [Pos2; 2] = [pos2(400.0, 80.0), pos2(100.0, 200.0)];
-
-    /// [`song_with_a_clip`] with a one-bar Drums clip from beat 0 (row 1, x 50 … 203.6) besides the MiniSynth's (row 2,
-    /// x 203.6 … 357.2).
-    fn grouped() -> Song {
-        let mut song = song_with_a_clip();
-        song.channels[1].lanes[0].add_clip(0, 4.0);
-        song
-    }
-
-    /// The selection handles' `text` bodies over the track rows, as drawn (rounded rects: the start and end capsules,
-    /// the audio bar).
-    fn handle_bodies(f: &Frame) -> Vec<Rect> {
-        let text = theme_colors().text.to_color32();
-        (f.shapes.iter())
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r)
-                    if r.fill == text
-                        && r.corner_radius != egui::CornerRadius::ZERO
-                        && (4.0..60.0).contains(&r.rect.width())
-                        && r.rect.height() < 70.0
-                        && (40.0..380.0).contains(&r.rect.center().y) =>
-                {
-                    Some(r.rect)
-                }
-                _ => None,
-            })
-            .collect()
-    }
 
     #[test]
     fn the_armed_dot_is_a_tenth_of_u_three_tenths_in_from_the_headers_corner() {
@@ -3815,38 +3725,6 @@ mod tests {
             Some(384)
         );
         assert_eq!(rig.song.play_loop, None);
-    }
-
-    /// The song with a drum clip under the MiniSynth's (both beats 4 to 8, rows 1 and 2).
-    fn two_rows() -> Song {
-        let mut song = song_with_a_clip();
-        song.channels[1].lanes[0].add_clip(512, 4.0);
-        song
-    }
-
-    const DRUM_CLIP: ClipRef = ClipRef {
-        channel: 1,
-        lane: 0,
-        id: 1,
-    };
-
-    /// Touch `id`'s `phase` at `pos`; the first finger (1) also drives the pointer, as an integration does.
-    fn finger(id: u64, phase: egui::TouchPhase, pos: Pos2) -> Vec<egui::Event> {
-        use egui::TouchPhase::{Move, Start};
-        let touch = egui::Event::Touch {
-            device_id: egui::TouchDeviceId(1),
-            id: egui::TouchId(id),
-            phase,
-            pos,
-            force: None,
-        };
-        let pointer = match (id, phase) {
-            (1, Start) => vec![button(pos, true)],
-            (1, Move) => vec![egui::Event::PointerMoved(pos)],
-            (1, _) => vec![button(pos, false), egui::Event::PointerGone],
-            _ => vec![],
-        };
-        [vec![touch], pointer].concat()
     }
 
     #[test]
@@ -4204,13 +4082,6 @@ mod tests {
         assert_eq!(rig.selected, 1, "nothing selected");
     }
 
-    /// The song of [`song_with_a_clip`] and another MiniSynth: four one-row channels.
-    fn four_rows() -> Rig {
-        let mut song = song_with_a_clip();
-        song.add_channel(ChannelKind::Synth(SynthKind::MiniSynth));
-        Rig::new(song)
-    }
-
     // Track header reorder and secondary tap.
 
     /// Ten one-row channels, row 1's header held 300 ms and dragged off its calm zone and back: a drag in place.
@@ -4320,17 +4191,7 @@ mod tests {
     // ---- the keymap's editing and zoom actions (`ui/edit_keys.rs`) ----
 
     impl Rig {
-        /// A press of `key` with `mods` and its release, in one frame; the frame's song edit.
-        fn key(&mut self, key: egui::Key, mods: egui::Modifiers) -> Option<SongEdit> {
-            self.frame(crate::ui::edit_keys::tests::tap(key, mods).into())
-                .edit
-        }
 
-        fn starts(&self, channel: usize) -> Vec<(u32, u32)> {
-            (self.clips(channel).iter())
-                .map(|c| (c.id, c.start_tick))
-                .collect()
-        }
     }
 
     // The left column, the mini mixer (expanded track headers) and the playhead line.

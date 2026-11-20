@@ -1853,16 +1853,6 @@ mod tests {
                 .expect("the row paints a label")
         }
 
-        fn key(&mut self, key: egui::Key) {
-            self.frame(vec![Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: Default::default(),
-            }]);
-        }
-
         fn take_changed(&mut self) -> bool {
             std::mem::take(&mut self.changed)
         }
@@ -2797,21 +2787,8 @@ mod tests {
         assert!((name.center().x - button.center().x).abs() < 1.0);
     }
 
-    /// Settings away from the defaults.
-    fn edited() -> Settings {
-        Settings {
-            midi_device: "Keys 49".into(),
-            theme: 4,
-            key_names: true,
-            hardware_meters: false,
-            metronome_level: 0.9,
-            ..Settings::default()
-        }
-    }
-
     /// The confirm popup's items: the question (a header, row 0), then `Yes` and `No`.
     const YES: (usize, usize) = (0, 1);
-    const NO: (usize, usize) = (0, 2);
 
     /// `Restore demo songs`: the app writes the demos, once a tap, with no question first.
     #[test]

@@ -985,7 +985,7 @@ fn the_normal_generator_has_mean_0_and_deviation_1_and_differs_by_seed() {
 
 mod component {
     use eframe::egui::{
-        self, Context, Event as In, Modifiers, MouseWheelUnit, PointerButton, Pos2, Rangef,
+        self, Context, Event as In, Modifiers, MouseWheelUnit, PointerButton, Pos2,
         RawInput, Rect, Vec2, pos2, vec2,
     };
 

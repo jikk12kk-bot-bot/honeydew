@@ -1141,15 +1141,6 @@ fn the_rows_file_items_ask_the_host_and_change_nothing_here() {
     }
 }
 
-/// The `+` add-drum button's ring (icon `AddLarge`), in `color`.
-fn add_ring(rig: &Rig, color: Color32) -> bool {
-    let center = rig.layout().add_button().center();
-    rig.shapes.iter().any(|s| {
-        matches!(&s.shape, egui::Shape::Circle(c)
-            if c.center.distance(center) < 0.5 && c.stroke.color == color)
-    })
-}
-
 #[test]
 fn the_fill_and_clear_items_edit_the_row() {
     let mut rig = Rig::new(pattern());
@@ -2277,7 +2268,6 @@ fn a_second_finger_cancels_the_box_and_starts_none() {
 /// at its first show (f 0.5 of H = 600, the view below its top window margin, which is 0: the `SWING` strip counts):
 /// its strip from y 300, its list and value area under the 4 px gap, 296 tall, the centre band around y 452.
 const KNOB: Pos2 = pos2(44.8, 595.0);
-const STRIP_TOP: f32 = 300.0;
 const LANE_TOP: f32 = 304.0;
 const LANE_MID: f32 = 452.0;
 
