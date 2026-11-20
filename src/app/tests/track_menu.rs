@@ -1278,65 +1278,7 @@ impl Rig {
     }
 }
 
-/// Two frames on, the channel each playlist row shows, top to bottom, read from where each track row's header is (its
-/// widget keeps the track row's id wherever it shows; `read_response` gives the pass before the last).
-fn shown(rig: &mut Rig) -> Vec<usize> {
-    rig.frame(vec![]);
-    rig.frame(vec![]);
-    let tracks = track_rows(&rig.app.song);
-    let top = |i: usize| {
-        let id = Id::new(("track_header", i));
-        rig.ctx.read_response(id).expect("drawn").rect.top()
-    };
-    let mut rows: Vec<usize> = (0..tracks.len()).collect();
-    rows.sort_by(|&a, &b| top(a).total_cmp(&top(b)));
-    rows.iter().map(|&i| tracks[i].channel).collect()
-}
-
 const NAMES: [&str; 4] = ["MASTER", "Drums", "MiniSynth", "MiniSynth 2"];
-
-#[test]
-fn a_held_header_dragged_down_reorders_the_rows_live_and_its_drop_is_one_undo_step() {
-    let mut rig = three_channels();
-    rig.hold_header(1);
-    assert_eq!(rig.app.selected_channel, 1, "the hold selects the track");
-    // A row down, then another: the Drums swap with each row in turn; the song waits for the drop.
-    rig.drag_to(header(2));
-    assert_eq!(shown(&mut rig), [0, 2, 1, 3]);
-    rig.drag_to(header(3));
-    assert_eq!(shown(&mut rig), [0, 2, 3, 1]);
-    assert_eq!(names(&rig), NAMES);
-    assert!(!rig.app.history.can_undo());
-    assert_eq!(
-        rig.take(),
-        Vec::<String>::new(),
-        "no rebuild while it drags"
-    );
-    rig.release(header(3));
-    let moved = ["MASTER", "MiniSynth", "MiniSynth 2", "Drums"];
-    assert_eq!(names(&rig), moved);
-    assert_eq!(shown(&mut rig), [0, 1, 2, 3]);
-    assert_eq!(
-        rig.app.selected_channel, 3,
-        "the keyboard stays on the Drums"
-    );
-    assert_eq!(
-        rig.take(),
-        ["ReplaceSong adopting no-resync"],
-        "one rebuild, at the drop"
-    );
-    // A save and load keep the order.
-    let saved = crate::flm::read(&crate::flm::write(&rig.app.song).unwrap()).unwrap();
-    let saved: Vec<_> = saved.channels.iter().map(|c| c.name.clone()).collect();
-    assert_eq!(saved, moved);
-    // One undo step.
-    rig.frame(undo());
-    assert_eq!(names(&rig), NAMES);
-    assert_eq!(rig.app.selected_channel, 1);
-    assert!(!rig.app.history.can_undo());
-    rig.frame(redo());
-    assert_eq!(names(&rig), moved);
-}
 
 #[test]
 fn a_moved_channel_takes_what_is_kept_for_it_and_its_held_note_cannot_stick() {

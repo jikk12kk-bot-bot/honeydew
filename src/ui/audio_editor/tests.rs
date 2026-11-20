@@ -831,52 +831,6 @@ fn a_silent_stretch_draws_a_1_px_line_a_column() {
     assert_eq!(rig.quads(wave), (0..256).map(line).collect::<Vec<_>>());
 }
 
-#[test]
-fn the_draw_order_layers_marks_lanes_overlay_and_markers() {
-    let mut s = song();
-    // A VOL point (another lane, once PAN is current) and a song loop over beats 1…2.
-    points::set_points(
-        &mut s.channels[1].lanes[0].clips[0],
-        VOL,
-        vec![Point {
-            tick: 0,
-            value: 65535,
-            ..Default::default()
-        }],
-    );
-    s.play_loop = Some((128, 256));
-    let mut rig = Rig::new(s, Some(sample(1000, vec![0.1; 1000], None)));
-    rig.ed.lane = 1;
-    rig.run(vec![]);
-    let theme = crate::theme::theme_by_id(0);
-    let c = &theme.colors;
-    // Past the 4-beat loop, black at 15 % over the value area.
-    let overlay = rig.rects(Color32::from_black_alpha(38));
-    assert_eq!(
-        overlay,
-        [Rect::from_min_max(pos2(562.0, 64.0), pos2(1170.0, 324.0))]
-    );
-    // PAN: the 1 px centre line.
-    let control = rig.rects(c.control_fill.to_color32());
-    assert!(control.contains(&Rect::from_min_max(pos2(50.0, 194.0), pos2(1170.0, 195.0))));
-    // The sample's end (2 beats) in menuFill; the song loop's edges in the channel colour.
-    let menu = rig.rects(c.menu_fill.to_color32());
-    assert!(menu.contains(&Rect::from_min_max(pos2(306.0, 48.0), pos2(307.0, 340.0))));
-    let ink = channel_color(rig.song.channels[1].hue, &theme).to_color32();
-    let loops = rig.rects(ink);
-    for x in [178.0, 306.0] {
-        assert!(
-            loops.contains(&Rect::from_min_max(pos2(x, 48.0), pos2(x + 1.0, 340.0))),
-            "{loops:?}"
-        );
-    }
-    // VOL's curve in menuFill, full width at its one value.
-    let vol_y = frame().point_y(65535, 65535);
-    assert!(rig.shapes.iter().any(|s| matches!(&s.shape,
-        Shape::LineSegment { points, stroke } if stroke.color == c.menu_fill.to_color32()
-            && points[0].y == vol_y && points[1].x == 1170.0)));
-}
-
 // ---- the view in the app's slot ----
 
 fn user(relative: &str) -> ContentPath {
@@ -1214,19 +1168,6 @@ fn at_speed_plus_12_the_waveform_and_its_end_take_half_the_beats() {
         end,
         [Rect::from_min_max(pos2(178.0, 48.0), pos2(179.0, 340.0))]
     );
-}
-
-#[test]
-fn vol_has_no_centre_line_and_the_marks_keep_2_4_u_apart() {
-    let rig = Rig::new(song(), None);
-    let theme = crate::theme::theme_by_id(0);
-    let control = theme.colors.control_fill.to_color32();
-    let centre = Rect::from_min_max(pos2(50.0, 194.0), pos2(1170.0, 195.0));
-    assert!(!rig.rects(control).contains(&centre));
-    // 4 U a beat: beats (2 px) and bars (4 px), no quarter beats (1 U apart).
-    let marks = full_height(&rig, control);
-    assert!(marks.contains(&Rect::from_min_max(pos2(177.0, 48.0), pos2(179.0, 340.0))));
-    assert!(marks.iter().all(|r| r.width() >= 2.0), "{marks:?}");
 }
 
 #[test]

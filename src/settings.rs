@@ -62,8 +62,31 @@ pub fn migrate_legacy_keys(storage: &mut dyn eframe::Storage) {
 /// driver modes `Standard` and `Multitrack` instead.
 #[cfg(desktop)]
 pub const SOUND_MODES: [(u8, &str); 2] = [(0, "STANDARD"), (1, "MULTITRACK")];
-#[cfg(not(desktop))]
+/// Android's are FL Studio Mobile's, through Oboe (`honeydew_audio::device`'s `oboe_out`).
+#[cfg(target_os = "android")]
+pub const SOUND_MODES: [(u8, &str); 4] =
+    [(1, "FAST"), (0, "SAFE"), (2, "ULTRASAFE"), (3, "NATIVE")];
+#[cfg(not(any(desktop, target_os = "android")))]
 pub const SOUND_MODES: [(u8, &str); 1] = [(3, "NATIVE")];
+
+/// `Grid color:` items, in menu order: `Default` (from the theme, [`crate::theme::grid_ink`]), then fixed colours
+/// as `0xRRGGBB`.
+pub const GRID_COLORS: [(&str, u32); 14] = [
+    ("Default", 0),
+    ("White", 0xFFFFFF),
+    ("Light gray", 0xB4BABE),
+    ("Gray", 0x7C8286),
+    ("Dark gray", 0x454B4F),
+    ("Black", 0x000000),
+    ("Red", 0xE0474C),
+    ("Orange", 0xF08A24),
+    ("Yellow", 0xF2D13A),
+    ("Green", 0x4CC26B),
+    ("Cyan", 0x3CC8E0),
+    ("Blue", 0x4A7CF0),
+    ("Purple", 0xA45CE8),
+    ("Pink", 0xF06AB4),
+];
 
 /// Buffer-size slider positions. Zero keeps the audio device's native/default buffer;
 /// positive values are targets that the backend clamps to the device's supported range.
@@ -192,6 +215,13 @@ pub struct Settings {
     /// `Sound mode:`, a stored id from [`SOUND_MODES`], selecting the platform's audio mode.
     #[serde(rename = "soundModeAndr")]
     pub sound_mode: u8,
+    /// `Enable low latency mode` (FL Studio Mobile's; our own key): Android's `NATIVE` sound mode with the smallest
+    /// buffer the phone plays. Off by default.
+    #[serde(rename = "lowLatencyMode")]
+    pub low_latency_mode: bool,
+    /// `Grid color:`, an index into [`GRID_COLORS`] (our own key): the beat lines of the playlist and the editors.
+    #[serde(rename = "gridColor")]
+    pub grid_color: u8,
     /// `Enable audio recording latency compensation` (our own key): ON compensates. Honeydew change (#129, #130): the
     /// earlier `reclatency` toggle compensated while OFF or unset; a load moves it here once, keeping whether it
     /// compensated ([`migrate_keys`]). On by default, as the earlier unset key compensated.
@@ -449,6 +479,8 @@ impl Default for Settings {
             low_latency: 0,
             background_audio: false,
             sound_mode: DEFAULT_SOUND_MODE,
+            low_latency_mode: false,
+            grid_color: 0,
             latency_compensation: true,
             multitrack_recording: false,
             count_in: true,
@@ -513,6 +545,14 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// `Grid color:` as `0xRRGGBB`, `None` for the theme's own ([`crate::theme::set_grid_color`]).
+    pub fn grid_rgb(&self) -> Option<u32> {
+        match GRID_COLORS.get(usize::from(self.grid_color)) {
+            Some(&(_, rgb)) if self.grid_color > 0 => Some(rgb),
+            _ => None,
+        }
+    }
+
     /// The settings stored in `storage`. Anything missing or unreadable is the default, field by field, and so is an
     /// out-of-range value: an unknown theme is Classic Gray, an unknown scale 100 %.
     pub fn load(storage: &dyn eframe::Storage) -> Self {
@@ -563,6 +603,9 @@ impl Settings {
         s.low_latency = s.low_latency.min((BUFFER_SIZES.len() - 1) as u8);
         if !SOUND_MODES.iter().any(|&(id, _)| id == s.sound_mode) {
             s.sound_mode = d.sound_mode;
+        }
+        if usize::from(s.grid_color) >= GRID_COLORS.len() {
+            s.grid_color = d.grid_color;
         }
         if !(0.0..=1.0).contains(&s.metronome_level) {
             s.metronome_level = d.metronome_level;
@@ -915,6 +958,8 @@ mod tests {
                 .get(1)
                 .map(|&(id, _)| id)
                 .unwrap_or(d.sound_mode),
+            low_latency_mode: !d.low_latency_mode,
+            grid_color: 3,
             latency_compensation: !d.latency_compensation,
             multitrack_recording: !d.multitrack_recording,
             count_in: !d.count_in,

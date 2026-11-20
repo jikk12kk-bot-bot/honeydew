@@ -53,13 +53,13 @@ pub struct Media {
 }
 
 impl Media {
-    /// Loads what `s` shows when it changed, and moves the video to song second `song_secs` (`playing` or not), or to
-    /// video second `preview` while the panel scrubs a trim.
+    /// Loads what `s` shows when it changed, and moves the video to song second `song_secs` (`playing` or not, at
+    /// `bpm`), or to video second `preview` while the panel scrubs a trim.
     pub fn sync(
         &mut self,
         ctx: &egui::Context,
         s: &DisplayerSettings,
-        song_secs: f64,
+        (song_secs, bpm): (f64, f64),
         playing: bool,
         preview: Option<f64>,
     ) {
@@ -82,9 +82,9 @@ impl Media {
             }
         }
         #[cfg(feature = "video")]
-        self.sync_video(ctx, s, song_secs, playing, preview);
+        self.sync_video(ctx, s, (song_secs, bpm), playing, preview);
         #[cfg(not(feature = "video"))]
-        let _ = (song_secs, playing, preview);
+        let _ = (song_secs, bpm, playing, preview);
     }
 
     #[cfg(feature = "video")]
@@ -92,7 +92,7 @@ impl Media {
         &mut self,
         ctx: &egui::Context,
         s: &DisplayerSettings,
-        song_secs: f64,
+        (song_secs, bpm): (f64, f64),
         playing: bool,
         preview: Option<f64>,
     ) {
@@ -118,6 +118,7 @@ impl Media {
         let target = Target {
             picture: preview.or_else(|| trim.at(song_secs)),
             song_secs,
+            bpm,
             playing: playing && preview.is_none(),
             trim,
             gain,

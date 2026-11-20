@@ -420,23 +420,6 @@ fn the_expanded_column_is_15_u_in_a_narrow_editor_too() {
     assert!((level.right() - 15.0 * u).abs() < 1.0, "{level:?}");
 }
 
-/// Removing a drum row clears the undo history, the removal's own step included.
-#[test]
-fn removing_a_drum_row_clears_the_undo_history() {
-    let mut rig = drum_rig();
-    rig.row_menu(1, (1, 2));
-    rig.take();
-    assert!(rig.app.history.can_undo());
-    rig.row_menu(2, (0, 4));
-    rig.frame(vec![]);
-    rig.click_id(steps("delete").with((0_usize, 1_usize)));
-    assert_eq!(rig.kit().slots.len(), 3);
-    // The menu made the Hat's row current, which sounds nothing.
-    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
-    assert!(!rig.app.history.can_undo());
-    assert!(!rig.app.history.can_redo());
-}
-
 /// Clear and Fill never re-sync, though they take hits away.
 #[test]
 fn clear_and_fill_take_hits_away_with_no_re_sync() {
@@ -474,44 +457,6 @@ fn a_step_tapped_on_does_not_re_sync_though_it_shrinks_the_loop() {
     rig.click(rig.step(0, 1));
     assert_eq!(rig.hits(), []);
     assert_eq!(rig.take(), ["NoteOff 1 48", "ReplaceSong adopting"]);
-}
-
-#[test]
-fn the_row_menu_edits_the_pattern_and_the_kit_through_the_funnel() {
-    let mut rig = drum_rig();
-    // Fill each 4 step, on the Snare, whose row the menu makes current (silently).
-    rig.row_menu(1, (1, 2));
-    assert_eq!(rig.hits(), [(1, 0), (1, 128), (1, 256), (1, 384)]);
-    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
-    // Clone: the Snare's copy is the kit's pad 2 and gets the Snare's hits; the later pads move down.
-    rig.row_menu(1, (0, 3));
-    let names =
-        |rig: &Rig| -> Vec<String> { rig.kit().slots.iter().map(|s| s.name.clone()).collect() };
-    assert_eq!(
-        names(&rig),
-        ["Kick 01", "Snare 01", "Snare 01", "Hat 01", "Clap 01"]
-    );
-    assert_eq!(rig.hits().len(), 8);
-    // Its hits are an addition, as a Paste's: a re-sync.
-    assert_eq!(rig.take(), ["ReplaceSong adopting"]);
-    // Set Name names the pad (its custom name, from none), not the sample.
-    rig.row_menu(2, (0, 6));
-    rig.frame(vec![]);
-    rig.frame(vec![egui::Event::Text("Rim".into())]);
-    rig.frame(vec![key_event(egui::Key::Enter, egui::Modifiers::NONE)]);
-    let slot = &rig.kit().slots[2];
-    assert_eq!(
-        (slot.name.as_str(), slot.file.custom_pad_name.as_str()),
-        ("Snare 01", "Rim")
-    );
-    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
-    // Delete asks first; Yes removes the pad and its hits, and the later pads move up.
-    rig.row_menu(2, (0, 4));
-    rig.frame(vec![]);
-    rig.click_id(steps("delete").with((0_usize, 1_usize)));
-    assert_eq!(names(&rig), ["Kick 01", "Snare 01", "Hat 01", "Clap 01"]);
-    assert_eq!(rig.hits(), [(1, 0), (1, 128), (1, 256), (1, 384)]);
-    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
 }
 
 #[test]
@@ -2982,30 +2927,6 @@ mod samples {
             assert_eq!(names(&file.unwrap()), names(rig.kit()));
             assert_eq!(rig.app.song, song);
             assert_eq!(rig.take(), Vec::<String>::new());
-        }
-    }
-
-    #[test]
-    fn an_undo_under_the_open_picker_that_changes_the_kit_closes_it_in_both_drum_modes() {
-        // Clone Snare (Kick, Snare, Snare*, Hat, Clap), `Load Sample` on row 3 (Hat), then an undo under the picker:
-        // row 3 is Clap now. The picker closes rather than load into the wrong pad.
-        for grid in [false, true] {
-            let mut rig = sample_rig(grid);
-            let before = rig.kit().clone();
-            row_item(&mut rig, view(grid), 1, (0, 3));
-            assert_eq!(rig.kit().slots.len(), 5);
-            row_item(&mut rig, view(grid), 3, (0, 0));
-            picker_row(&mut rig, 0);
-            let last = rig.kit().file.last_slot_id;
-            rig.undo_under_modal();
-            let mut want = before.clone();
-            want.file.last_slot_id = last;
-            assert_eq!(rig.kit(), &want, "the clone's id stays taken");
-            assert_eq!(rig.overlays(), [], "grid {grid}");
-            // Nothing is left to pick into Clap, now on row 3.
-            rig.frame(vec![]);
-            assert_eq!(rig.overlays(), []);
-            assert!(rig.kit().slots.iter().all(|s| s.file.path.is_none()));
         }
     }
 

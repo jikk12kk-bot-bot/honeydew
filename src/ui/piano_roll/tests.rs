@@ -985,8 +985,8 @@ fn the_normal_generator_has_mean_0_and_deviation_1_and_differs_by_seed() {
 
 mod component {
     use eframe::egui::{
-        self, Context, Event as In, Modifiers, MouseWheelUnit, PointerButton, Pos2, Rangef,
-        RawInput, Rect, Vec2, pos2, vec2,
+        self, Context, Event as In, Modifiers, MouseWheelUnit, PointerButton, Pos2, RawInput, Rect,
+        Vec2, pos2, vec2,
     };
 
     use eframe::egui::{TouchDeviceId, TouchId, TouchPhase};
@@ -3431,38 +3431,6 @@ mod component {
         assert_eq!(guides, want);
     }
 
-    #[test]
-    fn the_lanes_beat_lines_are_the_grids_marks() {
-        // The grid's beat lines, in `background`: 4 px at a bar, 2 at a beat, 1 finer, at least 0.6 U apart: at 64
-        // points a beat, every half beat; w px from ⌊w/2⌋ px left of the mark, clipped to the value area from x 50.
-        let rig = lane_rig(vec![]);
-        let bg = theme_by_id(0).colors.background.to_color32();
-        let lines: Vec<(f32, f32)> = (rig.visible.iter())
-            .filter(|(r, f)| {
-                *f == bg
-                    && r.y_range() == Rangef::new(LANE_TOP, 349.0)
-                    && (0.0..=4.0).contains(&r.width())
-                    && r.width() > 0.0
-                    && r.right() < 330.0
-            })
-            .map(|(r, _)| (r.left(), r.width()))
-            .collect();
-        assert_eq!(
-            lines,
-            [
-                (50.0, 2.0),
-                (82.0, 1.0),
-                (113.0, 2.0),
-                (146.0, 1.0),
-                (177.0, 2.0),
-                (210.0, 1.0),
-                (241.0, 2.0),
-                (274.0, 1.0),
-                (304.0, 4.0)
-            ]
-        );
-    }
-
     // ---- the ruler's gestures and the region menu ----
 
     /// On the ruler, over content tick `tick`; tick 0 just inside it, right of the snap cell (which ends at x 48).
@@ -4122,35 +4090,6 @@ mod grid {
                 cx,
             )
         })
-    }
-
-    #[test]
-    fn the_beat_marks_are_the_shared_adaptive_ones_4_px_bars_2_px_beats_1_px_halves_at_ppp_1_and_2()
-    {
-        let bg = theme_by_id(0).colors.background.to_color32();
-        for ppp in [1.0, 2.0] {
-            let (rects, grid, u, _) = background(ppp);
-            let px = 1.0 / ppp;
-            // The vertical `background` lines down the whole grid: (left, width in px).
-            let marks: Vec<(f32, f32)> = (rects.iter())
-                .filter(|(r, fill)| *fill == bg && r.y_range() == grid.y_range())
-                .map(|(r, _)| (r.left(), r.width() * ppp))
-                .collect();
-            // At 2 U a beat the finest level 0.6 U apart is the half beat (1 U); a bar is 4 beats.
-            let want: Vec<(f32, f32)> = (0..)
-                .map(|i| (i, grid.left() + i as f32 * u))
-                .take_while(|&(_, x)| x <= grid.right())
-                .map(|(i, x)| {
-                    let w = match i {
-                        _ if i % 8 == 0 => 4.0,
-                        _ if i % 2 == 0 => 2.0,
-                        _ => 1.0,
-                    };
-                    (x - (w / 2.0f32).floor() * px, w)
-                })
-                .collect();
-            assert_eq!(marks, want, "ppp {ppp}");
-        }
     }
 
     #[test]

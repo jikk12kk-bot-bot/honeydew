@@ -149,10 +149,12 @@ pub(crate) const MIXER_W: f32 = 12.0;
 /// The fold's step per 60 Hz frame, and how near its target it snaps.
 const FOLD_RATE: f32 = 0.4;
 const FOLD_SNAP: f32 = 0.05;
-/// The row pitch is the vertical zoom, clamped to 0.75 U … 12 U. A new clip asks for 1 U, so it opens at 2 U.
+/// The row pitch is the vertical zoom, clamped to 0.75 U … 12 U. A new clip opens at [`NEW_PITCH`].
 const PITCH_MIN: f32 = 0.75;
 const PITCH_MAX: f32 = 12.0;
-const NEW_PITCH: f32 = 1.0;
+/// A clip's rows open this tall (the view keeps no pitch across a restart): big enough to tap on a phone (1 U was
+/// far too thin).
+const NEW_PITCH: f32 = 4.0;
 /// The scroll range is the rows plus this many rows of room, which holds the `+` add-drum button: `ADD_D` square,
 /// `ADD_GAP` below the last row.
 const ROOM_ROWS: f32 = 1.5;

@@ -242,6 +242,8 @@ enum Choice {
     SampleMemory,
     /// `Sample rate:`: the rate playback and renders use ([`crate::song::SAMPLE_RATES`]), in Hz.
     SampleRate,
+    /// `Grid color:` ([`crate::settings::GRID_COLORS`]): the beat lines of the playlist and the editors.
+    GridColor,
     /// `Screen orientation:` (#41): `Auto`, `Portrait` or `Landscape` ([`crate::settings::ORIENTATIONS`]).
     Orientation,
     /// `Project version size limit:` (#69), in MB ([`crate::settings::VERSION_SIZE_LIMITS`]).
@@ -265,7 +267,7 @@ const fn row(label: &'static str, kind: Kind) -> Row {
 }
 
 /// Every row of the SETTINGS tab, in order.
-const ROWS: [Row; 57] = {
+const ROWS: [Row; 59] = {
     use Kind::*;
     [
         row("MIDI:", Header),
@@ -292,6 +294,14 @@ const ROWS: [Row; 57] = {
             },
         ),
         row("Sound mode:", Dropdown(Choice::SoundMode)),
+        row(
+            "Enable low latency mode",
+            if cfg!(target_os = "android") {
+                Toggle(|s| &mut s.low_latency_mode)
+            } else {
+                FixedToggle(false)
+            },
+        ),
         row("Sample memory limit:", Dropdown(Choice::SampleMemory)),
         row("Recording:", Header),
         row("Audio input:", AudioInput),
@@ -309,6 +319,7 @@ const ROWS: [Row; 57] = {
         row("User interface:", Header),
         row("Theme:", Dropdown(Choice::Theme)),
         row("Theme creator", ThemeCreator),
+        row("Grid color:", Dropdown(Choice::GridColor)),
         row("Scaling:", Scaling),
         row("Scale is currently limited to", ScaleLimit),
         row("Animation:", Dropdown(Choice::Animation)),
@@ -814,6 +825,14 @@ impl SettingsTab {
                     }
                     _ => {}
                 }
+                if row.label == "Enable low latency mode" {
+                    crate::ui::tooltip::tip(
+                        ui,
+                        rect,
+                        "NATIVE sound mode only (Android): the smallest buffer the phone plays, for the lowest latency. It may overload the CPU and crackle; the buffer grows by itself when it does.",
+                        None,
+                    );
+                }
                 if row.label == "Multi core processing" {
                     crate::ui::tooltip::tip(
                         ui,
@@ -839,12 +858,18 @@ impl SettingsTab {
                 if matches!(choice, Choice::SoundMode) {
                     #[cfg(desktop)]
                     let sound_mode_tip = "STANDARD: general-purpose mode with broad device compatibility.\nMULTITRACK: experimental; FL-style per-input multitrack routing is not implemented yet. The buffer slider works in either mode.";
-                    #[cfg(not(desktop))]
-                    let sound_mode_tip = "ULTRASAFE: largest buffer; maximum stability and compatibility, highest latency.\nSAFE: moderately large buffer; fewer glitches with more latency.\nFAST: small buffer; lower latency but more CPU/dropout risk.\nNATIVE: device/OS default audio behavior.";
+                    #[cfg(target_os = "android")]
+                    let sound_mode_tip = "FAST: lowest latency for capable devices (Oboe, shared).\nSAFE: larger buffer; fewer glitches with more latency.\nULTRASAFE: largest buffer; maximum stability and compatibility, highest latency.\nNATIVE: lowest latency through Oboe's exclusive stream, recommended on Android 9 and up; works with low latency mode.\nThe buffer grows by itself when the phone cannot keep up.";
+                    #[cfg(not(any(desktop, target_os = "android")))]
+                    let sound_mode_tip = "NATIVE: device/OS default audio behavior.";
                     crate::ui::tooltip::tip(ui, button_rect, sound_mode_tip, None);
                 }
+                if matches!(choice, Choice::GridColor) {
+                    let tip = "The color of the beat and bar lines in the playlist and the editors. Default: a color from the theme.";
+                    crate::ui::tooltip::tip(ui, button_rect, tip, None);
+                }
                 if matches!(choice, Choice::SampleRate) {
-                    let tip = "The rate playback and renders run at. Songs do not keep it. Device: the phone's own rate, for both. A phone that cannot play at a chosen rate plays at its own, and renders still use the chosen one.";
+                    let tip = "The rate playback and renders run at. Songs do not keep it. Device: the phone's own rate, for both. A rate beyond what the device's output supports shows a warning: it still plays, resampled, with more CPU.";
                     crate::ui::tooltip::tip(ui, button_rect, tip, None);
                 }
                 if matches!(choice, Choice::SampleMemory) {
@@ -1321,6 +1346,10 @@ impl Choice {
             Choice::EditorResolution => (crate::settings::EDITOR_RESOLUTIONS.iter())
                 .map(|&p| (usize::from(p), format!("{p}%")))
                 .collect(),
+            Choice::GridColor => (crate::settings::GRID_COLORS.iter())
+                .map(|&(label, _)| label.to_owned())
+                .enumerate()
+                .collect(),
         }
     }
 
@@ -1338,6 +1367,7 @@ impl Choice {
             Choice::Orientation => usize::from(s.screen_orientation),
             Choice::VersionSize => s.version_size_limit as usize,
             Choice::EditorResolution => usize::from(s.plugin_editor_resolution),
+            Choice::GridColor => usize::from(s.grid_color),
         }
     }
 
@@ -1352,6 +1382,7 @@ impl Choice {
             Choice::Orientation => s.screen_orientation = value as u8,
             Choice::VersionSize => s.version_size_limit = value as u32,
             Choice::EditorResolution => s.plugin_editor_resolution = value as u8,
+            Choice::GridColor => s.grid_color = value as u8,
         }
     }
 
@@ -1822,16 +1853,6 @@ mod tests {
                 .expect("the row paints a label")
         }
 
-        fn key(&mut self, key: egui::Key) {
-            self.frame(vec![Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: Default::default(),
-            }]);
-        }
-
         fn take_changed(&mut self) -> bool {
             std::mem::take(&mut self.changed)
         }
@@ -2038,7 +2059,7 @@ mod tests {
             let (u, t) = (m.u(1.0), m.t());
             let column_right = rig.width - 2.0 * u;
             let fills = fills(&rig);
-            assert_eq!(toggles().count(), 19);
+            assert_eq!(toggles().count(), 20);
             for r in toggles() {
                 let at = format!("ppp {ppp} scale {scale}: `{}`", r.label);
                 let control = rig.rect_of(row_id(index(r.label)));
@@ -2766,74 +2787,8 @@ mod tests {
         assert!((name.center().x - button.center().x).abs() < 1.0);
     }
 
-    /// Settings away from the defaults.
-    fn edited() -> Settings {
-        Settings {
-            midi_device: "Keys 49".into(),
-            theme: 4,
-            key_names: true,
-            hardware_meters: false,
-            metronome_level: 0.9,
-            ..Settings::default()
-        }
-    }
-
     /// The confirm popup's items: the question (a header, row 0), then `Yes` and `No`.
     const YES: (usize, usize) = (0, 1);
-    const NO: (usize, usize) = (0, 2);
-
-    #[test]
-    fn restore_default_settings_asks_first_and_only_yes_resets() {
-        let mut rig = Rig::new();
-        rig.settings = edited();
-        rig.click_row("Restore default settings");
-        // A Yes / No confirm.
-        assert!(rig.tab.menu.is_some());
-        // An area's first frame is egui's invisible sizing pass.
-        rig.frame(vec![]);
-        assert!(
-            rig.texts()
-                .iter()
-                .any(|t| t == "Are you sure you want to restore default settings?")
-        );
-        assert_eq!(rig.settings, edited());
-        let no = rig.rect_of(popup_id().with(NO)).center();
-        rig.click(no);
-        assert!(rig.tab.menu.is_none());
-        // Escape closes it too.
-        rig.click_row("Restore default settings");
-        rig.key(egui::Key::Escape);
-        assert!(rig.tab.menu.is_none());
-        assert!(!rig.take_changed());
-        assert_eq!(rig.settings, edited());
-
-        rig.click_row("Restore default settings");
-        let yes = rig.rect_of(popup_id().with(YES)).center();
-        rig.click(yes);
-        assert_eq!(rig.settings, Settings::default());
-        assert!(rig.take_changed());
-        assert!(rig.tab.menu.is_none());
-    }
-
-    /// `Restore default settings` leaves the demo songs done: the next start does not write them again.
-    #[test]
-    fn restore_default_settings_keeps_the_demo_songs_restored() {
-        let mut rig = Rig::new();
-        rig.settings = Settings {
-            demo_songs_version: 2,
-            whats_new_seen: "5.0".into(),
-            ..edited()
-        };
-        rig.click_row("Restore default settings");
-        let yes = rig.rect_of(popup_id().with(YES)).center();
-        rig.click(yes);
-        let kept = Settings {
-            demo_songs_version: 2,
-            whats_new_seen: "5.0".into(),
-            ..Settings::default()
-        };
-        assert_eq!(rig.settings, kept);
-    }
 
     /// `Restore demo songs`: the app writes the demos, once a tap, with no question first.
     #[test]

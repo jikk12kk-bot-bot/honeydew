@@ -153,6 +153,32 @@ pub fn open_device_with_mode(
     }
 }
 
+/// The highest sample rate the device's audio output takes, for SETTINGS' `Sample rate:` warning: Android's
+/// (`HoneydewActivity.maxOutputRate`), the default output's on the desktop; `None` where unknown (and in tests).
+#[cfg(all(target_os = "android", not(test)))]
+pub fn max_output_rate() -> Option<u32> {
+    crate::android::max_output_rate()
+}
+
+#[cfg(all(desktop, not(test)))]
+pub fn max_output_rate() -> Option<u32> {
+    honeydew_audio::device::max_output_rate()
+}
+
+#[cfg(any(test, not(any(desktop, target_os = "android"))))]
+pub fn max_output_rate() -> Option<u32> {
+    None
+}
+
+/// SETTINGS' `Enable low latency mode` (Android's `NATIVE` sound mode only, as FL Studio Mobile's): the smallest
+/// buffer the phone plays ([`BufferMode::Lowest`]).
+static LOWEST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Sets [`LOWEST`]: the next output opened takes it.
+pub fn set_low_latency_mode(on: bool) {
+    LOWEST.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub fn buffer_mode(sound_mode: u8, low_latency: u8) -> BufferMode {
     let target = crate::settings::BUFFER_SIZES
         .get(usize::from(low_latency))
@@ -168,6 +194,7 @@ pub fn buffer_mode(sound_mode: u8, low_latency: u8) -> BufferMode {
         2 => BufferMode::UltraSafe,
         0 => BufferMode::Safe,
         1 => BufferMode::Fast,
+        _ if LOWEST.load(std::sync::atomic::Ordering::Relaxed) => BufferMode::Lowest,
         _ => BufferMode::Native,
     })
 }
@@ -677,6 +704,12 @@ impl AudioLink {
             self.stream_failed = false;
             self.requested_rate = Some(rate());
         }
+    }
+
+    /// Reopens the running output with the current buffer policy (`Enable low latency mode` changed), the transport
+    /// kept.
+    pub fn reopen_output(&mut self, song: &Song) {
+        self.set_sample_rate(song);
     }
 
     /// Reopens the running output at `song`'s sample rate (PR #87), the transport kept, the samples already loaded.

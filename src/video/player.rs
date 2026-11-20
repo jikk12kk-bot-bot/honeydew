@@ -22,8 +22,10 @@ use crate::displayer::Trim;
 pub struct Target {
     /// The picture at this video second; `None`: black (the trimmed part over, unlooped).
     pub picture: Option<f64>,
-    /// The song's second (from its start) and whether it plays: the sound follows them.
+    /// The song's second (from its start), its tempo and whether it plays: the sound follows them, on the output's
+    /// own clock ([`FEED`]'s tick) once it has one.
     pub song_secs: f64,
+    pub bpm: f64,
     pub playing: bool,
     pub trim: Trim,
     /// The sound's level, 0 when muted.
@@ -35,6 +37,7 @@ impl Default for Target {
         Self {
             picture: Some(0.0),
             song_secs: 0.0,
+            bpm: 120.0,
             playing: false,
             trim: Trim::default(),
             gain: 0.0,
@@ -415,11 +418,17 @@ fn sound_thread(shared: &Shared, file: &Arc<MediaFile>) {
             continue;
         }
         let r = f64::from(rate);
+        // The song's second as the output plays it: its callback's tick, which moves on while the app runs no frame
+        // (in the background), else the app's.
+        let secs = |tick: Option<u64>, or: f64| {
+            tick.map_or(or, |t| crate::displayer::song_secs(t, target.bpm))
+        };
+        let song_now = secs(FEED.tick(), target.song_secs);
         // Where the callback is, since the flush, against the song's clock: off by more than a moment (a seek, a loop,
         // a stop and play) starts again from the song's second.
         let drifted = from.is_some_and(|(start, _)| {
             let played = start + FEED.consumed() as f64 / r;
-            (target.song_secs - played).abs() > 0.35
+            (song_now - played).abs() > 0.35
         });
         if from.is_none() || drifted {
             let generation = FEED.flush();
@@ -429,7 +438,11 @@ fn sound_thread(shared: &Shared, file: &Arc<MediaFile>) {
                 std::thread::sleep(Duration::from_millis(2));
                 waited += 1;
             }
-            let start = lock(&shared.target).song_secs;
+            // From where the callback took the flush, which the frames it counts since start at.
+            let start = match FEED.flushed(generation) {
+                true => secs(FEED.flushed_tick(), lock(&shared.target).song_secs),
+                false => lock(&shared.target).song_secs,
+            };
             from = Some((start, 0));
             owed = 0;
             if let Some(v) = target.trim.at(start) {

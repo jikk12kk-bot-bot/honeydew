@@ -122,6 +122,7 @@ const REOPEN_RETRY_S: f64 = 1.0;
 const MISSING_AUDIO: &str = "Some audio files were missing";
 /// The tag of the message that the output fell back from the project's sample rate (PR #87).
 const RATE_TAG: &str = "sample_rate_fallback";
+const RATE_CAP_TAG: &str = "sample_rate_capability";
 const MISSING_TAG: &str = "missing audio";
 
 /// The piano roll's key column velocity: MIDI 100, normalised /127 as `NoteOn` takes it (song notes keep bytes, a/255).
@@ -269,6 +270,9 @@ pub struct HoneydewApp {
     audio_edit: Option<audio_edit::Pending>,
     /// The audio export rendering behind the busy screen (`app/export.rs`).
     export: Option<crate::project_files::export::Job>,
+    /// Android: the export rendering on a thread while the app is away (`app/export.rs`, `export_leave`).
+    #[cfg(target_os = "android")]
+    export_away: Option<export::Away>,
     /// `Restore demo songs` behind its loading screen (`app/demo_restore.rs`).
     demo_restore: Option<demo_restore::DemoRestore>,
     /// `Burn Notes to Track` behind its loading screen: the channel's id, and whether the screen has had its frame
@@ -370,6 +374,8 @@ impl Default for HoneydewApp {
             sent_at: (0, 0.0),
             audio_edit: None,
             export: None,
+            #[cfg(target_os = "android")]
+            export_away: None,
             demo_restore: None,
             burn: None,
             midi: Default::default(),
@@ -460,8 +466,10 @@ impl HoneydewApp {
         if let Some(token) = settings::load_mcp_token() {
             settings.mcp_token = token;
         }
-        // Settings' `Sample rate:`, before the output first opens.
+        // Settings' `Sample rate:` and `Enable low latency mode`, before the output first opens; `Grid color:`.
         crate::audio_link::set_rate(settings.sample_rate);
+        crate::audio_link::set_low_latency_mode(settings.low_latency_mode);
+        crate::theme::set_grid_color(settings.grid_rgb());
         let mut app = Self {
             theme: settings.theme(),
             routing: storage.as_deref().map(Routing::load).unwrap_or_default(),
@@ -571,6 +579,16 @@ impl HoneydewApp {
             if self.settings.sound_mode != self.settings_saved.sound_mode {
                 self.audio
                     .set_sound_mode(&self.song, self.settings.sound_mode);
+            }
+            if self.settings.low_latency_mode != self.settings_saved.low_latency_mode {
+                crate::audio_link::set_low_latency_mode(self.settings.low_latency_mode);
+                self.audio.reopen_output(&self.song);
+            }
+            if self.settings.grid_color != self.settings_saved.grid_color {
+                crate::theme::set_grid_color(self.settings.grid_rgb());
+            }
+            if self.settings.sample_rate != self.settings_saved.sample_rate {
+                self.warn_rate_capability();
             }
             if self.settings.multi_core != self.settings_saved.multi_core {
                 self.audio.set_multi_core(self.settings.multi_core);
@@ -1137,6 +1155,36 @@ impl HoneydewApp {
                 extra: None,
             }));
         }
+    }
+
+    /// SETTINGS' `Sample rate:` was just set beyond the highest rate the device's audio output takes
+    /// ([`crate::audio_link::max_output_rate`]): a message says so. The rate is still used: the output resamples it.
+    fn warn_rate_capability(&mut self) {
+        let wanted = self.settings.sample_rate;
+        let Some(max) = (wanted > 0)
+            .then(crate::audio_link::max_output_rate)
+            .flatten()
+        else {
+            return;
+        };
+        if wanted <= max {
+            return;
+        }
+        let hz = |r: u32| crate::ui::main_menu::thousands(r.into());
+        self.navigate(Nav::Open(Overlay::Message {
+            tag: RATE_CAP_TAG,
+            lines: vec![
+                format!(
+                    "{} Hz is beyond what this device's audio output supports (up to {} Hz).",
+                    hz(wanted),
+                    hz(max)
+                ),
+                "It is still used: the output resamples it, which takes more CPU and can crackle."
+                    .into(),
+            ],
+            confirm: None,
+            extra: None,
+        }));
     }
 
     /// PR #87: the output runs at another rate than the project's (the device fell back): a message says so, once for
@@ -2940,7 +2988,18 @@ impl HoneydewApp {
             let lost = |e: &egui::Event| matches!(e, egui::Event::WindowFocused(false));
             i.viewport().close_requested() || i.events.iter().any(lost)
         });
-        let leaving = crate::project_files::take_leaving(ctx) | leaving;
+        let paused = crate::project_files::take_leaving(ctx);
+        // Android: what goes on off the screen. The song playing or an export keeps the app running there (the
+        // foreground service `onPause` starts), and the export renders on a thread of its own meanwhile.
+        #[cfg(target_os = "android")]
+        {
+            let busy = self.export.is_some() || self.export_away.is_some();
+            crate::android::set_keep_alive(self.main_screen.playing || busy);
+            if paused {
+                self.export_leave();
+            }
+        }
+        let leaving = paused | leaving;
         // What a browser's `Add shortcut` / `Remove shortcut` or a folder's move changed, kept as settings.
         if let Some(edit) = crate::ui::shortcuts::take_edit(ctx) {
             self.settings.folder_shortcuts = edit.added;

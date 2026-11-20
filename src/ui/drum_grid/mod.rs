@@ -1012,9 +1012,10 @@ impl DrumGridView {
         let ys = Rangef::new(l.row_top(), l.row_top() + place.rows as f32 * l.pitch);
         let (t0, t1) = (axis.tick(grid.left()), axis.tick(grid.right()));
         let size = self.snap.size;
+        let ink = crate::theme::grid_ink(colors);
         for (tick, w) in edit::grid_lines(t0, t1, axis.beat_w, l.u, sig, edit::MARK_GAP, size) {
             let x = l.snap(axis.x(tick)) - (w / 2.0).floor() * px;
-            painter.rect_filled(Rect::from_x_y_ranges(x..=x + w * px, ys), 0.0, bg);
+            painter.rect_filled(Rect::from_x_y_ranges(x..=x + w * px, ys), 0.0, ink);
         }
 
         // The hits, in clip order: a 1 px `background` frame, then the hit colour; a tap's new hit pops in.

@@ -99,6 +99,33 @@ pub struct ThemeColors {
     pub black_key_disabled: Rgba,
 }
 
+/// SETTINGS' `Grid color:` (`crate::settings::GRID_COLORS`): 0 for the theme's own ([`grid_ink`]), else
+/// `0x01RRGGBB`. The app sets it from the settings ([`set_grid_color`]); the painters read it.
+static GRID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Sets the grid colour: `None` for the theme's own, else `0xRRGGBB`.
+pub fn set_grid_color(rgb: Option<u32>) {
+    let packed = rgb.map_or(0, |rgb| 0x0100_0000 | (rgb & 0xFF_FFFF));
+    GRID.store(packed, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How far the theme's own grid colour is from `controlFill` toward `text`: the beat lines stand out on the rows
+/// (they were `background`, barely darker than the rows, in the built-in themes).
+pub const GRID_INK: f32 = 0.32;
+
+/// The beat lines' colour over the rows of the playlist and the editors: SETTINGS' `Grid color:`, or by default
+/// `controlFill` [`GRID_INK`] of the way to `text`.
+pub fn grid_ink(c: &ThemeColors) -> Color32 {
+    let packed = GRID.load(std::sync::atomic::Ordering::Relaxed);
+    if packed != 0 {
+        let [_, r, g, b] = packed.to_be_bytes();
+        return Color32::from_rgb(r, g, b);
+    }
+    let (a, b) = (c.control_fill, c.text);
+    let mix = |x: f32, y: f32| x + (y - x) * GRID_INK;
+    Rgba::rgb(mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b)).to_color32()
+}
+
 impl ThemeColors {
     /// A dark theme: `background`'s brightest channel is no brighter than `text`'s. Paper is the one light built-in
     /// theme.
