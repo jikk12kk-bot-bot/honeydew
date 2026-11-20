@@ -1564,8 +1564,11 @@ mod tests {
     use crate::theme::theme_by_id;
 
     /// The index of the row labelled `label`.
+    /// The row's place among the rows this platform shows ([`hidden`]), which its id counts.
     fn index(label: &str) -> usize {
-        ROWS.iter().position(|r| r.label == label).unwrap()
+        (ROWS.iter().filter(|r| !hidden(r)))
+            .position(|r| r.label == label)
+            .unwrap()
     }
 
     #[test]
