@@ -306,8 +306,17 @@ mod tests {
         // The slider on top of a mode: no smaller than either, the mode's stream kept.
         use crate::device::SoundMode;
         let at_least = |base, n| profile(BufferMode::AtLeast(base, n));
-        assert_eq!(buffer_frames(at_least(SoundMode::Native, 512), 192, 3072), 576);
-        assert_eq!(buffer_frames(at_least(SoundMode::Safe, 256), 192, 3072), 1152);
-        assert_eq!(at_least(SoundMode::Lowest, 64).sharing, SharingMode::Exclusive);
+        assert_eq!(
+            buffer_frames(at_least(SoundMode::Native, 512), 192, 3072),
+            576
+        );
+        assert_eq!(
+            buffer_frames(at_least(SoundMode::Safe, 256), 192, 3072),
+            1152
+        );
+        assert_eq!(
+            at_least(SoundMode::Lowest, 64).sharing,
+            SharingMode::Exclusive
+        );
     }
 }
