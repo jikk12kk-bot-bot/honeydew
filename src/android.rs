@@ -198,7 +198,9 @@ pub fn recording(tap: Option<&Arc<RecordTap>>) {
 pub fn max_output_rate() -> Option<u32> {
     let mut rate = 0;
     let asked = with_activity(|env, activity| {
-        rate = env.call_method(activity, "maxOutputRate", "()I", &[])?.i()?;
+        rate = env
+            .call_method(activity, "maxOutputRate", "()I", &[])?
+            .i()?;
         Ok(())
     });
     if let Err(err) = asked {

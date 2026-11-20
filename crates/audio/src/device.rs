@@ -719,7 +719,9 @@ impl<R: AudioRenderer> AudioOutput<R> {
         #[cfg(target_os = "android")]
         match oboe_out::open::<R>(mode, rate) {
             Ok(opened) => return Self::start_oboe(opened, mode, make_renderer),
-            Err(error) => eprintln!("the Oboe output did not open ({error:?}): AAudio through cpal"),
+            Err(error) => {
+                eprintln!("the Oboe output did not open ({error:?}): AAudio through cpal")
+            }
         }
         let rate = match rate {
             0 if cfg!(any(

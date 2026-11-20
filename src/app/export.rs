@@ -7,14 +7,14 @@ use eframe::egui;
 use super::HoneydewApp;
 use crate::displayer::mp4::Video;
 use crate::project_files::export::{Done, Export, Job, NO_AUDIO_RATE, Split, slice, tags};
-#[cfg(target_os = "android")]
-use std::sync::Arc;
-#[cfg(target_os = "android")]
-use std::sync::atomic::{AtomicBool, Ordering};
 use crate::render::RenderError;
 use crate::sample_cache;
 use crate::ui::save_dialog::{ExportFormat, RenderPage};
 use crate::ui::views::{Nav, Overlay};
+#[cfg(target_os = "android")]
+use std::sync::Arc;
+#[cfg(target_os = "android")]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn dialog(o: &Overlay) -> bool {
     matches!(o, Overlay::SaveDialog { .. })

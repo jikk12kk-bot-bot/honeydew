@@ -64,7 +64,8 @@ pub fn migrate_legacy_keys(storage: &mut dyn eframe::Storage) {
 pub const SOUND_MODES: [(u8, &str); 2] = [(0, "STANDARD"), (1, "MULTITRACK")];
 /// Android's are FL Studio Mobile's, through Oboe (`honeydew_audio::device`'s `oboe_out`).
 #[cfg(target_os = "android")]
-pub const SOUND_MODES: [(u8, &str); 4] = [(1, "FAST"), (0, "SAFE"), (2, "ULTRASAFE"), (3, "NATIVE")];
+pub const SOUND_MODES: [(u8, &str); 4] =
+    [(1, "FAST"), (0, "SAFE"), (2, "ULTRASAFE"), (3, "NATIVE")];
 #[cfg(not(any(desktop, target_os = "android")))]
 pub const SOUND_MODES: [(u8, &str); 1] = [(3, "NATIVE")];
 

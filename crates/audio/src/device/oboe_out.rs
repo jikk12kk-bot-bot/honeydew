@@ -160,7 +160,13 @@ impl<R: AudioRenderer> AudioOutputCallback for Callback<R> {
         let rate = self.sample_rate;
         state.callback(n, 2, rate, heard, &mut self.scratch, |at, rendered| {
             for (out, pair) in frames[at..].iter_mut().zip(rendered.chunks_exact(2)) {
-                let clean = |s: f32| if s.is_finite() { s.clamp(-1.0, 1.0) } else { 0.0 };
+                let clean = |s: f32| {
+                    if s.is_finite() {
+                        s.clamp(-1.0, 1.0)
+                    } else {
+                        0.0
+                    }
+                };
                 *out = (clean(pair[0]), clean(pair[1]));
             }
         });
@@ -275,8 +281,17 @@ mod tests {
         assert_eq!(buffer_frames(profile(BufferMode::Native), 192, 3072), 384);
         assert_eq!(buffer_frames(profile(BufferMode::Lowest), 192, 3072), 192);
         assert_eq!(buffer_frames(profile(BufferMode::Safe), 192, 3072), 1152);
-        assert_eq!(buffer_frames(profile(BufferMode::UltraSafe), 192, 3072), 3072);
-        assert_eq!(buffer_frames(profile(BufferMode::Fixed(500)), 192, 3072), 576);
-        assert_eq!(buffer_frames(profile(BufferMode::Fixed(9000)), 192, 3072), 3072);
+        assert_eq!(
+            buffer_frames(profile(BufferMode::UltraSafe), 192, 3072),
+            3072
+        );
+        assert_eq!(
+            buffer_frames(profile(BufferMode::Fixed(500)), 192, 3072),
+            576
+        );
+        assert_eq!(
+            buffer_frames(profile(BufferMode::Fixed(9000)), 192, 3072),
+            3072
+        );
     }
 }
