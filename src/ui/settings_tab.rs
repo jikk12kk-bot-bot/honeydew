@@ -266,6 +266,36 @@ const fn row(label: &'static str, kind: Kind) -> Row {
     Row { label, kind }
 }
 
+/// A row this platform does not show: the web's sample memory and audio input, the sound library's install off the
+/// desktop, the sound modes on the web and iOS (one mode), `Enable low latency mode` off Android (Oboe's), MCP on the
+/// web.
+fn hidden(r: &Row) -> bool {
+    let (web, desktop) = (cfg!(target_arch = "wasm32"), cfg!(desktop));
+    let android = cfg!(target_os = "android");
+    let low_latency_mode = r.label == "Enable low latency mode";
+    web
+        && matches!(
+            r.kind,
+            Kind::Dropdown(Choice::SampleMemory) | Kind::AudioInput
+        )
+        || !desktop && matches!(r.kind, Kind::InstallSounds)
+        // Android has FL Studio Mobile's sound modes (Oboe); the web and iOS have one mode.
+        || !desktop && !android && matches!(r.kind, Kind::Dropdown(Choice::SoundMode))
+        // The app serves MCP itself everywhere but the web.
+        || web
+            && matches!(
+                r.label,
+                "MCP:"
+                    | "Enable MCP control"
+                    | "Port"
+                    | "Allow over Wi-Fi"
+                    | "Authentication token"
+                    | "Address"
+                    | "Status"
+            )
+        || !android && low_latency_mode
+}
+
 /// Every row of the SETTINGS tab, in order.
 const ROWS: [Row; 59] = {
     use Kind::*;
@@ -540,34 +570,7 @@ impl SettingsTab {
             Some(_) => &ROWS[..],
             None => &ROWS[..ROWS.len() - CONTENT_ROWS],
         };
-        let rows: Vec<_> = rows
-            .iter()
-            .filter(|r| {
-                let (web, desktop) = (cfg!(target_arch = "wasm32"), cfg!(desktop));
-                let android = cfg!(target_os = "android");
-                let hidden = web
-                    && matches!(
-                        r.kind,
-                        Kind::Dropdown(Choice::SampleMemory) | Kind::AudioInput
-                    )
-                    || !desktop && matches!(r.kind, Kind::InstallSounds)
-                    // Android has FL Studio Mobile's sound modes (Oboe); the web and iOS have one mode.
-                    || !desktop && !android && matches!(r.kind, Kind::Dropdown(Choice::SoundMode))
-                    // The app serves MCP itself everywhere but the web.
-                    || web
-                        && matches!(
-                            r.label,
-                            "MCP:"
-                                | "Enable MCP control"
-                                | "Port"
-                                | "Allow over Wi-Fi"
-                                | "Authentication token"
-                                | "Address"
-                                | "Status"
-                        );
-                !hidden
-            })
-            .collect();
+        let rows: Vec<_> = rows.iter().filter(|r| !hidden(r)).collect();
         let plugins = if self.plugins { &PLUGIN_ROWS[..] } else { &[] };
         let at = (rows.iter().position(|r| r.label == "Advanced:")).unwrap_or(rows.len());
         let mut rows: Vec<_> = rows[..at]
@@ -945,10 +948,15 @@ impl SettingsTab {
                     s.low_latency = (value.clamp(0.0, 1.0) * max).round() as u8;
                 }
                 let index = (value.clamp(0.0, 1.0) * max).round() as usize;
+                // Android: the slider is the smallest buffer of the sound mode's own.
+                let (native, prefix) = match cfg!(target_os = "android") {
+                    true => ("Mode's own", "At least "),
+                    false => ("Native", ""),
+                };
                 let display = if index == 0 {
-                    "Native".to_owned()
+                    native.to_owned()
                 } else {
-                    format!("{} frames", BUFFER_SIZES[index])
+                    format!("{prefix}{} frames", BUFFER_SIZES[index])
                 };
                 plain(
                     ui,
@@ -957,12 +965,11 @@ impl SettingsTab {
                     FontSize::Pt10,
                     Align2::RIGHT_CENTER,
                 );
-                crate::ui::tooltip::tip(
-                    ui,
-                    r,
-                    "Chooses the output buffer target. Native uses the device default; smaller frame sizes reduce latency but increase CPU and dropout risk. The setting works independently of Sound Mode.",
-                    None,
-                );
+                #[cfg(target_os = "android")]
+                let tip = "The smallest output buffer, on top of the Sound mode: the mode keeps its own stream and buffer, never smaller than this. Mode's own: the Sound mode's buffer alone. Bigger buffers crackle less but add latency.";
+                #[cfg(not(target_os = "android"))]
+                let tip = "Chooses the output buffer target. Native uses the device default; smaller frame sizes reduce latency but increase CPU and dropout risk. The setting works independently of Sound Mode.";
+                crate::ui::tooltip::tip(ui, r, tip, None);
             }
             Kind::McpPort => {
                 label(ui, before(button_rect), FontSize::Pt10);
@@ -1557,8 +1564,11 @@ mod tests {
     use crate::theme::theme_by_id;
 
     /// The index of the row labelled `label`.
+    /// The row's place among the rows this platform shows ([`hidden`]), which its id counts.
     fn index(label: &str) -> usize {
-        ROWS.iter().position(|r| r.label == label).unwrap()
+        (ROWS.iter().filter(|r| !hidden(r)))
+            .position(|r| r.label == label)
+            .unwrap()
     }
 
     #[test]
@@ -1570,7 +1580,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(toggles.len(), if cfg!(target_os = "ios") { 15 } else { 14 });
+        let own = cfg!(any(target_os = "ios", target_os = "android"));
+        assert_eq!(toggles.len(), if own { 15 } else { 14 });
         for (label, field) in &toggles {
             let mut s = Settings::default();
             *field(&mut s) = !*field(&mut s);
@@ -1954,15 +1965,16 @@ mod tests {
             };
             let ten = height("Multi core processing");
             for r in ROWS.iter().filter(|r| {
-                !matches!(
-                    r.kind,
-                    Kind::Header
-                        | Kind::DisabledButton
-                        | Kind::Restore
-                        | Kind::ContentFolder
-                        | Kind::UserFolder
-                        | Kind::ScaleLimit
-                )
+                !hidden(r)
+                    && !matches!(
+                        r.kind,
+                        Kind::Header
+                            | Kind::DisabledButton
+                            | Kind::Restore
+                            | Kind::ContentFolder
+                            | Kind::UserFolder
+                            | Kind::ScaleLimit
+                    )
             }) {
                 assert_eq!(
                     height(r.label),
@@ -1999,10 +2011,11 @@ mod tests {
     /// The toggle rows of the list.
     fn toggles() -> impl Iterator<Item = &'static Row> + Clone {
         ROWS.iter().filter(|r| {
-            matches!(
-                r.kind,
-                Kind::Toggle(_) | Kind::FixedToggle(_) | Kind::Latency
-            )
+            !hidden(r)
+                && matches!(
+                    r.kind,
+                    Kind::Toggle(_) | Kind::FixedToggle(_) | Kind::Latency
+                )
         })
     }
 
@@ -2057,7 +2070,7 @@ mod tests {
             let (u, t) = (m.u(1.0), m.t());
             let column_right = rig.width - 2.0 * u;
             let fills = fills(&rig);
-            assert_eq!(toggles().count(), 20);
+            assert_eq!(toggles().count(), 19);
             for r in toggles() {
                 let at = format!("ppp {ppp} scale {scale}: `{}`", r.label);
                 let control = rig.rect_of(row_id(index(r.label)));

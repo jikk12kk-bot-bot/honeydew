@@ -68,6 +68,7 @@ public final class HoneydewActivity extends NativeActivity {
     private static final int OPEN_FOLDER = 2;
     private static final int RECORD_AUDIO = 3;
     private static final int OPEN_MEDIA = 4;
+    private static final int NOTIFICATIONS = 5;
     private long openLimit;
     private AudioFocusRequest focus;
 
@@ -99,6 +100,19 @@ public final class HoneydewActivity extends NativeActivity {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                     android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, HoneydewActivity::onBack);
         }
+        askNotifications();
+    }
+
+    // Android 13 and up show the background notification (HoneydewService: playing or exporting in the background)
+    // only with this permission. Asked once, at the first start that lacks it; the app plays in the background either
+    // way, and the permission can be given later in Android's settings.
+    private void askNotifications() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return;
+        android.content.SharedPreferences prefs = getPreferences(MODE_PRIVATE);
+        if (prefs.getBoolean("askedNotifications", false)) return;
+        prefs.edit().putBoolean("askedNotifications", true).apply();
+        requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATIONS);
     }
 
     // Wired, USB or Bluetooth headphones. A Bluetooth headset's own mic needs a call link (SCO), so recording keeps
