@@ -948,10 +948,15 @@ impl SettingsTab {
                     s.low_latency = (value.clamp(0.0, 1.0) * max).round() as u8;
                 }
                 let index = (value.clamp(0.0, 1.0) * max).round() as usize;
+                // Android: the slider is the smallest buffer of the sound mode's own.
+                let (native, prefix) = match cfg!(target_os = "android") {
+                    true => ("Mode's own", "At least "),
+                    false => ("Native", ""),
+                };
                 let display = if index == 0 {
-                    "Native".to_owned()
+                    native.to_owned()
                 } else {
-                    format!("{} frames", BUFFER_SIZES[index])
+                    format!("{prefix}{} frames", BUFFER_SIZES[index])
                 };
                 plain(
                     ui,
@@ -960,12 +965,11 @@ impl SettingsTab {
                     FontSize::Pt10,
                     Align2::RIGHT_CENTER,
                 );
-                crate::ui::tooltip::tip(
-                    ui,
-                    r,
-                    "Chooses the output buffer target. Native uses the device default; smaller frame sizes reduce latency but increase CPU and dropout risk. The setting works independently of Sound Mode.",
-                    None,
-                );
+                #[cfg(target_os = "android")]
+                let tip = "The smallest output buffer, on top of the Sound mode: the mode keeps its own stream and buffer, never smaller than this. Mode's own: the Sound mode's buffer alone. Bigger buffers crackle less but add latency.";
+                #[cfg(not(target_os = "android"))]
+                let tip = "Chooses the output buffer target. Native uses the device default; smaller frame sizes reduce latency but increase CPU and dropout risk. The setting works independently of Sound Mode.";
+                crate::ui::tooltip::tip(ui, r, tip, None);
             }
             Kind::McpPort => {
                 label(ui, before(button_rect), FontSize::Pt10);

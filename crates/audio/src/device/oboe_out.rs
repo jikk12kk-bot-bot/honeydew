@@ -8,7 +8,10 @@
 //! | `Fast`                 | LowLatency  | Shared    | 2 bursts                     | yes                |
 //! | `Safe`                 | LowLatency  | Shared    | 4 bursts, at least 1024      | yes                |
 //! | `UltraSafe`            | None        | Shared    | the whole capacity           | no                 |
-//! | `Fixed(n)` (the slider)| LowLatency  | Shared    | n frames, whole bursts       | no                 |
+//! | `Fixed(n)`             | LowLatency  | Shared    | n frames, whole bursts       | no                 |
+//! | `AtLeast(mode, n)`     | the mode's  | the mode's| the mode's, at least n frames| the mode's         |
+//!
+//! `AtLeast` is the `Audio buffer size` slider on top of the sound mode: its stream, with a buffer no smaller.
 //!
 //! A buffer that grows on underruns does as Oboe's own `LatencyTuner`: a burst more after each callback that saw new
 //! ones, up to the capacity, so a phone that cannot keep up settles at the smallest buffer it plays without crackles.
@@ -79,6 +82,13 @@ fn profile(mode: BufferMode) -> Profile {
             adaptive: false,
             ..fast
         },
+        BufferMode::AtLeast(base, frames) => {
+            let p = profile(base.mode());
+            Profile {
+                min_frames: p.min_frames.max(i32::try_from(frames).unwrap_or(i32::MAX)),
+                ..p
+            }
+        }
         BufferMode::Fixed(frames) => Profile {
             bursts: 1,
             min_frames: i32::try_from(frames).unwrap_or(i32::MAX),
@@ -241,7 +251,7 @@ pub(super) fn open<R: AudioRenderer>(mode: BufferMode, rate: u32) -> Result<Open
             .set_sample_rate(rate)
             .set_sample_rate_conversion_quality(SampleRateConversionQuality::Medium);
     }
-    if let BufferMode::Fixed(frames) = mode {
+    if let BufferMode::Fixed(frames) | BufferMode::AtLeast(_, frames) = mode {
         let room = i32::try_from(frames.saturating_mul(2)).unwrap_or(i32::MAX);
         builder = builder.set_buffer_capacity_in_frames(room);
     }
@@ -293,5 +303,11 @@ mod tests {
             buffer_frames(profile(BufferMode::Fixed(9000)), 192, 3072),
             3072
         );
+        // The slider on top of a mode: no smaller than either, the mode's stream kept.
+        use crate::device::SoundMode;
+        let at_least = |base, n| profile(BufferMode::AtLeast(base, n));
+        assert_eq!(buffer_frames(at_least(SoundMode::Native, 512), 192, 3072), 576);
+        assert_eq!(buffer_frames(at_least(SoundMode::Safe, 256), 192, 3072), 1152);
+        assert_eq!(at_least(SoundMode::Lowest, 64).sharing, SharingMode::Exclusive);
     }
 }

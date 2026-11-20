@@ -88,6 +88,32 @@ pub enum BufferMode {
     /// `Native` with FL Studio Mobile's `Enable low latency mode`: the smallest buffer the device plays (Android's
     /// Oboe output, `oboe_out`); elsewhere as [`Self::Fast`].
     Lowest,
+    /// Android: a sound mode's stream with at least this many frames of buffer, the `Audio buffer size` slider on top
+    /// of the sound mode (`oboe_out`); elsewhere as [`Self::Fixed`].
+    AtLeast(SoundMode, u32),
+}
+
+/// A sound mode's own buffer policy, for [`BufferMode::AtLeast`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoundMode {
+    UltraSafe,
+    Safe,
+    Fast,
+    Native,
+    Lowest,
+}
+
+impl SoundMode {
+    /// The mode's buffer policy on its own.
+    pub fn mode(self) -> BufferMode {
+        match self {
+            SoundMode::UltraSafe => BufferMode::UltraSafe,
+            SoundMode::Safe => BufferMode::Safe,
+            SoundMode::Fast => BufferMode::Fast,
+            SoundMode::Native => BufferMode::Native,
+            SoundMode::Lowest => BufferMode::Lowest,
+        }
+    }
 }
 
 /// Android's output through Oboe ([`oboe_out`]): FL Studio Mobile's sound modes.
@@ -1088,7 +1114,9 @@ fn output_config(
         })
         .min_by_key(|(min, _)| *min)
     else {
-        if let (true, BufferMode::Fixed(frames)) = (cfg!(target_os = "android"), mode) {
+        if let (true, BufferMode::Fixed(frames) | BufferMode::AtLeast(_, frames)) =
+            (cfg!(target_os = "android"), mode)
+        {
             config.buffer_size = BufferSize::Fixed(frames);
         }
         return config;
@@ -1097,7 +1125,7 @@ fn output_config(
         BufferMode::UltraSafe => max,
         BufferMode::Safe => 256.clamp(min, max),
         BufferMode::Fast | BufferMode::Lowest => min,
-        BufferMode::Fixed(target) => target.clamp(min, max),
+        BufferMode::Fixed(target) | BufferMode::AtLeast(_, target) => target.clamp(min, max),
         BufferMode::Native => return config,
     };
     config.buffer_size = BufferSize::Fixed(frames);

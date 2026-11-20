@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use honeydew_audio::device::{
-    AudioCommand, AudioOutput, AudioRenderer, BufferMode, OutputSnapshot,
+    AudioCommand, AudioOutput, AudioRenderer, BufferMode, OutputSnapshot, SoundMode,
 };
 use honeydew_audio::sample::SampleData;
 
@@ -190,13 +190,19 @@ pub fn buffer_mode(sound_mode: u8, low_latency: u8) -> BufferMode {
     if cfg!(desktop) {
         return requested.unwrap_or(BufferMode::Native);
     }
-    requested.unwrap_or(match sound_mode {
-        2 => BufferMode::UltraSafe,
-        0 => BufferMode::Safe,
-        1 => BufferMode::Fast,
-        _ if LOWEST.load(std::sync::atomic::Ordering::Relaxed) => BufferMode::Lowest,
-        _ => BufferMode::Native,
-    })
+    let base = match sound_mode {
+        2 => SoundMode::UltraSafe,
+        0 => SoundMode::Safe,
+        1 => SoundMode::Fast,
+        _ if LOWEST.load(std::sync::atomic::Ordering::Relaxed) => SoundMode::Lowest,
+        _ => SoundMode::Native,
+    };
+    match target {
+        0 => base.mode(),
+        // Android: the slider sets the smallest buffer of the chosen sound mode's stream, which keeps its mode.
+        _ if cfg!(target_os = "android") => BufferMode::AtLeast(base, target),
+        _ => BufferMode::Fixed(target),
+    }
 }
 
 #[cfg(test)]

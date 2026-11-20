@@ -12,6 +12,8 @@
     <!-- The song playing or an export rendering goes on in the background (HoneydewService). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Android 13 and up: the background notification shows only with it (HoneydewActivity.askNotifications). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Back goes to the activity's back callback from Android 13 up, not only from 16 (#72). -->
     <application
         android:allowBackup="false"
