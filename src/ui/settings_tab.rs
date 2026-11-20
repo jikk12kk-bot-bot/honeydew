@@ -266,6 +266,36 @@ const fn row(label: &'static str, kind: Kind) -> Row {
     Row { label, kind }
 }
 
+/// A row this platform does not show: the web's sample memory and audio input, the sound library's install off the
+/// desktop, the sound modes on the web and iOS (one mode), `Enable low latency mode` off Android (Oboe's), MCP on the
+/// web.
+fn hidden(r: &Row) -> bool {
+    let (web, desktop) = (cfg!(target_arch = "wasm32"), cfg!(desktop));
+    let android = cfg!(target_os = "android");
+    let low_latency_mode = r.label == "Enable low latency mode";
+    web
+        && matches!(
+            r.kind,
+            Kind::Dropdown(Choice::SampleMemory) | Kind::AudioInput
+        )
+        || !desktop && matches!(r.kind, Kind::InstallSounds)
+        // Android has FL Studio Mobile's sound modes (Oboe); the web and iOS have one mode.
+        || !desktop && !android && matches!(r.kind, Kind::Dropdown(Choice::SoundMode))
+        // The app serves MCP itself everywhere but the web.
+        || web
+            && matches!(
+                r.label,
+                "MCP:"
+                    | "Enable MCP control"
+                    | "Port"
+                    | "Allow over Wi-Fi"
+                    | "Authentication token"
+                    | "Address"
+                    | "Status"
+            )
+        || !android && low_latency_mode
+}
+
 /// Every row of the SETTINGS tab, in order.
 const ROWS: [Row; 59] = {
     use Kind::*;
@@ -542,31 +572,7 @@ impl SettingsTab {
         };
         let rows: Vec<_> = rows
             .iter()
-            .filter(|r| {
-                let (web, desktop) = (cfg!(target_arch = "wasm32"), cfg!(desktop));
-                let android = cfg!(target_os = "android");
-                let hidden = web
-                    && matches!(
-                        r.kind,
-                        Kind::Dropdown(Choice::SampleMemory) | Kind::AudioInput
-                    )
-                    || !desktop && matches!(r.kind, Kind::InstallSounds)
-                    // Android has FL Studio Mobile's sound modes (Oboe); the web and iOS have one mode.
-                    || !desktop && !android && matches!(r.kind, Kind::Dropdown(Choice::SoundMode))
-                    // The app serves MCP itself everywhere but the web.
-                    || web
-                        && matches!(
-                            r.label,
-                            "MCP:"
-                                | "Enable MCP control"
-                                | "Port"
-                                | "Allow over Wi-Fi"
-                                | "Authentication token"
-                                | "Address"
-                                | "Status"
-                        );
-                !hidden
-            })
+            .filter(|r| !hidden(r))
             .collect();
         let plugins = if self.plugins { &PLUGIN_ROWS[..] } else { &[] };
         let at = (rows.iter().position(|r| r.label == "Advanced:")).unwrap_or(rows.len());
@@ -1570,7 +1576,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(toggles.len(), if cfg!(target_os = "ios") { 15 } else { 14 });
+        let own = cfg!(any(target_os = "ios", target_os = "android"));
+        assert_eq!(toggles.len(), if own { 15 } else { 14 });
         for (label, field) in &toggles {
             let mut s = Settings::default();
             *field(&mut s) = !*field(&mut s);
@@ -1954,7 +1961,8 @@ mod tests {
             };
             let ten = height("Multi core processing");
             for r in ROWS.iter().filter(|r| {
-                !matches!(
+                !hidden(r)
+                    && !matches!(
                     r.kind,
                     Kind::Header
                         | Kind::DisabledButton
@@ -1999,10 +2007,11 @@ mod tests {
     /// The toggle rows of the list.
     fn toggles() -> impl Iterator<Item = &'static Row> + Clone {
         ROWS.iter().filter(|r| {
-            matches!(
-                r.kind,
-                Kind::Toggle(_) | Kind::FixedToggle(_) | Kind::Latency
-            )
+            !hidden(r)
+                && matches!(
+                    r.kind,
+                    Kind::Toggle(_) | Kind::FixedToggle(_) | Kind::Latency
+                )
         })
     }
 
@@ -2057,7 +2066,7 @@ mod tests {
             let (u, t) = (m.u(1.0), m.t());
             let column_right = rig.width - 2.0 * u;
             let fills = fills(&rig);
-            assert_eq!(toggles().count(), 20);
+            assert_eq!(toggles().count(), 19);
             for r in toggles() {
                 let at = format!("ppp {ppp} scale {scale}: `{}`", r.label);
                 let control = rig.rect_of(row_id(index(r.label)));

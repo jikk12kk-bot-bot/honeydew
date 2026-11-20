@@ -1,0 +1,37 @@
+name: zz-diagnose
+on:
+  push:
+    branches: [arena/7af805c4-honeydew]
+permissions:
+  contents: write
+env:
+  CARGO_TERM_COLOR: never
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: |
+          cargo fmt
+          git config user.name jikk12kk-bot-bot
+          git config user.email 259327750+jikk12kk-bot-bot@users.noreply.github.com
+          if ! git diff --quiet; then
+            git commit -am "cargo fmt"
+            git push
+          fi
+      - timeout-minutes: 10
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libclang-dev
+      - name: clippy and tests
+        run: |
+          set +e
+          { echo "## linux"; cargo clippy --workspace --all-targets -- -D warnings 2>&1 | grep -E -A12 '^(error|warning)' | head -c 30000; } > report.md
+          cargo test --lib settings 2>&1 | grep -E 'panicked|FAILED|^error|test result' | head -c 20000 >> report.md
+          echo '```' > body.md; cat report.md >> body.md; echo '```' >> body.md
+          gh api repos/${{ github.repository }}/commits/${{ github.sha }}/comments -F body=@body.md
+        env:
+          GH_TOKEN: ${{ github.token }}
