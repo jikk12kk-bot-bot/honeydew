@@ -570,10 +570,7 @@ impl SettingsTab {
             Some(_) => &ROWS[..],
             None => &ROWS[..ROWS.len() - CONTENT_ROWS],
         };
-        let rows: Vec<_> = rows
-            .iter()
-            .filter(|r| !hidden(r))
-            .collect();
+        let rows: Vec<_> = rows.iter().filter(|r| !hidden(r)).collect();
         let plugins = if self.plugins { &PLUGIN_ROWS[..] } else { &[] };
         let at = (rows.iter().position(|r| r.label == "Advanced:")).unwrap_or(rows.len());
         let mut rows: Vec<_> = rows[..at]
@@ -1963,14 +1960,14 @@ mod tests {
             for r in ROWS.iter().filter(|r| {
                 !hidden(r)
                     && !matches!(
-                    r.kind,
-                    Kind::Header
-                        | Kind::DisabledButton
-                        | Kind::Restore
-                        | Kind::ContentFolder
-                        | Kind::UserFolder
-                        | Kind::ScaleLimit
-                )
+                        r.kind,
+                        Kind::Header
+                            | Kind::DisabledButton
+                            | Kind::Restore
+                            | Kind::ContentFolder
+                            | Kind::UserFolder
+                            | Kind::ScaleLimit
+                    )
             }) {
                 assert_eq!(
                     height(r.label),
