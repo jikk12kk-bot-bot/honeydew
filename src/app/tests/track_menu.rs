@@ -1295,7 +1295,6 @@ fn shown(rig: &mut Rig) -> Vec<usize> {
 
 const NAMES: [&str; 4] = ["MASTER", "Drums", "MiniSynth", "MiniSynth 2"];
 
-
 #[test]
 fn a_moved_channel_takes_what_is_kept_for_it_and_its_held_note_cannot_stick() {
     let mut rig = three_channels();

@@ -2813,7 +2813,6 @@ mod tests {
     const YES: (usize, usize) = (0, 1);
     const NO: (usize, usize) = (0, 2);
 
-
     /// `Restore demo songs`: the app writes the demos, once a tap, with no question first.
     #[test]
     fn restore_demo_songs_asks_the_app_once_a_tap() {

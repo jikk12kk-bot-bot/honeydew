@@ -1150,7 +1150,6 @@ fn add_ring(rig: &Rig, color: Color32) -> bool {
     })
 }
 
-
 #[test]
 fn the_fill_and_clear_items_edit_the_row() {
     let mut rig = Rig::new(pattern());
@@ -1603,7 +1602,6 @@ fn a_clip_id_that_is_gone_edits_nothing_and_makes_no_clip() {
     assert!(!rig.hits().contains(&(3, 1, 0)));
     assert_eq!(rig.channel().lanes[0].clips.len(), 1);
 }
-
 
 #[test]
 fn a_lane_that_is_not_a_drum_lane_shows_nothing() {
@@ -2342,7 +2340,6 @@ fn paint(prop: Prop, step: usize, value: u16) -> StepAction {
     }
 }
 
-
 /// A pinch before any paint ends a touch that changed nothing: its own undo re-syncs.
 #[test]
 fn a_pinch_before_any_lane_paint_is_a_touch_that_changed_nothing() {
@@ -2834,7 +2831,6 @@ fn a_lone_duplicate_is_remembered() {
     assert_eq!(rig.selection(), [(1, 5)]);
     assert_eq!(rig.view.remembered.velocity, 102);
 }
-
 
 #[test]
 fn fill_hits_are_velocity_255_centred_and_0_long() {

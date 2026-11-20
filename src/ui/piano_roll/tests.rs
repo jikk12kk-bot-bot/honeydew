@@ -3431,7 +3431,6 @@ mod component {
         assert_eq!(guides, want);
     }
 
-
     // ---- the ruler's gestures and the region menu ----
 
     /// On the ruler, over content tick `tick`; tick 0 just inside it, right of the snap cell (which ends at x 48).
@@ -4092,7 +4091,6 @@ mod grid {
             )
         })
     }
-
 
     #[test]
     fn rows_are_control_fill_light_rows_module_fill_each_with_its_lines_lit_and_root_rows_and_no_beat_bands()

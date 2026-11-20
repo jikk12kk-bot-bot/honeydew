@@ -334,7 +334,6 @@ fn close(a: f32, b: f32, eps: f32) -> bool {
 
 // Drawing.
 
-
 #[test]
 fn a_value_area_under_3_u_has_three_axis_ticks() {
     let (_, _, _, ink) = colors();

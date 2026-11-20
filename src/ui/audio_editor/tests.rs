@@ -831,7 +831,6 @@ fn a_silent_stretch_draws_a_1_px_line_a_column() {
     assert_eq!(rig.quads(wave), (0..256).map(line).collect::<Vec<_>>());
 }
 
-
 // ---- the view in the app's slot ----
 
 fn user(relative: &str) -> ContentPath {
@@ -1170,7 +1169,6 @@ fn at_speed_plus_12_the_waveform_and_its_end_take_half_the_beats() {
         [Rect::from_min_max(pos2(178.0, 48.0), pos2(179.0, 340.0))]
     );
 }
-
 
 #[test]
 fn markers_on_the_grid_edges_are_not_drawn() {

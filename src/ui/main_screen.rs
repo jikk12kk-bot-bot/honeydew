@@ -3481,7 +3481,6 @@ mod tests {
         assert!(screen.playing);
     }
 
-
     /// Master, Drums (1) and MiniSynth (2), with a one-bar clip of two notes on the MiniSynth at bar 2. At UI
     /// scale 100 % (U 32) a beat is 38.4 points from the grid's left edge at x 48, and track row `i` spans
     /// y 48 + 64 i ..; the clip spans x 201.6 ..= 355.2, y 176 ..= 239.
@@ -3678,7 +3677,6 @@ mod tests {
         plays
     }
 
-
     // ---- the rows and clips as the playlist draws them ----
 
     /// The selection's fill boxes (`text` at α 0.10 … 0.20) the frame drew, with their alpha.
@@ -3735,8 +3733,6 @@ mod tests {
             })
             .collect()
     }
-
-
 
     #[test]
     fn the_armed_dot_is_a_tenth_of_u_three_tenths_in_from_the_headers_corner() {
@@ -3821,7 +3817,6 @@ mod tests {
         assert_eq!(rig.song.play_loop, None);
     }
 
-
     /// The song with a drum clip under the MiniSynth's (both beats 4 to 8, rows 1 and 2).
     fn two_rows() -> Song {
         let mut song = song_with_a_clip();
@@ -3834,7 +3829,6 @@ mod tests {
         lane: 0,
         id: 1,
     };
-
 
     /// Touch `id`'s `phase` at `pos`; the first finger (1) also drives the pointer, as an integration does.
     fn finger(id: u64, phase: egui::TouchPhase, pos: Pos2) -> Vec<egui::Event> {
@@ -3854,7 +3848,6 @@ mod tests {
         };
         [vec![touch], pointer].concat()
     }
-
 
     #[test]
     fn a_clip_near_the_last_tick_scrolled_to_draws_without_overflow() {
@@ -3930,7 +3923,6 @@ mod tests {
         ]);
         assert_eq!((rig.screen.scroll_x, rig.screen.scroll_y), (0.0, 64.0));
     }
-
 
     #[test]
     fn a_songs_view_opens_zoom_y_scroll_y_zoom_x_scroll_x_and_writes_the_clamped_zooms_back() {
@@ -4017,7 +4009,6 @@ mod tests {
         assert_eq!(rig.screen.scroll_x, 0.0);
         FOLLOW.set(None);
     }
-
 
     #[test]
     fn the_stored_view_is_in_device_pixels_or_u() {
@@ -4121,7 +4112,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn each_primary_track_is_followed_by_its_sub_tracks_unless_they_are_hidden() {
         let mut song = song_with_a_clip();
@@ -4222,7 +4212,6 @@ mod tests {
     }
 
     // Track header reorder and secondary tap.
-
 
     /// Ten one-row channels, row 1's header held 300 ms and dragged off its calm zone and back: a drag in place.
     fn ten_rows_dragging() -> Rig {
@@ -4343,7 +4332,6 @@ mod tests {
                 .collect()
         }
     }
-
 
     // The left column, the mini mixer (expanded track headers) and the playhead line.
 

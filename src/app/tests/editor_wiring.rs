@@ -459,7 +459,6 @@ fn a_step_tapped_on_does_not_re_sync_though_it_shrinks_the_loop() {
     assert_eq!(rig.take(), ["NoteOff 1 48", "ReplaceSong adopting"]);
 }
 
-
 #[test]
 fn the_strips_edit_the_slot_params_live_and_their_tabs_switch_the_page() {
     let mut rig = drum_rig();
@@ -2930,7 +2929,6 @@ mod samples {
             assert_eq!(rig.take(), Vec::<String>::new());
         }
     }
-
 
     #[test]
     fn the_open_picker_follows_its_channel_when_an_undo_moves_it() {
