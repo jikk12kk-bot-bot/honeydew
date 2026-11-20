@@ -95,7 +95,7 @@ fn buffer_frames(p: Profile, burst: i32, capacity: i32) -> i32 {
         return capacity.max(burst);
     }
     let want = (burst * p.bursts).max(p.min_frames);
-    let whole = want.div_ceil(burst) * burst;
+    let whole = (want + burst - 1) / burst * burst;
     whole.min(capacity.max(burst))
 }
 

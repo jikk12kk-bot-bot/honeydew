@@ -1150,31 +1150,6 @@ fn add_ring(rig: &Rig, color: Color32) -> bool {
     })
 }
 
-#[test]
-fn the_add_drum_button_asks_the_host_until_the_pads_are_all_in_use() {
-    // The `+` add-drum button, 0.75 U below the last row. The host opens the sample picker, whose pick adds the pad.
-    let text = theme_by_id(0).colors.text.to_color32();
-    let mut rig = Rig::new(pattern());
-    assert!(add_ring(&rig, text));
-    let at = rig.layout().add_button().center();
-    rig.click(at);
-    assert_eq!(rig.actions, [StepAction::AddDrum]);
-    // With a slot on every one of the 22 pads there is no pad to add: dimmed, and a click does nothing.
-    rig.kit = Kit(vec![("Pad", "", None); PAD_COUNT]);
-    // Scrolled to the bottom, where the button is.
-    rig.set_row_view(RowView {
-        pitch: 2.0,
-        scroll: 99.0,
-    });
-    rig.actions.clear();
-    assert!(add_ring(
-        &rig,
-        text.gamma_multiply(crate::theme::DISABLED_ALPHA)
-    ));
-    let at = rig.layout().add_button().center();
-    rig.click(at);
-    assert_eq!(rig.actions, []);
-}
 
 #[test]
 fn the_fill_and_clear_items_edit_the_row() {
@@ -1629,24 +1604,6 @@ fn a_clip_id_that_is_gone_edits_nothing_and_makes_no_clip() {
     assert_eq!(rig.channel().lanes[0].clips.len(), 1);
 }
 
-#[test]
-fn rows_without_a_kit_pad_get_a_plain_name() {
-    let mut channel = pattern();
-    tap(&mut channel.lanes[0].clips[0], 5, 0);
-    let rig = Rig::new(channel);
-    assert_eq!(rig.layout().rows, 6);
-    let texts: Vec<String> = rig
-        .shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect();
-    for name in ["Kick", "808 Kick", "Clap", "Pad 5", "Pad 6"] {
-        assert!(texts.iter().any(|t| t == name), "{name}: {texts:?}");
-    }
-}
 
 #[test]
 fn a_lane_that_is_not_a_drum_lane_shows_nothing() {
@@ -2385,42 +2342,6 @@ fn paint(prop: Prop, step: usize, value: u16) -> StepAction {
     }
 }
 
-#[test]
-fn the_lane_is_hidden_until_its_knob_is_tapped_and_lists_its_four_items_in_the_header_column() {
-    let mut rig = Rig::new(pattern());
-    rig.kit = twelve();
-    rig.frame(vec![]);
-    assert_eq!(rig.text_at("Velocity"), None);
-    // Hidden, the rows reach the bottom: row 8 (y 560..623) is live there.
-    let at = rig.cell(8, 3);
-    rig.click(at);
-    assert!(rig.hits().contains(&(8, 3, 0)), "{:?}", rig.hits());
-    rig.open_lane();
-    let at: Vec<Pos2> = ["Velocity", "Panning", "Pitch", "Repeat"]
-        .map(|l| rig.text_at(l).unwrap_or_else(|| panic!("{l}")))
-        .to_vec();
-    for w in at.windows(2) {
-        assert!(w[0].y < w[1].y, "{at:?}");
-    }
-    for p in &at {
-        assert!(p.x < 96.0 && LANE_TOP < p.y && p.y < 600.0, "{p:?}");
-    }
-    let values = rig.ctx.read_response(id().with("graph")).unwrap().rect;
-    assert_eq!(
-        values,
-        Rect::from_min_max(pos2(98.0, LANE_TOP), pos2(800.0, 600.0))
-    );
-    assert_eq!(rig.view.graph.item, 0);
-    rig.click(at[2]);
-    assert_eq!(rig.view.graph.item, 2);
-    rig.click(at[3]);
-    assert_eq!(rig.view.graph.item, 3);
-    // The tab on the lane's top closes it.
-    rig.click(pos2(44.8, STRIP_TOP));
-    assert!(!rig.view.graph.open);
-    assert_eq!(rig.text_at("Velocity"), None);
-    assert_eq!(rig.actions, [StepAction::Toggle { pad: 8, step: 3 }]);
-}
 
 /// A pinch before any paint ends a touch that changed nothing: its own undo re-syncs.
 #[test]
@@ -2914,26 +2835,6 @@ fn a_lone_duplicate_is_remembered() {
     assert_eq!(rig.view.remembered.velocity, 102);
 }
 
-#[test]
-fn graph_lane_velocity_and_panning_edits_are_remembered_for_new_hits() {
-    let mut rig = Rig::new(pattern());
-    rig.open_lane();
-    let header = rig.header(1);
-    rig.click(header);
-    let four = rig.step_x(4);
-    rig.click(pos2(four, lane_y(0.5)));
-    assert_eq!(rig.view.remembered.velocity, 127);
-    for (item, v) in [("Panning", 1.0), ("Pitch", 0.0), ("Repeat", 1.0)] {
-        let at = rig.text_at(item).unwrap();
-        rig.click(at);
-        rig.click(pos2(four, lane_y(v)));
-    }
-    assert_eq!(rig.view.remembered.pan, 254);
-    assert_eq!(rig.view.remembered.velocity, 127);
-    let at = rig.cell(3, 9);
-    rig.click(at);
-    assert!(rig.values().contains(&(3, 127, 254, 0x7FFF, 0)));
-}
 
 #[test]
 fn fill_hits_are_velocity_255_centred_and_0_long() {

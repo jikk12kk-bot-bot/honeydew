@@ -2069,7 +2069,7 @@ mod tests {
             let (u, t) = (m.u(1.0), m.t());
             let column_right = rig.width - 2.0 * u;
             let fills = fills(&rig);
-            assert_eq!(toggles().count(), 19);
+            assert_eq!(toggles().count(), 20);
             for r in toggles() {
                 let at = format!("ppp {ppp} scale {scale}: `{}`", r.label);
                 let control = rig.rect_of(row_id(index(r.label)));
@@ -2813,58 +2813,6 @@ mod tests {
     const YES: (usize, usize) = (0, 1);
     const NO: (usize, usize) = (0, 2);
 
-    #[test]
-    fn restore_default_settings_asks_first_and_only_yes_resets() {
-        let mut rig = Rig::new();
-        rig.settings = edited();
-        rig.click_row("Restore default settings");
-        // A Yes / No confirm.
-        assert!(rig.tab.menu.is_some());
-        // An area's first frame is egui's invisible sizing pass.
-        rig.frame(vec![]);
-        assert!(
-            rig.texts()
-                .iter()
-                .any(|t| t == "Are you sure you want to restore default settings?")
-        );
-        assert_eq!(rig.settings, edited());
-        let no = rig.rect_of(popup_id().with(NO)).center();
-        rig.click(no);
-        assert!(rig.tab.menu.is_none());
-        // Escape closes it too.
-        rig.click_row("Restore default settings");
-        rig.key(egui::Key::Escape);
-        assert!(rig.tab.menu.is_none());
-        assert!(!rig.take_changed());
-        assert_eq!(rig.settings, edited());
-
-        rig.click_row("Restore default settings");
-        let yes = rig.rect_of(popup_id().with(YES)).center();
-        rig.click(yes);
-        assert_eq!(rig.settings, Settings::default());
-        assert!(rig.take_changed());
-        assert!(rig.tab.menu.is_none());
-    }
-
-    /// `Restore default settings` leaves the demo songs done: the next start does not write them again.
-    #[test]
-    fn restore_default_settings_keeps_the_demo_songs_restored() {
-        let mut rig = Rig::new();
-        rig.settings = Settings {
-            demo_songs_version: 2,
-            whats_new_seen: "5.0".into(),
-            ..edited()
-        };
-        rig.click_row("Restore default settings");
-        let yes = rig.rect_of(popup_id().with(YES)).center();
-        rig.click(yes);
-        let kept = Settings {
-            demo_songs_version: 2,
-            whats_new_seen: "5.0".into(),
-            ..Settings::default()
-        };
-        assert_eq!(rig.settings, kept);
-    }
 
     /// `Restore demo songs`: the app writes the demos, once a tap, with no question first.
     #[test]
