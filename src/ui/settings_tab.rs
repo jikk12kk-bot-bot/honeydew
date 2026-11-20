@@ -1892,13 +1892,13 @@ mod tests {
             for r in ROWS.iter().filter(|r| {
                 !hidden(r)
                     && matches!(
-                    r.kind,
-                    Kind::Dropdown(_)
-                        | Kind::MidiDropdown
-                        | Kind::AudioInput
-                        | Kind::FixedDropdown(_)
-                        | Kind::SignIn
-                )
+                        r.kind,
+                        Kind::Dropdown(_)
+                            | Kind::MidiDropdown
+                            | Kind::AudioInput
+                            | Kind::FixedDropdown(_)
+                            | Kind::SignIn
+                    )
             }) {
                 let control = rig.rect_of(row_id(index(r.label)));
                 let (label, shown) = rig.label_rect(control.y_range().into());

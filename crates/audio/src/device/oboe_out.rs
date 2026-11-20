@@ -28,9 +28,9 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use oboe::{
-    AudioApi, AudioOutputCallback, AudioOutputStreamSafe, AudioStream, AudioStreamAsync, AudioStreamBase,
-    AudioStreamBuilder, AudioStreamSafe, ContentType, DataCallbackResult, Error, Output,
-    PerformanceMode, SampleRateConversionQuality, SharingMode, Stereo, Usage,
+    AudioApi, AudioOutputCallback, AudioOutputStreamSafe, AudioStream, AudioStreamAsync,
+    AudioStreamBase, AudioStreamBuilder, AudioStreamSafe, ContentType, DataCallbackResult, Error,
+    Output, PerformanceMode, SampleRateConversionQuality, SharingMode, Stereo, Usage,
 };
 
 use super::{AudioRenderer, BufferMode, CallbackState, SUB_BLOCK, clock};

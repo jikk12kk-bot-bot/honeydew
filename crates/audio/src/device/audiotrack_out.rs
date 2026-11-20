@@ -95,19 +95,32 @@ pub(super) fn open(mode: BufferMode, rate: u32) -> Result<Opened, String> {
 }
 
 /// [`open`]'s track, its buffer in frames and its rate.
-fn make(env: &mut JNIEnv<'_>, mode: BufferMode, rate: u32) -> Result<(GlobalRef, usize, u32), String> {
+fn make(
+    env: &mut JNIEnv<'_>,
+    mode: BufferMode,
+    rate: u32,
+) -> Result<(GlobalRef, usize, u32), String> {
     let j = |e: jni::errors::Error| e.to_string();
     let rate = match i32::try_from(rate) {
         Ok(rate) if rate > 0 => rate,
         _ => env
-            .call_static_method(TRACK, "getNativeOutputSampleRate", "(I)I", &[STREAM_MUSIC.into()])
+            .call_static_method(
+                TRACK,
+                "getNativeOutputSampleRate",
+                "(I)I",
+                &[STREAM_MUSIC.into()],
+            )
             .and_then(|v| v.i())
             .map_err(j)?,
     };
     if rate <= 0 {
         return Err(format!("no sample rate ({rate})"));
     }
-    let args: [JValue; 3] = [rate.into(), CHANNEL_OUT_STEREO.into(), ENCODING_PCM_FLOAT.into()];
+    let args: [JValue; 3] = [
+        rate.into(),
+        CHANNEL_OUT_STEREO.into(),
+        ENCODING_PCM_FLOAT.into(),
+    ];
     let min = env
         .call_static_method(TRACK, "getMinBufferSize", "(III)I", &args)
         .and_then(|v| v.i())
@@ -125,7 +138,9 @@ fn make(env: &mut JNIEnv<'_>, mode: BufferMode, rate: u32) -> Result<(GlobalRef,
         MODE_STREAM.into(),
     ];
     let track = env.new_object(TRACK, "(IIIIII)V", &args).map_err(j)?;
-    let state = env.call_method(&track, "getState", "()I", &[]).and_then(|v| v.i());
+    let state = env
+        .call_method(&track, "getState", "()I", &[])
+        .and_then(|v| v.i());
     if state.map_err(j)? != STATE_INITIALIZED {
         let _ = env.call_method(&track, "release", "()V", &[]);
         return Err("the track did not initialise".into());
@@ -178,16 +193,25 @@ impl Opened {
             let heard = clock().map(|now| now + latency_ns);
             state.callback(chunk, 2, rate, heard, &mut scratch, |at, rendered| {
                 for (o, &s) in out[at * 2..].iter_mut().zip(rendered) {
-                    *o = if s.is_finite() { s.clamp(-1.0, 1.0) } else { 0.0 };
+                    *o = if s.is_finite() {
+                        s.clamp(-1.0, 1.0)
+                    } else {
+                        0.0
+                    };
                 }
             });
             let wrote = env.set_float_array_region(&array, 0, &out).and_then(|()| {
-                env.call_method(track, "write", "([FIII)I", &[
-                    JValue::Object(&array),
-                    0.into(),
-                    samples.into(),
-                    WRITE_BLOCKING.into(),
-                ])?
+                env.call_method(
+                    track,
+                    "write",
+                    "([FIII)I",
+                    &[
+                        JValue::Object(&array),
+                        0.into(),
+                        samples.into(),
+                        WRITE_BLOCKING.into(),
+                    ],
+                )?
                 .i()
             });
             if !matches!(wrote, Ok(n) if n >= 0) {
@@ -195,7 +219,9 @@ impl Opened {
                 fail(&state);
                 break;
             }
-            let count = env.call_method(track, "getUnderrunCount", "()I", &[]).and_then(|v| v.i());
+            let count = env
+                .call_method(track, "getUnderrunCount", "()I", &[])
+                .and_then(|v| v.i());
             match count {
                 Ok(count) if count > underruns => {
                     let new = u64::try_from(count - underruns).unwrap_or(0);
@@ -224,7 +250,13 @@ mod tests {
         assert_eq!(buffer_frames(BufferMode::Native, 960), 960);
         assert_eq!(buffer_frames(BufferMode::Safe, 300), 1024);
         assert_eq!(buffer_frames(BufferMode::UltraSafe, 1920), 7680);
-        assert_eq!(buffer_frames(BufferMode::AtLeast(SoundMode::Fast, 2048), 960), 2048);
-        assert_eq!(buffer_frames(BufferMode::AtLeast(SoundMode::UltraSafe, 512), 960), 4096);
+        assert_eq!(
+            buffer_frames(BufferMode::AtLeast(SoundMode::Fast, 2048), 960),
+            2048
+        );
+        assert_eq!(
+            buffer_frames(BufferMode::AtLeast(SoundMode::UltraSafe, 512), 960),
+            4096
+        );
     }
 }

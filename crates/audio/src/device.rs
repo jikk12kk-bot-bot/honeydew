@@ -116,12 +116,12 @@ impl SoundMode {
     }
 }
 
-/// Android's output through Oboe ([`oboe_out`]): FL Studio Mobile's sound modes.
-#[cfg(target_os = "android")]
-mod oboe_out;
 /// Android's output through `AudioTrack` ([`audiotrack_out`]): FL Studio Mobile's `Ultrasafe`.
 #[cfg(target_os = "android")]
 mod audiotrack_out;
+/// Android's output through Oboe ([`oboe_out`]): FL Studio Mobile's sound modes.
+#[cfg(target_os = "android")]
+mod oboe_out;
 
 /// SETTINGS' `Audio driver:` (Android): 0 per sound mode as FL Studio Mobile (`Native` and low latency mode through
 /// AAudio, `Fast` and `Safe` through OpenSL ES, `Ultrasafe` through `AudioTrack`), 1 AAudio for every mode (Oboe's
