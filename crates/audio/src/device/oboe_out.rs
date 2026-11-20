@@ -9,9 +9,10 @@
 //! | `Safe`                 | LowLatency  | Shared    | 4 bursts, at least 1024      | yes                |
 //! | `UltraSafe`            | None        | Shared    | the whole capacity           | no                 |
 //! | `Fixed(n)`             | LowLatency  | Shared    | n frames, whole bursts       | no                 |
-//! | `AtLeast(mode, n)`     | the mode's  | the mode's| the mode's, at least n frames| the mode's         |
+//! | `AtLeast(mode, n)`     | the mode's¹ | the mode's| n frames, whole bursts       | no                 |
 //!
-//! `AtLeast` is the `Audio buffer size` slider on top of the sound mode: its stream, with a buffer no smaller.
+//! `AtLeast` is SETTINGS' `Audio buffer size` at a set size: the stream of `Fast`, or of `Lowest` with `Enable low
+//! latency mode`, with that buffer. ¹ None above 2048 frames.
 //!
 //! A buffer that grows on underruns does as Oboe's own `LatencyTuner`: a burst more after each callback that saw new
 //! ones, up to the capacity, so a phone that cannot keep up settles at the smallest buffer it plays without crackles.
@@ -82,10 +83,19 @@ fn profile(mode: BufferMode) -> Profile {
             adaptive: false,
             ..fast
         },
+        // A set size stays as set (only Auto grows on underruns); a big one takes Android's normal path, whose
+        // buffers are roomier than the low-latency one's.
         BufferMode::AtLeast(base, frames) => {
             let p = profile(base.mode());
+            let n = i32::try_from(frames).unwrap_or(i32::MAX);
             Profile {
-                min_frames: p.min_frames.max(i32::try_from(frames).unwrap_or(i32::MAX)),
+                performance: if n > 2048 {
+                    PerformanceMode::None
+                } else {
+                    p.performance
+                },
+                min_frames: p.min_frames.max(n),
+                adaptive: false,
                 ..p
             }
         }

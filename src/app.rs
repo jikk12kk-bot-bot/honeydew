@@ -573,20 +573,25 @@ impl HoneydewApp {
             {
                 self.send_arm(true);
             }
-            if self.settings.low_latency != self.settings_saved.low_latency {
-                self.audio
-                    .set_low_latency(&self.song, self.settings.low_latency);
+            // The output reopens once for what changed together (a sound mode's preset sets the driver and the
+            // buffer at once). Android's sound mode is only that preset: the driver and the buffer play.
+            let (s, was) = (&self.settings, &self.settings_saved);
+            let buffer = s.low_latency != was.low_latency;
+            let sound_mode = s.sound_mode != was.sound_mode;
+            let driver = s.audio_driver != was.audio_driver;
+            let exclusive = s.low_latency_mode != was.low_latency_mode;
+            honeydew_audio::device::set_android_driver(s.audio_driver);
+            crate::audio_link::set_low_latency_mode(s.low_latency_mode);
+            let (low_latency, mode) = (s.low_latency, s.sound_mode);
+            if buffer {
+                self.audio.set_low_latency(&self.song, low_latency);
             }
-            if self.settings.sound_mode != self.settings_saved.sound_mode {
-                self.audio
-                    .set_sound_mode(&self.song, self.settings.sound_mode);
+            if sound_mode && cfg!(target_os = "android") {
+                self.audio.set_sound_mode_preference(mode);
+            } else if sound_mode {
+                self.audio.set_sound_mode(&self.song, mode);
             }
-            if self.settings.low_latency_mode != self.settings_saved.low_latency_mode {
-                crate::audio_link::set_low_latency_mode(self.settings.low_latency_mode);
-                self.audio.reopen_output(&self.song);
-            }
-            if self.settings.audio_driver != self.settings_saved.audio_driver {
-                honeydew_audio::device::set_android_driver(self.settings.audio_driver);
+            if (driver || exclusive) && !buffer {
                 self.audio.reopen_output(&self.song);
             }
             if self.settings.grid_color != self.settings_saved.grid_color {

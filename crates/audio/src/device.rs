@@ -88,8 +88,8 @@ pub enum BufferMode {
     /// `Native` with FL Studio Mobile's `Enable low latency mode`: the smallest buffer the device plays (Android's
     /// Oboe output, `oboe_out`); elsewhere as [`Self::Fast`].
     Lowest,
-    /// Android: a sound mode's stream with at least this many frames of buffer, the `Audio buffer size` slider on top
-    /// of the sound mode (`oboe_out`); elsewhere as [`Self::Fixed`].
+    /// Android: a mode's stream with a buffer of this many frames (whole bursts), which stays as set: SETTINGS'
+    /// `Audio buffer size` at a set size (`oboe_out`, `audiotrack_out`); elsewhere as [`Self::Fixed`].
     AtLeast(SoundMode, u32),
 }
 
@@ -123,9 +123,8 @@ mod audiotrack_out;
 #[cfg(target_os = "android")]
 mod oboe_out;
 
-/// SETTINGS' `Audio driver:` (Android): 0 per sound mode as FL Studio Mobile (`Native` and low latency mode through
-/// AAudio, `Fast` and `Safe` through OpenSL ES, `Ultrasafe` through `AudioTrack`), 1 AAudio for every mode (Oboe's
-/// choice: OpenSL ES on Android 8.0), 2 OpenSL ES, 3 `AudioTrack`. The next output opened takes it.
+/// SETTINGS' `Audio driver:` (Android): 0 AAudio (Oboe's choice: OpenSL ES on Android 8.0), 1 OpenSL ES (Oboe), 2
+/// `AudioTrack`. The next output opened takes it.
 static ANDROID_DRIVER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// Sets [`ANDROID_DRIVER`]; elsewhere it changes nothing.
@@ -133,7 +132,12 @@ pub fn set_android_driver(driver: u8) {
     ANDROID_DRIVER.store(driver, Ordering::Relaxed);
 }
 
-/// Android's audio APIs, as [`ANDROID_DRIVER`] picks one for a mode.
+/// [`ANDROID_DRIVER`] as last set.
+pub fn android_driver() -> u8 {
+    ANDROID_DRIVER.load(Ordering::Relaxed)
+}
+
+/// Android's audio APIs ([`ANDROID_DRIVER`]).
 #[cfg(target_os = "android")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Driver {
@@ -143,24 +147,10 @@ enum Driver {
 }
 
 #[cfg(target_os = "android")]
-fn driver(mode: BufferMode) -> Driver {
-    match ANDROID_DRIVER.load(Ordering::Relaxed) {
-        1 => Driver::AAudio,
-        2 => Driver::OpenSles,
-        3 => Driver::AudioTrack,
-        _ => match mode {
-            BufferMode::AtLeast(base, _) => driver_for(base.mode()),
-            mode => driver_for(mode),
-        },
-    }
-}
-
-/// FL Studio Mobile's API for a sound mode.
-#[cfg(target_os = "android")]
-fn driver_for(mode: BufferMode) -> Driver {
-    match mode {
-        BufferMode::Fast | BufferMode::Safe => Driver::OpenSles,
-        BufferMode::UltraSafe => Driver::AudioTrack,
+fn driver() -> Driver {
+    match android_driver() {
+        1 => Driver::OpenSles,
+        2 => Driver::AudioTrack,
         _ => Driver::AAudio,
     }
 }
@@ -792,7 +782,7 @@ impl<R: AudioRenderer> AudioOutput<R> {
         // AAudio or OpenSL ES, at the device's own rate for 0; Oboe if a track cannot open, AAudio through cpal if
         // Oboe cannot.
         #[cfg(target_os = "android")]
-        let api = driver(mode);
+        let api = driver();
         #[cfg(target_os = "android")]
         if api == Driver::AudioTrack {
             match audiotrack_out::open(mode, rate) {

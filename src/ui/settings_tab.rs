@@ -617,7 +617,10 @@ impl SettingsTab {
         }
         self.shown_frame = frame;
         let m = cx.m;
-        let rows = self.visible_rows(&self.rows());
+        let mut rows = self.visible_rows(&self.rows());
+        // `Enable low latency mode` applies to AAudio alone: it shows only while that is the audio driver.
+        let exclusive = settings.audio_driver == 0;
+        rows.retain(|(_, r)| exclusive || r.label != "Enable low latency mode");
         let pitch = m.u(ROW_PITCH);
         // The scale note's row takes no room while the scale is not limited.
         let limited = m.scale_limited_to().is_some();
@@ -864,13 +867,13 @@ impl SettingsTab {
                     #[cfg(desktop)]
                     let sound_mode_tip = "STANDARD: general-purpose mode with broad device compatibility.\nMULTITRACK: experimental; FL-style per-input multitrack routing is not implemented yet. The buffer slider works in either mode.";
                     #[cfg(target_os = "android")]
-                    let sound_mode_tip = "FAST: lowest latency for capable devices (Oboe, shared).\nSAFE: larger buffer; fewer glitches with more latency.\nULTRASAFE: largest buffer; maximum stability and compatibility, highest latency.\nNATIVE: lowest latency through Oboe's exclusive stream, recommended on Android 9 and up; works with low latency mode.\nThe buffer grows by itself when the phone cannot keep up.";
+                    let sound_mode_tip = "Presets of Audio driver and Audio buffer size, as FL Studio Mobile's:\nNATIVE: AAudio, Auto buffer; lowest latency, recommended on Android 9 and up.\nFAST: OpenSL ES, Auto buffer.\nSAFE: OpenSL ES, 1024 frames; fewer glitches, more latency.\nULTRASAFE: AudioTrack, 4096 frames; widest compatibility, highest latency.\nCUSTOM: a driver and buffer of your own.";
                     #[cfg(not(any(desktop, target_os = "android")))]
                     let sound_mode_tip = "NATIVE: device/OS default audio behavior.";
                     crate::ui::tooltip::tip(ui, button_rect, sound_mode_tip, None);
                 }
                 if matches!(choice, Choice::AudioDriver) {
-                    let tip = "Which Android audio system plays the sound.\nPer sound mode: as FL Studio Mobile: NATIVE through AAudio, FAST and SAFE through OpenSL ES, ULTRASAFE through AudioTrack.\nAAudio: Android's newest, lowest latency (OpenSL ES on Android 8.0).\nOpenSL ES: Android's older native audio.\nAudioTrack: Android's oldest, highest latency, widest compatibility.\nThe Sound mode still sets the buffer.";
+                    let tip = "Which Android audio system plays the sound.\nAAudio: Android's newest, lowest latency (OpenSL ES on Android 8.0); works with low latency mode.\nOpenSL ES: Android's older native audio.\nAudioTrack: Android's oldest, highest latency, widest compatibility.";
                     crate::ui::tooltip::tip(ui, button_rect, tip, None);
                 }
                 if matches!(choice, Choice::GridColor) {
@@ -955,15 +958,16 @@ impl SettingsTab {
                     s.low_latency = (value.clamp(0.0, 1.0) * max).round() as u8;
                 }
                 let index = (value.clamp(0.0, 1.0) * max).round() as usize;
-                // Android: the slider is the smallest buffer of the sound mode's own.
-                let (native, prefix) = match cfg!(target_os = "android") {
-                    true => ("Mode's own", "At least "),
-                    false => ("Native", ""),
+                // Android: Auto is the driver's smallest buffer, growing when it crackles.
+                let auto = if cfg!(target_os = "android") {
+                    "Auto"
+                } else {
+                    "Native"
                 };
                 let display = if index == 0 {
-                    native.to_owned()
+                    auto.to_owned()
                 } else {
-                    format!("{prefix}{} frames", BUFFER_SIZES[index])
+                    format!("{} frames", BUFFER_SIZES[index])
                 };
                 plain(
                     ui,
@@ -973,7 +977,7 @@ impl SettingsTab {
                     Align2::RIGHT_CENTER,
                 );
                 #[cfg(target_os = "android")]
-                let tip = "The smallest output buffer, on top of the Sound mode: the mode keeps its own stream and buffer, never smaller than this. Mode's own: the Sound mode's buffer alone. Bigger buffers crackle less but add latency.";
+                let tip = "The output buffer, up to 10240 frames. Auto: the Audio driver's smallest, which grows by itself when the sound crackles. A set size stays as set. Bigger buffers crackle less but add latency.";
                 #[cfg(not(target_os = "android"))]
                 let tip = "Chooses the output buffer target. Native uses the device default; smaller frame sizes reduce latency but increase CPU and dropout risk. The setting works independently of Sound Mode.";
                 crate::ui::tooltip::tip(ui, r, tip, None);
@@ -1373,6 +1377,9 @@ impl Choice {
     /// The stored value.
     fn get(self, s: &Settings) -> usize {
         match self {
+            #[cfg(target_os = "android")]
+            Choice::SoundMode => usize::from(s.sound_preset()),
+            #[cfg(not(target_os = "android"))]
             Choice::SoundMode => usize::from(s.sound_mode),
             // A theme of the user's is no built-in one.
             Choice::Theme if !s.custom_theme.is_empty() => usize::MAX,
@@ -1392,6 +1399,9 @@ impl Choice {
     /// Stores `value`, one of [`Choice::items`]' values.
     fn set(self, s: &mut Settings, value: usize) {
         match self {
+            #[cfg(target_os = "android")]
+            Choice::SoundMode => s.apply_sound_preset(value as u8),
+            #[cfg(not(target_os = "android"))]
             Choice::SoundMode => s.sound_mode = value as u8,
             Choice::Theme => (s.theme, s.custom_theme) = (value as u32, String::new()),
             Choice::Animation => (s.animations, s.inertia) = (value == 0, value != 2),

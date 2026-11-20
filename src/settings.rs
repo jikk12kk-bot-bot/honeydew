@@ -62,10 +62,23 @@ pub fn migrate_legacy_keys(storage: &mut dyn eframe::Storage) {
 /// driver modes `Standard` and `Multitrack` instead.
 #[cfg(desktop)]
 pub const SOUND_MODES: [(u8, &str); 2] = [(0, "STANDARD"), (1, "MULTITRACK")];
-/// Android's are FL Studio Mobile's, through Oboe (`honeydew_audio::device`'s `oboe_out`).
+/// Android's are FL Studio Mobile's, as presets of `Audio driver:` and `Audio buffer size` ([`SOUND_PRESETS`]);
+/// `CUSTOM` shows once either differs from every preset.
 #[cfg(target_os = "android")]
-pub const SOUND_MODES: [(u8, &str); 4] =
-    [(1, "FAST"), (0, "SAFE"), (2, "ULTRASAFE"), (3, "NATIVE")];
+pub const SOUND_MODES: [(u8, &str); 5] = [
+    (1, "FAST"),
+    (0, "SAFE"),
+    (2, "ULTRASAFE"),
+    (3, "NATIVE"),
+    (CUSTOM_SOUND_MODE, "CUSTOM"),
+];
+/// Android's sound mode that is no preset ([`SOUND_MODES`]).
+#[cfg(target_os = "android")]
+pub const CUSTOM_SOUND_MODE: u8 = 4;
+/// Android's presets: (sound mode, [`AUDIO_DRIVERS`] index, [`BUFFER_SIZES`] index). `NATIVE`: AAudio, Auto;
+/// `FAST`: OpenSL ES, Auto; `SAFE`: OpenSL ES, 1024 frames; `ULTRASAFE`: AudioTrack, 4096 frames.
+#[cfg(target_os = "android")]
+pub const SOUND_PRESETS: [(u8, u8, u8); 4] = [(3, 0, 0), (1, 1, 0), (0, 1, 5), (2, 2, 7)];
 #[cfg(not(any(desktop, target_os = "android")))]
 pub const SOUND_MODES: [(u8, &str); 1] = [(3, "NATIVE")];
 
@@ -89,13 +102,12 @@ pub const GRID_COLORS: [(&str, u32); 14] = [
 ];
 
 /// `Audio driver:` items (Android), in menu order, the index stored: which of Android's audio APIs the output uses
-/// (`honeydew_audio::device::set_android_driver`). `Per sound mode` is FL Studio Mobile's: `NATIVE` through AAudio,
-/// `FAST` and `SAFE` through OpenSL ES, `ULTRASAFE` through `AudioTrack`.
-pub const AUDIO_DRIVERS: [&str; 4] = ["Per sound mode", "AAudio", "OpenSL ES", "AudioTrack"];
+/// (`honeydew_audio::device::set_android_driver`).
+pub const AUDIO_DRIVERS: [&str; 3] = ["AAudio", "OpenSL ES", "AudioTrack"];
 
 /// Buffer-size slider positions. Zero keeps the audio device's native/default buffer;
 /// positive values are targets that the backend clamps to the device's supported range.
-pub const BUFFER_SIZES: [u32; 7] = [0, 64, 128, 256, 512, 1024, 2048];
+pub const BUFFER_SIZES: [u32; 11] = [0, 64, 128, 256, 512, 1024, 2048, 4096, 6144, 8192, 10240];
 pub const MCP_DEFAULT_PORT: u16 = 57831;
 
 #[cfg(desktop)]
@@ -227,7 +239,7 @@ pub struct Settings {
     /// `Grid color:`, an index into [`GRID_COLORS`] (our own key): the beat lines of the playlist and the editors.
     #[serde(rename = "gridColor")]
     pub grid_color: u8,
-    /// `Audio driver:` (Android; our own key), an index into [`AUDIO_DRIVERS`]. `Per sound mode` by default.
+    /// `Audio driver:` (Android; our own key), an index into [`AUDIO_DRIVERS`]. AAudio by default.
     #[serde(rename = "audioDriverAndr")]
     pub audio_driver: u8,
     /// `Enable audio recording latency compensation` (our own key): ON compensates. Honeydew change (#129, #130): the
@@ -554,6 +566,25 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Android: the sound mode `Audio driver:` and `Audio buffer size` match ([`SOUND_PRESETS`]), else `CUSTOM`.
+    #[cfg(target_os = "android")]
+    pub fn sound_preset(&self) -> u8 {
+        let now = (self.audio_driver, self.low_latency);
+        (SOUND_PRESETS.iter())
+            .find(|&&(_, driver, buffer)| (driver, buffer) == now)
+            .map_or(CUSTOM_SOUND_MODE, |&(mode, _, _)| mode)
+    }
+
+    /// Android: picks sound mode `mode`, whose preset sets `Audio driver:` and `Audio buffer size` (`CUSTOM` keeps
+    /// them).
+    #[cfg(target_os = "android")]
+    pub fn apply_sound_preset(&mut self, mode: u8) {
+        self.sound_mode = mode;
+        if let Some(&(_, driver, buffer)) = SOUND_PRESETS.iter().find(|p| p.0 == mode) {
+            (self.audio_driver, self.low_latency) = (driver, buffer);
+        }
+    }
+
     /// `Grid color:` as `0xRRGGBB`, `None` for the theme's own ([`crate::theme::set_grid_color`]).
     pub fn grid_rgb(&self) -> Option<u32> {
         match GRID_COLORS.get(usize::from(self.grid_color)) {
