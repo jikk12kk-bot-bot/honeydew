@@ -1,7 +1,3 @@
-Honeydew 0.0.6: Oboe audio with FL Studio Mobile's sound modes, playing in the background, a visible grid.
+Honeydew 0.0.7: the sound modes in SETTINGS on Android.
 
-- Audio (Android). The output now goes through Oboe, Google's low-latency audio library, as FL Studio Mobile's does. SETTINGS → `Sound mode:` has FL Studio Mobile's modes: `FAST` (lowest latency for capable devices), `SAFE` (fewer glitches, more latency), `ULTRASAFE` (longest latency, widest compatibility) and `NATIVE` (Oboe's exclusive low-latency stream, recommended on Android 9 and up; the default). New `Enable low latency mode` toggle for `NATIVE`: the smallest buffer the phone plays. In every mode but `ULTRASAFE` the buffer grows by itself when the phone cannot keep up, so crackles settle instead of going on. The `Device` sample rate is now the phone's own (most 48 kHz, the only rate its fast path takes), and another rate is resampled by Oboe, keeping the low-latency path.
-- Background (Android). The song plays on in the background and an export keeps rendering there (a notification shows while it does; tap it to go back). The Displayer video's sound no longer loops on its last second when the app goes to the background: it follows the song's clock as the audio plays it.
-- Grid. The beat and bar lines of the playlist and the editors are easier to see by default, and SETTINGS → `Grid color:` sets their color.
-- Sample rate. Choosing a `Sample rate:` beyond what the device's audio output supports shows a warning (the rate is still used, resampled).
-- Zoom. The playlist's tracks open at least 2 U tall, and the drum editor's rows open 2 U tall instead of 1, so neither needs zooming in after a restart.
+- Settings (Android). `Sound mode:` now shows under Audio, with FL Studio Mobile's modes: `FAST`, `SAFE`, `ULTRASAFE` and `NATIVE` (the default), with `Enable low latency mode` under it for `NATIVE`. 0.0.6 added the modes but left the row hidden.
