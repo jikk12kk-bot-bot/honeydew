@@ -544,16 +544,15 @@ impl SettingsTab {
             .iter()
             .filter(|r| {
                 let (web, desktop) = (cfg!(target_arch = "wasm32"), cfg!(desktop));
+                let android = cfg!(target_os = "android");
                 let hidden = web
                     && matches!(
                         r.kind,
                         Kind::Dropdown(Choice::SampleMemory) | Kind::AudioInput
                     )
-                    || !desktop
-                        && matches!(
-                            r.kind,
-                            Kind::Dropdown(Choice::SoundMode) | Kind::InstallSounds
-                        )
+                    || !desktop && matches!(r.kind, Kind::InstallSounds)
+                    // Android has FL Studio Mobile's sound modes (Oboe); the web and iOS have one mode.
+                    || !desktop && !android && matches!(r.kind, Kind::Dropdown(Choice::SoundMode))
                     // The app serves MCP itself everywhere but the web.
                     || web
                         && matches!(
@@ -1593,8 +1592,7 @@ mod tests {
             assert_eq!(labels(Choice::SoundMode), ["STANDARD", "MULTITRACK"]);
             assert_eq!(values(Choice::SoundMode), [0, 1]);
         }
-        #[cfg(not(desktop))]
-        #[cfg(not(desktop))]
+        #[cfg(not(any(desktop, target_os = "android")))]
         {
             assert_eq!(labels(Choice::SoundMode), ["NATIVE"]);
             assert_eq!(values(Choice::SoundMode), [3]);
@@ -1643,7 +1641,7 @@ mod tests {
             assert_eq!(Choice::SoundMode.label(&s), label);
             assert_eq!(SOUND_MODES, [(0, "STANDARD"), (1, "MULTITRACK")]);
         }
-        #[cfg(not(desktop))]
+        #[cfg(not(any(desktop, target_os = "android")))]
         assert_eq!(SOUND_MODES, [(3, "NATIVE")]);
     }
 
