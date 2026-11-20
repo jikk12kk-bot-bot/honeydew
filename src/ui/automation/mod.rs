@@ -1078,8 +1078,9 @@ impl AutomationEditor {
         }
         // 4.
         let (t0, t1) = (ax.tick(grid.left()), ax.tick(grid.right()));
+        let ink = crate::theme::grid_ink(c);
         for (tick, w) in grid_lines(t0, t1, ax.beat_w, m.u(1.0), sig, MARK_GAP, self.snap.size) {
-            vline(ax.x(tick), w, bg);
+            vline(ax.x(tick), w, ink);
         }
         // 5.
         let end = ax.x(loop_ticks).max(grid.left());

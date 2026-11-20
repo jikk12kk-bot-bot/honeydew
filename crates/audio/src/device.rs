@@ -85,6 +85,21 @@ pub enum BufferMode {
     /// Requests a target frame count, clamped to the device's supported range.
     Fixed(u32),
     Native,
+    /// `Native` with FL Studio Mobile's `Enable low latency mode`: the smallest buffer the device plays (Android's
+    /// Oboe output, `oboe_out`); elsewhere as [`Self::Fast`].
+    Lowest,
+}
+
+/// Android's output through Oboe ([`oboe_out`]): FL Studio Mobile's sound modes.
+#[cfg(target_os = "android")]
+mod oboe_out;
+
+/// A running output stream, held for its drop, which stops it: cpal's, or on Android Oboe's.
+#[allow(dead_code)]
+enum OutStream<R: AudioRenderer> {
+    Cpal(cpal::Stream, std::marker::PhantomData<R>),
+    #[cfg(target_os = "android")]
+    Oboe(oboe::AudioStreamAsync<oboe::Output, oboe_out::Callback<R>>),
 }
 
 pub trait AudioRenderer: Send + 'static {
@@ -549,6 +564,13 @@ struct Shared {
     ticks: Box<[Visual]>,
 }
 
+/// The highest sample rate the default output device takes in any of its configurations; `None` without one.
+pub fn max_output_rate() -> Option<u32> {
+    let device = cpal::default_host().default_output_device()?;
+    let ranges = device.supported_output_configs().ok()?;
+    ranges.map(|r| r.max_sample_rate()).max()
+}
+
 /// Now, ns since the first call: the output clock's time base. `None` on the web, which has no clock to read here
 /// (its visuals show as last published).
 pub fn clock() -> Option<i64> {
@@ -627,7 +649,7 @@ pub enum StartError<E> {
 }
 
 pub struct AudioOutput<R: AudioRenderer> {
-    stream: Option<cpal::Stream>,
+    stream: Option<OutStream<R>>,
     sender: Sender<CallbackCommand<R>>,
     retired: Receiver<(Box<R>, Arc<MeterBank>)>,
     shared: Arc<Shared>,
@@ -693,6 +715,12 @@ impl<R: AudioRenderer> AudioOutput<R> {
     where
         F: FnOnce(u32) -> Result<R, E>,
     {
+        // Android: Oboe first (`oboe_out`), at the device's own rate for 0; AAudio through cpal if it cannot open.
+        #[cfg(target_os = "android")]
+        match oboe_out::open::<R>(mode, rate) {
+            Ok(opened) => return Self::start_oboe(opened, mode, make_renderer),
+            Err(error) => eprintln!("the Oboe output did not open ({error:?}): AAudio through cpal"),
+        }
         let rate = match rate {
             0 if cfg!(any(
                 target_os = "linux",
@@ -768,7 +796,25 @@ impl<R: AudioRenderer> AudioOutput<R> {
         }
         .map_err(StartError::Build)?;
         stream.play().map_err(StartError::Play)?;
-        output.stream = Some(stream);
+        output.stream = Some(OutStream::Cpal(stream, std::marker::PhantomData));
+        Ok(output)
+    }
+
+    /// The Oboe stream `opened` playing a renderer `make_renderer` builds at its rate, with `mode`'s buffer.
+    #[cfg(target_os = "android")]
+    fn start_oboe<F, E>(
+        opened: oboe_out::Opened<R>,
+        mode: BufferMode,
+        make_renderer: F,
+    ) -> Result<Self, StartError<E>>
+    where
+        F: FnOnce(u32) -> Result<R, E>,
+    {
+        let sample_rate = opened.sample_rate;
+        let renderer = make_renderer(sample_rate).map_err(StartError::Renderer)?;
+        let (mut output, state) = Self::unstarted(renderer, sample_rate);
+        output.buffer_mode = mode;
+        output.stream = Some(OutStream::Oboe(opened.deliver(state)));
         Ok(output)
     }
 
@@ -1048,7 +1094,7 @@ fn output_config(
     let frames = match mode {
         BufferMode::UltraSafe => max,
         BufferMode::Safe => 256.clamp(min, max),
-        BufferMode::Fast => min,
+        BufferMode::Fast | BufferMode::Lowest => min,
         BufferMode::Fixed(target) => target.clamp(min, max),
         BufferMode::Native => return config,
     };
@@ -1155,7 +1201,8 @@ impl<R: AudioRenderer> CallbackState<R> {
             // The Displayer's video sound, after the whole mix: heard, never rendered (`listen`).
             let moving = self.renderer.transport_tick() != before
                 || (self.playing && !self.renderer.counting_in());
-            crate::listen::FEED.mix(&mut scratch[..length], channels, sample_rate, moving);
+            let tick = self.renderer.transport_tick();
+            crate::listen::FEED.mix(&mut scratch[..length], channels, sample_rate, moving, tick);
             out(at, &scratch[..length]);
             at += SUB_BLOCK;
         }

@@ -26,3 +26,6 @@ os-engine = { path = "../../vendor/lemon-studio/os-engine" }
 # (elsewhere it would change the thread priorities too).
 [target.'cfg(target_os = "android")'.dependencies]
 cpal = { version = "0.18.2", features = ["realtime"] }
+# The output through Oboe (Apache-2.0), FL Studio Mobile's sound modes (`device/oboe_out.rs`): its C++ sources are
+# built with the NDK's clang and linked with libc++_shared, as the app is (`tools/android-dist.sh`).
+oboe = { version = "0.6.1", features = ["shared-stdcxx"] }

@@ -242,6 +242,8 @@ enum Choice {
     SampleMemory,
     /// `Sample rate:`: the rate playback and renders use ([`crate::song::SAMPLE_RATES`]), in Hz.
     SampleRate,
+    /// `Grid color:` ([`crate::settings::GRID_COLORS`]): the beat lines of the playlist and the editors.
+    GridColor,
     /// `Screen orientation:` (#41): `Auto`, `Portrait` or `Landscape` ([`crate::settings::ORIENTATIONS`]).
     Orientation,
     /// `Project version size limit:` (#69), in MB ([`crate::settings::VERSION_SIZE_LIMITS`]).
@@ -265,7 +267,7 @@ const fn row(label: &'static str, kind: Kind) -> Row {
 }
 
 /// Every row of the SETTINGS tab, in order.
-const ROWS: [Row; 57] = {
+const ROWS: [Row; 59] = {
     use Kind::*;
     [
         row("MIDI:", Header),
@@ -292,6 +294,14 @@ const ROWS: [Row; 57] = {
             },
         ),
         row("Sound mode:", Dropdown(Choice::SoundMode)),
+        row(
+            "Enable low latency mode",
+            if cfg!(target_os = "android") {
+                Toggle(|s| &mut s.low_latency_mode)
+            } else {
+                FixedToggle(false)
+            },
+        ),
         row("Sample memory limit:", Dropdown(Choice::SampleMemory)),
         row("Recording:", Header),
         row("Audio input:", AudioInput),
@@ -309,6 +319,7 @@ const ROWS: [Row; 57] = {
         row("User interface:", Header),
         row("Theme:", Dropdown(Choice::Theme)),
         row("Theme creator", ThemeCreator),
+        row("Grid color:", Dropdown(Choice::GridColor)),
         row("Scaling:", Scaling),
         row("Scale is currently limited to", ScaleLimit),
         row("Animation:", Dropdown(Choice::Animation)),
@@ -814,6 +825,14 @@ impl SettingsTab {
                     }
                     _ => {}
                 }
+                if row.label == "Enable low latency mode" {
+                    crate::ui::tooltip::tip(
+                        ui,
+                        rect,
+                        "NATIVE sound mode only (Android): the smallest buffer the phone plays, for the lowest latency. It may overload the CPU and crackle; the buffer grows by itself when it does.",
+                        None,
+                    );
+                }
                 if row.label == "Multi core processing" {
                     crate::ui::tooltip::tip(
                         ui,
@@ -839,12 +858,18 @@ impl SettingsTab {
                 if matches!(choice, Choice::SoundMode) {
                     #[cfg(desktop)]
                     let sound_mode_tip = "STANDARD: general-purpose mode with broad device compatibility.\nMULTITRACK: experimental; FL-style per-input multitrack routing is not implemented yet. The buffer slider works in either mode.";
-                    #[cfg(not(desktop))]
-                    let sound_mode_tip = "ULTRASAFE: largest buffer; maximum stability and compatibility, highest latency.\nSAFE: moderately large buffer; fewer glitches with more latency.\nFAST: small buffer; lower latency but more CPU/dropout risk.\nNATIVE: device/OS default audio behavior.";
+                    #[cfg(target_os = "android")]
+                    let sound_mode_tip = "FAST: lowest latency for capable devices (Oboe, shared).\nSAFE: larger buffer; fewer glitches with more latency.\nULTRASAFE: largest buffer; maximum stability and compatibility, highest latency.\nNATIVE: lowest latency through Oboe's exclusive stream, recommended on Android 9 and up; works with low latency mode.\nThe buffer grows by itself when the phone cannot keep up.";
+                    #[cfg(not(any(desktop, target_os = "android")))]
+                    let sound_mode_tip = "NATIVE: device/OS default audio behavior.";
                     crate::ui::tooltip::tip(ui, button_rect, sound_mode_tip, None);
                 }
+                if matches!(choice, Choice::GridColor) {
+                    let tip = "The color of the beat and bar lines in the playlist and the editors. Default: a color from the theme.";
+                    crate::ui::tooltip::tip(ui, button_rect, tip, None);
+                }
                 if matches!(choice, Choice::SampleRate) {
-                    let tip = "The rate playback and renders run at. Songs do not keep it. Device: the phone's own rate, for both. A phone that cannot play at a chosen rate plays at its own, and renders still use the chosen one.";
+                    let tip = "The rate playback and renders run at. Songs do not keep it. Device: the phone's own rate, for both. A rate beyond what the device's output supports shows a warning: it still plays, resampled, with more CPU.";
                     crate::ui::tooltip::tip(ui, button_rect, tip, None);
                 }
                 if matches!(choice, Choice::SampleMemory) {
@@ -1321,6 +1346,10 @@ impl Choice {
             Choice::EditorResolution => (crate::settings::EDITOR_RESOLUTIONS.iter())
                 .map(|&p| (usize::from(p), format!("{p}%")))
                 .collect(),
+            Choice::GridColor => (crate::settings::GRID_COLORS.iter())
+                .map(|&(label, _)| label.to_owned())
+                .enumerate()
+                .collect(),
         }
     }
 
@@ -1338,6 +1367,7 @@ impl Choice {
             Choice::Orientation => usize::from(s.screen_orientation),
             Choice::VersionSize => s.version_size_limit as usize,
             Choice::EditorResolution => usize::from(s.plugin_editor_resolution),
+            Choice::GridColor => usize::from(s.grid_color),
         }
     }
 
@@ -1352,6 +1382,7 @@ impl Choice {
             Choice::Orientation => s.screen_orientation = value as u8,
             Choice::VersionSize => s.version_size_limit = value as u32,
             Choice::EditorResolution => s.plugin_editor_resolution = value as u8,
+            Choice::GridColor => s.grid_color = value as u8,
         }
     }
 

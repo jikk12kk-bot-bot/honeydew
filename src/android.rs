@@ -193,6 +193,58 @@ pub fn recording(tap: Option<&Arc<RecordTap>>) {
     }
 }
 
+/// The highest sample rate the phone's audio outputs take (`HoneydewActivity.maxOutputRate`: the native output rate,
+/// or a higher one an output lists), for SETTINGS' `Sample rate:` warning. `None` when Android says nothing.
+pub fn max_output_rate() -> Option<u32> {
+    let mut rate = 0;
+    let asked = with_activity(|env, activity| {
+        rate = env.call_method(activity, "maxOutputRate", "()I", &[])?.i()?;
+        Ok(())
+    });
+    if let Err(err) = asked {
+        eprintln!("the output rates are unknown: {err}");
+    }
+    u32::try_from(rate).ok().filter(|&r| r > 0)
+}
+
+/// The app has something to keep doing off the screen: the song plays, or an export renders. `HoneydewActivity`'s
+/// `onPause` asks ([`Java_dev_daijro_honeydew_HoneydewActivity_keepAlive`]) and starts the foreground service that keeps
+/// the process running (and its audio playing) while it is in the background; `onResume` stops it.
+static KEEP_ALIVE: AtomicBool = AtomicBool::new(false);
+
+/// Sets what `onPause` reads ([`KEEP_ALIVE`]), every frame.
+pub fn set_keep_alive(on: bool) {
+    KEEP_ALIVE.store(on, Ordering::Release);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_daijro_honeydew_HoneydewActivity_keepAlive(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    KEEP_ALIVE.load(Ordering::Acquire).into()
+}
+
+/// The app is on the screen again (`onResume`) since the last call: an export handed to a thread while it was away
+/// comes back to the frames ([`take_resumed`]).
+static RESUMED: AtomicBool = AtomicBool::new(false);
+
+/// `onResume` came since the last call.
+pub fn take_resumed() -> bool {
+    RESUMED.swap(false, Ordering::AcqRel)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_daijro_honeydew_HoneydewActivity_onComingBack(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) {
+    RESUMED.store(true, Ordering::Release);
+    if let Some(ctx) = BACK_WAKE.get() {
+        ctx.request_repaint();
+    }
+}
+
 /// An interruption ended the recording's take since the last call.
 pub fn interrupted() -> bool {
     INTERRUPTED.swap(false, Ordering::AcqRel)

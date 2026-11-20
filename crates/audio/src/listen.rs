@@ -9,6 +9,9 @@
 //!   from there, or would have played had the sound been there ([`ListenFeed::consumed`]): sound that comes late is
 //!   skipped by as much, so the video's sound keeps to the song's clock.
 //! - Only while the transport moves does the callback take frames; stopped (or holding for a count-in) it takes none.
+//! - The callback publishes the transport tick its block ended at ([`ListenFeed::tick`]) and the one it took the last
+//!   flush at ([`ListenFeed::flushed_tick`]): the producer keeps to the song's clock from them, not from the app's
+//!   frames, which stop while the app is in the background (the sound looped on its last second there).
 //!
 //! Part of Honeydew (the Displayer, our own addition).
 
@@ -34,7 +37,14 @@ pub struct ListenFeed {
     consumed: AtomicU64,
     /// Frames the callback owes: played as silence while missing, skipped when they come.
     debt: AtomicUsize,
+    /// The transport tick the callback's last block ended at, and the one it took the last flush at; [`NO_TICK`]
+    /// before any.
+    tick: AtomicU64,
+    flushed_tick: AtomicU64,
 }
+
+/// No tick published yet.
+const NO_TICK: u64 = u64::MAX;
 
 /// The one feed: the Displayer writes, the output callback mixes.
 pub static FEED: ListenFeed = ListenFeed::new();
@@ -51,7 +61,20 @@ impl ListenFeed {
             rate: AtomicU32::new(0),
             consumed: AtomicU64::new(0),
             debt: AtomicUsize::new(0),
+            tick: AtomicU64::new(NO_TICK),
+            flushed_tick: AtomicU64::new(NO_TICK),
         }
+    }
+
+    /// The transport tick the callback's last block ended at: the song's clock as the output plays it, which moves on
+    /// while the app runs no frame. `None` before a callback ran.
+    pub fn tick(&self) -> Option<u64> {
+        Some(self.tick.load(Ordering::Acquire)).filter(|&t| t != NO_TICK)
+    }
+
+    /// The transport tick the callback took the last flush at: [`Self::consumed`] counts from there.
+    pub fn flushed_tick(&self) -> Option<u64> {
+        Some(self.flushed_tick.load(Ordering::Acquire)).filter(|&t| t != NO_TICK)
     }
 
     /// The output's rate as the callback last ran; 0 while no output has run.
@@ -111,11 +134,14 @@ impl ListenFeed {
     }
 
     /// The callback's part: adds the queued sound into `out` (interleaved, `channels` wide) while the transport
-    /// `moving`, at the stream's `rate`. Allocates nothing and never blocks.
-    pub fn mix(&self, out: &mut [f32], channels: usize, rate: u32, moving: bool) {
+    /// `moving`, at the stream's `rate`; `tick` is the transport tick the block ended at. Allocates nothing and never
+    /// blocks.
+    pub fn mix(&self, out: &mut [f32], channels: usize, rate: u32, moving: bool, tick: u64) {
         self.rate.store(rate, Ordering::Release);
+        self.tick.store(tick, Ordering::Release);
         let generation = self.generation.load(Ordering::Acquire);
         if generation != self.acked.load(Ordering::Relaxed) {
+            self.flushed_tick.store(tick, Ordering::Release);
             self.read
                 .store(self.write.load(Ordering::Acquire), Ordering::Release);
             self.debt.store(0, Ordering::Relaxed);
@@ -167,19 +193,19 @@ mod tests {
         feed.set_gain(1.0);
         let g = feed.flush();
         let mut out = vec![0.0f32; 8];
-        feed.mix(&mut out, 2, 48_000, true);
+        feed.mix(&mut out, 2, 48_000, true, 0);
         assert!(feed.flushed(g));
         // 4 frames played with nothing queued: the first 4 frames written are skipped.
-        feed.mix(&mut out, 2, 48_000, true);
+        feed.mix(&mut out, 2, 48_000, true, 0);
         assert_eq!(feed.consumed(), 4);
         let frames: Vec<f32> = (0..16).map(|i| (i / 2) as f32).collect();
         assert_eq!(feed.push(&frames), 8);
         let mut out = vec![0.0f32; 4];
-        feed.mix(&mut out, 2, 48_000, true);
+        feed.mix(&mut out, 2, 48_000, true, 0);
         assert_eq!(out, [4.0, 4.0, 5.0, 5.0]);
         // Stopped: nothing taken.
         let mut out = vec![0.0f32; 4];
-        feed.mix(&mut out, 2, 48_000, false);
+        feed.mix(&mut out, 2, 48_000, false, 0);
         assert_eq!(out, [0.0; 4]);
         assert_eq!(feed.queued(), 2);
     }

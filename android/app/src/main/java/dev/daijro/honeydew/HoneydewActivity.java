@@ -60,6 +60,8 @@ public final class HoneydewActivity extends NativeActivity {
     private static native void onHeadphones(boolean on);
     private static native void onInterrupted();
     private static native void onLeaving();
+    private static native boolean keepAlive();
+    private static native void onComingBack();
     private static native void onBack();
 
     private static final int OPEN_DOCUMENT = 1;
@@ -188,8 +190,46 @@ public final class HoneydewActivity extends NativeActivity {
     @Override
     protected void onPause() {
         onLeaving();
+        // The song playing or an export rendering goes on in the background: a foreground service keeps the app
+        // running there, as Android stops or freezes a background app without one. Started while the activity is
+        // still in the foreground, as Android 12 and up require.
+        if (keepAlive()) {
+            try {
+                startForegroundService(new Intent(this, HoneydewService.class));
+                inBackground = true;
+            } catch (RuntimeException e) {
+                // Not allowed now (ForegroundServiceStartNotAllowedException): the app plays on while Android lets it.
+            }
+        }
         super.onPause();
         onInterrupted();
+    }
+
+    // HoneydewService was started by the last onPause.
+    private boolean inBackground;
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (inBackground) stopService(new Intent(this, HoneydewService.class));
+        inBackground = false;
+        onComingBack();
+    }
+
+    // The highest sample rate the outputs take, for Settings' Sample rate warning: the native output rate, or a higher
+    // one an output lists (most list none, meaning any rate, which Android resamples to the native one).
+    public int maxOutputRate() {
+        AudioManager audio = getSystemService(AudioManager.class);
+        int max = 0;
+        try {
+            max = Integer.parseInt(audio.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE));
+        } catch (RuntimeException e) {
+            // Unknown.
+        }
+        for (AudioDeviceInfo device : audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+            for (int rate : device.getSampleRates()) max = Math.max(max, rate);
+        }
+        return max;
     }
 
     // Immersive: the status and navigation bars stay hidden, so an edge touch can't press them; a swipe from the edge
@@ -646,6 +686,7 @@ public final class HoneydewActivity extends NativeActivity {
     @Override
     protected void onDestroy() {
         if (editorDialog != null) editorDialog.dismiss();
+        stopService(new Intent(this, HoneydewService.class));
         getSystemService(AudioManager.class).unregisterAudioDeviceCallback(outputs);
         super.onDestroy();
         onDisplayDpi(0);

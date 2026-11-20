@@ -2670,7 +2670,7 @@ fn paint_marks(
     (sig, size): (TimeSig, GridSize),
     cx: &UiCtx,
 ) {
-    let (m, bg) = (cx.m, cx.theme.colors.background.to_color32());
+    let (m, bg) = (cx.m, crate::theme::grid_ink(&cx.theme.colors));
     let px = 1.0 / m.ppp();
     let (t0, t1) = (g.tick(area.left()), g.tick(area.right()));
     for (tick, w) in grid_lines(t0, t1, g.beat_w, m.u(1.0), sig, MARK_GAP, size) {

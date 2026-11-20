@@ -695,7 +695,7 @@ impl AudioEditor {
             self.paint_wave(&gp, &f, axis, s, w, tint.gamma_multiply(WAVE_ALPHA), m);
         }
         let (t0, t1) = (axis.tick(f.grid.left()), axis.tick(f.grid.right()));
-        let control = c.control_fill.to_color32();
+        let control = crate::theme::grid_ink(c);
         let size = self.snap.size;
         for (tick, w) in grid_lines(t0.max(0.0), t1, axis.beat_w, u, sig, MARK_GAP, size) {
             let x = m.floor_px(axis.x(tick)) - (w / 2.0).floor() * px;

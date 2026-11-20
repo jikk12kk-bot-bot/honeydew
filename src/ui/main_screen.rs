@@ -1870,7 +1870,10 @@ impl MainScreen {
         };
         let at = |v: f64| if v.is_finite() { v } else { 0.0 };
         let [mut ax, mut ay] = self.axes(area, c, m);
-        ay.zoom = ay.clamp_zoom(zoom(zoom_y, 0.02));
+        // Rows open at least [`ROW_H`] tall: the default per device pixel (and a song saved zoomed far out, or on a
+        // screen of another density) made them too thin to touch on a phone.
+        let thinnest = 1.0 / f64::from(m.u(ROW_H));
+        ay.zoom = ay.clamp_zoom(zoom(zoom_y, 0.02).min(thinnest));
         ay.range[1] = rows_range(c.rows, ay.zoom, m);
         ay.pos = at(y);
         ay = ay.clamped();
@@ -2659,7 +2662,7 @@ fn paint_track_rows(
 ) {
     let UiCtx { theme, m } = *cx;
     let c = &theme.colors;
-    let bg = c.background.to_color32();
+    let (bg, ink) = (c.background.to_color32(), crate::theme::grid_ink(c));
     painter.rect_filled(rect, 0.0, bg);
     let grid = rect.with_min_x(grid_left);
     let px = 1.0 / m.ppp();
@@ -2680,7 +2683,7 @@ fn paint_track_rows(
         painter.rect_filled(lane.with_min_x(from), 0.0, fill.to_color32());
         for &(x, w) in &lines {
             let line = Rect::from_x_y_ranges(x..=x + w, lane.y_range());
-            grid_painter.rect_filled(line, 0.0, bg);
+            grid_painter.rect_filled(line, 0.0, ink);
         }
     }
 }

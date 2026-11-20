@@ -1,0 +1,83 @@
+name: zz-diagnose
+on:
+  push:
+    branches: [arena/3817e9e3-honeydew]
+permissions:
+  contents: write
+env:
+  CARGO_TERM_COLOR: never
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.fix.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libclang-dev
+      - name: fmt and lockfile
+        id: fix
+        run: |
+          cargo fmt
+          cargo metadata --format-version 1 > /dev/null
+          git config user.name jikk12kk-bot-bot
+          git config user.email 259327750+jikk12kk-bot-bot@users.noreply.github.com
+          if ! git diff --quiet; then
+            git commit -am "cargo fmt, Cargo.lock"
+            git push
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: clippy and tests
+        run: |
+          set +e
+          { echo "## linux"; cargo clippy --workspace --all-targets -- -D warnings 2>&1 | grep -E -A12 '^(error|warning)' | head -c 30000; } > report.md
+          cargo test --workspace 2>&1 | grep -E 'panicked|FAILED|failed|^error|test result' | head -c 20000 >> report.md
+          echo '```' > body.md; cat report.md >> body.md; echo '```' >> body.md
+          gh api repos/${{ github.repository }}/commits/${{ github.sha }}/comments -F body=@body.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+  android:
+    needs: linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.linux.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@1.91.0
+        with:
+          components: clippy
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-diag
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - name: tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y libclang-dev
+          sdkmanager 'ndk;28.0.13004108'
+          cargo install cargo-ndk --version 4.1.2 --locked
+      - name: FFmpeg cache
+        id: ffmpeg
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg
+          key: ffmpeg-android-${{ hashFiles('tools/build-ffmpeg.sh') }}
+      - name: clippy
+        env:
+          HONEYDEW_FFMPEG_DIR_aarch64_linux_android: ${{ runner.temp }}/ffmpeg/arm64
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.0.13004108"
+          features=
+          [ -d "$RUNNER_TEMP/ffmpeg/arm64" ] && features="--features video"
+          { echo "## android ($features) cache=${{ steps.ffmpeg.outputs.cache-hit }}"
+            cargo ndk -t arm64-v8a --platform 26 --link-libcxx-shared clippy --locked --lib $features 2>&1 | grep -E -A14 '^(error|warning)' | head -c 40000
+            echo "exit ${PIPESTATUS[0]}"; } > report.md
+          echo '```' > body.md; cat report.md >> body.md; echo '```' >> body.md
+          gh api repos/${{ github.repository }}/commits/${{ github.sha }}/comments -F body=@body.md

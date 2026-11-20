@@ -67,7 +67,7 @@ pub fn frame(
     playing: bool,
 ) {
     let secs = song_secs(tick, bpm);
-    state.media.sync(ctx, s, secs, playing, state.scrub);
+    state.media.sync(ctx, s, (secs, bpm), playing, state.scrub);
 }
 
 /// After the views: a finished pick into the settings, then the window or the background. Neither opens the panel:
