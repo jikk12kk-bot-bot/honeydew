@@ -190,19 +190,28 @@ pub fn buffer_mode(sound_mode: u8, low_latency: u8) -> BufferMode {
     if cfg!(desktop) {
         return requested.unwrap_or(BufferMode::Native);
     }
-    let base = match sound_mode {
-        2 => SoundMode::UltraSafe,
-        0 => SoundMode::Safe,
-        1 => SoundMode::Fast,
-        _ if LOWEST.load(std::sync::atomic::Ordering::Relaxed) => SoundMode::Lowest,
-        _ => SoundMode::Native,
-    };
-    match target {
-        0 => base.mode(),
-        // Android: the slider sets the smallest buffer of the chosen sound mode's stream, which keeps its mode.
-        _ if cfg!(target_os = "android") => BufferMode::AtLeast(base, target),
-        _ => BufferMode::Fixed(target),
+    // Android: `Audio driver:` picks the API (`honeydew_audio::device::set_android_driver`) and the sound mode is
+    // only its preset. Auto is the driver's smallest buffer, growing on underruns; a set size stays as set. `Enable
+    // low latency mode` (AAudio's alone) makes the stream exclusive, from one burst.
+    if cfg!(target_os = "android") {
+        let lowest = LOWEST.load(std::sync::atomic::Ordering::Relaxed)
+            && honeydew_audio::device::android_driver() == 0;
+        let base = if lowest {
+            SoundMode::Lowest
+        } else {
+            SoundMode::Fast
+        };
+        return match target {
+            0 => base.mode(),
+            _ => BufferMode::AtLeast(base, target),
+        };
     }
+    requested.unwrap_or(match sound_mode {
+        2 => BufferMode::UltraSafe,
+        0 => BufferMode::Safe,
+        1 => BufferMode::Fast,
+        _ => BufferMode::Native,
+    })
 }
 
 #[cfg(test)]

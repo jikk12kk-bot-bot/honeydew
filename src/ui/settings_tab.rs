@@ -244,6 +244,8 @@ enum Choice {
     SampleRate,
     /// `Grid color:` ([`crate::settings::GRID_COLORS`]): the beat lines of the playlist and the editors.
     GridColor,
+    /// `Audio driver:` (Android, [`crate::settings::AUDIO_DRIVERS`]): which audio API the output uses.
+    AudioDriver,
     /// `Screen orientation:` (#41): `Auto`, `Portrait` or `Landscape` ([`crate::settings::ORIENTATIONS`]).
     Orientation,
     /// `Project version size limit:` (#69), in MB ([`crate::settings::VERSION_SIZE_LIMITS`]).
@@ -272,7 +274,7 @@ const fn row(label: &'static str, kind: Kind) -> Row {
 fn hidden(r: &Row) -> bool {
     let (web, desktop) = (cfg!(target_arch = "wasm32"), cfg!(desktop));
     let android = cfg!(target_os = "android");
-    let low_latency_mode = r.label == "Enable low latency mode";
+    let android_only = matches!(r.label, "Enable low latency mode" | "Audio driver:");
     web
         && matches!(
             r.kind,
@@ -293,11 +295,11 @@ fn hidden(r: &Row) -> bool {
                     | "Address"
                     | "Status"
             )
-        || !android && low_latency_mode
+        || !android && android_only
 }
 
 /// Every row of the SETTINGS tab, in order.
-const ROWS: [Row; 59] = {
+const ROWS: [Row; 60] = {
     use Kind::*;
     [
         row("MIDI:", Header),
@@ -332,6 +334,7 @@ const ROWS: [Row; 59] = {
                 FixedToggle(false)
             },
         ),
+        row("Audio driver:", Dropdown(Choice::AudioDriver)),
         row("Sample memory limit:", Dropdown(Choice::SampleMemory)),
         row("Recording:", Header),
         row("Audio input:", AudioInput),
@@ -614,7 +617,10 @@ impl SettingsTab {
         }
         self.shown_frame = frame;
         let m = cx.m;
-        let rows = self.visible_rows(&self.rows());
+        let mut rows = self.visible_rows(&self.rows());
+        // `Enable low latency mode` applies to AAudio alone: it shows only while that is the audio driver.
+        let exclusive = settings.audio_driver == 0;
+        rows.retain(|(_, r)| exclusive || r.label != "Enable low latency mode");
         let pitch = m.u(ROW_PITCH);
         // The scale note's row takes no room while the scale is not limited.
         let limited = m.scale_limited_to().is_some();
@@ -861,10 +867,14 @@ impl SettingsTab {
                     #[cfg(desktop)]
                     let sound_mode_tip = "STANDARD: general-purpose mode with broad device compatibility.\nMULTITRACK: experimental; FL-style per-input multitrack routing is not implemented yet. The buffer slider works in either mode.";
                     #[cfg(target_os = "android")]
-                    let sound_mode_tip = "FAST: lowest latency for capable devices (Oboe, shared).\nSAFE: larger buffer; fewer glitches with more latency.\nULTRASAFE: largest buffer; maximum stability and compatibility, highest latency.\nNATIVE: lowest latency through Oboe's exclusive stream, recommended on Android 9 and up; works with low latency mode.\nThe buffer grows by itself when the phone cannot keep up.";
+                    let sound_mode_tip = "Presets of Audio driver and Audio buffer size, as FL Studio Mobile's:\nNATIVE: AAudio, Auto buffer; lowest latency, recommended on Android 9 and up.\nFAST: OpenSL ES, Auto buffer.\nSAFE: OpenSL ES, 1024 frames; fewer glitches, more latency.\nULTRASAFE: AudioTrack, 4096 frames; widest compatibility, highest latency.\nCUSTOM: a driver and buffer of your own.";
                     #[cfg(not(any(desktop, target_os = "android")))]
                     let sound_mode_tip = "NATIVE: device/OS default audio behavior.";
                     crate::ui::tooltip::tip(ui, button_rect, sound_mode_tip, None);
+                }
+                if matches!(choice, Choice::AudioDriver) {
+                    let tip = "Which Android audio system plays the sound.\nAAudio: Android's newest, lowest latency (OpenSL ES on Android 8.0); works with low latency mode.\nOpenSL ES: Android's older native audio.\nAudioTrack: Android's oldest, highest latency, widest compatibility.";
+                    crate::ui::tooltip::tip(ui, button_rect, tip, None);
                 }
                 if matches!(choice, Choice::GridColor) {
                     let tip = "The color of the beat and bar lines in the playlist and the editors. Default: a color from the theme.";
@@ -948,15 +958,16 @@ impl SettingsTab {
                     s.low_latency = (value.clamp(0.0, 1.0) * max).round() as u8;
                 }
                 let index = (value.clamp(0.0, 1.0) * max).round() as usize;
-                // Android: the slider is the smallest buffer of the sound mode's own.
-                let (native, prefix) = match cfg!(target_os = "android") {
-                    true => ("Mode's own", "At least "),
-                    false => ("Native", ""),
+                // Android: Auto is the driver's smallest buffer, growing when it crackles.
+                let auto = if cfg!(target_os = "android") {
+                    "Auto"
+                } else {
+                    "Native"
                 };
                 let display = if index == 0 {
-                    native.to_owned()
+                    auto.to_owned()
                 } else {
-                    format!("{prefix}{} frames", BUFFER_SIZES[index])
+                    format!("{} frames", BUFFER_SIZES[index])
                 };
                 plain(
                     ui,
@@ -966,7 +977,7 @@ impl SettingsTab {
                     Align2::RIGHT_CENTER,
                 );
                 #[cfg(target_os = "android")]
-                let tip = "The smallest output buffer, on top of the Sound mode: the mode keeps its own stream and buffer, never smaller than this. Mode's own: the Sound mode's buffer alone. Bigger buffers crackle less but add latency.";
+                let tip = "The output buffer, up to 10240 frames. Auto: the Audio driver's smallest, which grows by itself when the sound crackles. A set size stays as set. Bigger buffers crackle less but add latency.";
                 #[cfg(not(target_os = "android"))]
                 let tip = "Chooses the output buffer target. Native uses the device default; smaller frame sizes reduce latency but increase CPU and dropout risk. The setting works independently of Sound Mode.";
                 crate::ui::tooltip::tip(ui, r, tip, None);
@@ -1352,6 +1363,10 @@ impl Choice {
             Choice::EditorResolution => (crate::settings::EDITOR_RESOLUTIONS.iter())
                 .map(|&p| (usize::from(p), format!("{p}%")))
                 .collect(),
+            Choice::AudioDriver => (crate::settings::AUDIO_DRIVERS.iter())
+                .map(|&label| label.to_owned())
+                .enumerate()
+                .collect(),
             Choice::GridColor => (crate::settings::GRID_COLORS.iter())
                 .map(|&(label, _)| label.to_owned())
                 .enumerate()
@@ -1362,6 +1377,9 @@ impl Choice {
     /// The stored value.
     fn get(self, s: &Settings) -> usize {
         match self {
+            #[cfg(target_os = "android")]
+            Choice::SoundMode => usize::from(s.sound_preset()),
+            #[cfg(not(target_os = "android"))]
             Choice::SoundMode => usize::from(s.sound_mode),
             // A theme of the user's is no built-in one.
             Choice::Theme if !s.custom_theme.is_empty() => usize::MAX,
@@ -1374,12 +1392,16 @@ impl Choice {
             Choice::VersionSize => s.version_size_limit as usize,
             Choice::EditorResolution => usize::from(s.plugin_editor_resolution),
             Choice::GridColor => usize::from(s.grid_color),
+            Choice::AudioDriver => usize::from(s.audio_driver),
         }
     }
 
     /// Stores `value`, one of [`Choice::items`]' values.
     fn set(self, s: &mut Settings, value: usize) {
         match self {
+            #[cfg(target_os = "android")]
+            Choice::SoundMode => s.apply_sound_preset(value as u8),
+            #[cfg(not(target_os = "android"))]
             Choice::SoundMode => s.sound_mode = value as u8,
             Choice::Theme => (s.theme, s.custom_theme) = (value as u32, String::new()),
             Choice::Animation => (s.animations, s.inertia) = (value == 0, value != 2),
@@ -1389,6 +1411,7 @@ impl Choice {
             Choice::VersionSize => s.version_size_limit = value as u32,
             Choice::EditorResolution => s.plugin_editor_resolution = value as u8,
             Choice::GridColor => s.grid_color = value as u8,
+            Choice::AudioDriver => s.audio_driver = value as u8,
         }
     }
 
@@ -1877,14 +1900,15 @@ mod tests {
         for ppp in [1.0, 2.0] {
             let rig = Rig::at(ppp, SCALE_200, NARROW_U);
             for r in ROWS.iter().filter(|r| {
-                matches!(
-                    r.kind,
-                    Kind::Dropdown(_)
-                        | Kind::MidiDropdown
-                        | Kind::AudioInput
-                        | Kind::FixedDropdown(_)
-                        | Kind::SignIn
-                )
+                !hidden(r)
+                    && matches!(
+                        r.kind,
+                        Kind::Dropdown(_)
+                            | Kind::MidiDropdown
+                            | Kind::AudioInput
+                            | Kind::FixedDropdown(_)
+                            | Kind::SignIn
+                    )
             }) {
                 let control = rig.rect_of(row_id(index(r.label)));
                 let (label, shown) = rig.label_rect(control.y_range().into());
