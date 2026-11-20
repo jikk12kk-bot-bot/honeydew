@@ -4190,9 +4190,7 @@ mod tests {
 
     // ---- the keymap's editing and zoom actions (`ui/edit_keys.rs`) ----
 
-    impl Rig {
-
-    }
+    impl Rig {}
 
     // The left column, the mini mixer (expanded track headers) and the playhead line.
 
