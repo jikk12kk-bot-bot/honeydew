@@ -28,7 +28,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use oboe::{
-    AudioOutputCallback, AudioOutputStreamSafe, AudioStream, AudioStreamAsync, AudioStreamBase,
+    AudioApi, AudioOutputCallback, AudioOutputStreamSafe, AudioStream, AudioStreamAsync, AudioStreamBase,
     AudioStreamBuilder, AudioStreamSafe, ContentType, DataCallbackResult, Error, Output,
     PerformanceMode, SampleRateConversionQuality, SharingMode, Stereo, Usage,
 };
@@ -230,12 +230,18 @@ impl<R: AudioRenderer> Opened<R> {
     }
 }
 
-/// Opens and starts a stereo float stream for `mode` at `rate` Hz (0: the device's own rate).
-pub(super) fn open<R: AudioRenderer>(mode: BufferMode, rate: u32) -> Result<Opened<R>, Error> {
+/// Opens and starts a stereo float stream for `mode` at `rate` Hz (0: the device's own rate), through `api` (OpenSL
+/// ES, or Oboe's choice: AAudio from Android 8.1).
+pub(super) fn open<R: AudioRenderer>(
+    mode: BufferMode,
+    rate: u32,
+    api: AudioApi,
+) -> Result<Opened<R>, Error> {
     let p = profile(mode);
     let inbox: Inbox<R> = Arc::new(Mutex::new(None));
     let mut builder = AudioStreamBuilder::default()
         .set_output()
+        .set_audio_api(api)
         .set_f32()
         .set_stereo()
         .set_performance_mode(p.performance)

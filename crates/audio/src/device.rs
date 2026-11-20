@@ -119,6 +119,51 @@ impl SoundMode {
 /// Android's output through Oboe ([`oboe_out`]): FL Studio Mobile's sound modes.
 #[cfg(target_os = "android")]
 mod oboe_out;
+/// Android's output through `AudioTrack` ([`audiotrack_out`]): FL Studio Mobile's `Ultrasafe`.
+#[cfg(target_os = "android")]
+mod audiotrack_out;
+
+/// SETTINGS' `Audio driver:` (Android): 0 per sound mode as FL Studio Mobile (`Native` and low latency mode through
+/// AAudio, `Fast` and `Safe` through OpenSL ES, `Ultrasafe` through `AudioTrack`), 1 AAudio for every mode (Oboe's
+/// choice: OpenSL ES on Android 8.0), 2 OpenSL ES, 3 `AudioTrack`. The next output opened takes it.
+static ANDROID_DRIVER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Sets [`ANDROID_DRIVER`]; elsewhere it changes nothing.
+pub fn set_android_driver(driver: u8) {
+    ANDROID_DRIVER.store(driver, Ordering::Relaxed);
+}
+
+/// Android's audio APIs, as [`ANDROID_DRIVER`] picks one for a mode.
+#[cfg(target_os = "android")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Driver {
+    AAudio,
+    OpenSles,
+    AudioTrack,
+}
+
+#[cfg(target_os = "android")]
+fn driver(mode: BufferMode) -> Driver {
+    match ANDROID_DRIVER.load(Ordering::Relaxed) {
+        1 => Driver::AAudio,
+        2 => Driver::OpenSles,
+        3 => Driver::AudioTrack,
+        _ => match mode {
+            BufferMode::AtLeast(base, _) => driver_for(base.mode()),
+            mode => driver_for(mode),
+        },
+    }
+}
+
+/// FL Studio Mobile's API for a sound mode.
+#[cfg(target_os = "android")]
+fn driver_for(mode: BufferMode) -> Driver {
+    match mode {
+        BufferMode::Fast | BufferMode::Safe => Driver::OpenSles,
+        BufferMode::UltraSafe => Driver::AudioTrack,
+        _ => Driver::AAudio,
+    }
+}
 
 /// A running output stream, held for its drop, which stops it: cpal's, or on Android Oboe's.
 #[allow(dead_code)]
@@ -126,6 +171,8 @@ enum OutStream<R: AudioRenderer> {
     Cpal(cpal::Stream, std::marker::PhantomData<R>),
     #[cfg(target_os = "android")]
     Oboe(oboe::AudioStreamAsync<oboe::Output, oboe_out::Callback<R>>),
+    #[cfg(target_os = "android")]
+    Track(audiotrack_out::Track),
 }
 
 pub trait AudioRenderer: Send + 'static {
@@ -741,9 +788,25 @@ impl<R: AudioRenderer> AudioOutput<R> {
     where
         F: FnOnce(u32) -> Result<R, E>,
     {
-        // Android: Oboe first (`oboe_out`), at the device's own rate for 0; AAudio through cpal if it cannot open.
+        // Android: SETTINGS' `Audio driver:` ([`driver`]): `AudioTrack` (`audiotrack_out`), else Oboe (`oboe_out`) on
+        // AAudio or OpenSL ES, at the device's own rate for 0; Oboe if a track cannot open, AAudio through cpal if
+        // Oboe cannot.
         #[cfg(target_os = "android")]
-        match oboe_out::open::<R>(mode, rate) {
+        let api = driver(mode);
+        #[cfg(target_os = "android")]
+        if api == Driver::AudioTrack {
+            match audiotrack_out::open(mode, rate) {
+                Ok(opened) => return Self::start_track(opened, mode, make_renderer),
+                Err(error) => eprintln!("the AudioTrack output did not open ({error}): Oboe"),
+            }
+        }
+        #[cfg(target_os = "android")]
+        let oboe_api = match api {
+            Driver::OpenSles => oboe::AudioApi::OpenSLES,
+            Driver::AAudio | Driver::AudioTrack => oboe::AudioApi::Unspecified,
+        };
+        #[cfg(target_os = "android")]
+        match oboe_out::open::<R>(mode, rate, oboe_api) {
             Ok(opened) => return Self::start_oboe(opened, mode, make_renderer),
             Err(error) => {
                 eprintln!("the Oboe output did not open ({error:?}): AAudio through cpal")
@@ -843,6 +906,31 @@ impl<R: AudioRenderer> AudioOutput<R> {
         let (mut output, state) = Self::unstarted(renderer, sample_rate);
         output.buffer_mode = mode;
         output.stream = Some(OutStream::Oboe(opened.deliver(state)));
+        Ok(output)
+    }
+
+    /// The `AudioTrack` `opened` playing a renderer `make_renderer` builds at its rate. A thread that cannot start
+    /// leaves the output failed, which the app reopens.
+    #[cfg(target_os = "android")]
+    fn start_track<F, E>(
+        opened: audiotrack_out::Opened,
+        mode: BufferMode,
+        make_renderer: F,
+    ) -> Result<Self, StartError<E>>
+    where
+        F: FnOnce(u32) -> Result<R, E>,
+    {
+        let sample_rate = opened.sample_rate;
+        let renderer = make_renderer(sample_rate).map_err(StartError::Renderer)?;
+        let (mut output, state) = Self::unstarted(renderer, sample_rate);
+        output.buffer_mode = mode;
+        match opened.play(state) {
+            Ok(track) => output.stream = Some(OutStream::Track(track)),
+            Err(error) => {
+                eprintln!("the AudioTrack thread did not start: {error}");
+                output.shared.failed.store(true, Ordering::Release);
+            }
+        }
         Ok(output)
     }
 

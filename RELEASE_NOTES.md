@@ -1,6 +1,8 @@
-Honeydew 0.0.7: the sound modes in SETTINGS on Android.
+Honeydew 0.0.8: choose Android's audio driver.
 
-- Settings (Android). `Sound mode:` now shows under Audio, with FL Studio Mobile's modes: `FAST`, `SAFE`, `ULTRASAFE` and `NATIVE` (the default), with `Enable low latency mode` under it for `NATIVE`. 0.0.6 added the modes but left the row hidden.
-- Audio buffer size (Android). The slider now works on top of the sound mode instead of replacing it: the mode keeps its own stream, and its buffer is never smaller than the slider's size. At its left end (`Mode's own`) the sound mode's buffer applies alone.
-- Background notification (Android 13 and up). The app asks once for permission to show notifications, so the "Running in the background" notification appears while it plays or exports in the background.
-- Settings (desktop, web, iOS). `Enable low latency mode` no longer shows there: it is Android's (Oboe); those keep their own audio.
+- Settings (Android). New `Audio driver:` under `Sound mode:` picks which Android audio system plays the sound:
+  - `Per sound mode` (the default), as FL Studio Mobile: `NATIVE` through AAudio (Oboe), `FAST` and `SAFE` through OpenSL ES, `ULTRASAFE` through AudioTrack.
+  - `AAudio`: every mode through AAudio, Android's newest and lowest-latency audio (OpenSL ES on Android 8.0). This is how 0.0.6 and 0.0.7 played.
+  - `OpenSL ES`: every mode through Android's older native audio.
+  - `AudioTrack`: every mode through Android's oldest audio, the highest latency and the widest compatibility.
+  The sound mode still sets the buffer size. If a driver cannot open on a phone, the app falls back to the next one (AudioTrack to Oboe, Oboe to AAudio).

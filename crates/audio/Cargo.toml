@@ -29,3 +29,6 @@ cpal = { version = "0.18.2", features = ["realtime"] }
 # The output through Oboe (Apache-2.0), FL Studio Mobile's sound modes (`device/oboe_out.rs`): its C++ sources are
 # built with the NDK's clang and linked with libc++_shared, as the app is (`tools/android-dist.sh`).
 oboe = { version = "0.6.1", features = ["shared-stdcxx"] }
+# `AudioTrack`, FL Studio Mobile's `Ultrasafe` (`device/audiotrack_out.rs`), through JNI on the app's VM.
+jni = "0.21.1"
+ndk-context = "0.1.1"

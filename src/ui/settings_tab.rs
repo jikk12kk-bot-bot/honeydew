@@ -244,6 +244,8 @@ enum Choice {
     SampleRate,
     /// `Grid color:` ([`crate::settings::GRID_COLORS`]): the beat lines of the playlist and the editors.
     GridColor,
+    /// `Audio driver:` (Android, [`crate::settings::AUDIO_DRIVERS`]): which audio API the output uses.
+    AudioDriver,
     /// `Screen orientation:` (#41): `Auto`, `Portrait` or `Landscape` ([`crate::settings::ORIENTATIONS`]).
     Orientation,
     /// `Project version size limit:` (#69), in MB ([`crate::settings::VERSION_SIZE_LIMITS`]).
@@ -272,7 +274,7 @@ const fn row(label: &'static str, kind: Kind) -> Row {
 fn hidden(r: &Row) -> bool {
     let (web, desktop) = (cfg!(target_arch = "wasm32"), cfg!(desktop));
     let android = cfg!(target_os = "android");
-    let low_latency_mode = r.label == "Enable low latency mode";
+    let android_only = matches!(r.label, "Enable low latency mode" | "Audio driver:");
     web
         && matches!(
             r.kind,
@@ -293,11 +295,11 @@ fn hidden(r: &Row) -> bool {
                     | "Address"
                     | "Status"
             )
-        || !android && low_latency_mode
+        || !android && android_only
 }
 
 /// Every row of the SETTINGS tab, in order.
-const ROWS: [Row; 59] = {
+const ROWS: [Row; 60] = {
     use Kind::*;
     [
         row("MIDI:", Header),
@@ -332,6 +334,7 @@ const ROWS: [Row; 59] = {
                 FixedToggle(false)
             },
         ),
+        row("Audio driver:", Dropdown(Choice::AudioDriver)),
         row("Sample memory limit:", Dropdown(Choice::SampleMemory)),
         row("Recording:", Header),
         row("Audio input:", AudioInput),
@@ -866,6 +869,10 @@ impl SettingsTab {
                     let sound_mode_tip = "NATIVE: device/OS default audio behavior.";
                     crate::ui::tooltip::tip(ui, button_rect, sound_mode_tip, None);
                 }
+                if matches!(choice, Choice::AudioDriver) {
+                    let tip = "Which Android audio system plays the sound.\nPer sound mode: as FL Studio Mobile: NATIVE through AAudio, FAST and SAFE through OpenSL ES, ULTRASAFE through AudioTrack.\nAAudio: Android's newest, lowest latency (OpenSL ES on Android 8.0).\nOpenSL ES: Android's older native audio.\nAudioTrack: Android's oldest, highest latency, widest compatibility.\nThe Sound mode still sets the buffer.";
+                    crate::ui::tooltip::tip(ui, button_rect, tip, None);
+                }
                 if matches!(choice, Choice::GridColor) {
                     let tip = "The color of the beat and bar lines in the playlist and the editors. Default: a color from the theme.";
                     crate::ui::tooltip::tip(ui, button_rect, tip, None);
@@ -1352,6 +1359,10 @@ impl Choice {
             Choice::EditorResolution => (crate::settings::EDITOR_RESOLUTIONS.iter())
                 .map(|&p| (usize::from(p), format!("{p}%")))
                 .collect(),
+            Choice::AudioDriver => (crate::settings::AUDIO_DRIVERS.iter())
+                .map(|&label| label.to_owned())
+                .enumerate()
+                .collect(),
             Choice::GridColor => (crate::settings::GRID_COLORS.iter())
                 .map(|&(label, _)| label.to_owned())
                 .enumerate()
@@ -1374,6 +1385,7 @@ impl Choice {
             Choice::VersionSize => s.version_size_limit as usize,
             Choice::EditorResolution => usize::from(s.plugin_editor_resolution),
             Choice::GridColor => usize::from(s.grid_color),
+            Choice::AudioDriver => usize::from(s.audio_driver),
         }
     }
 
@@ -1389,6 +1401,7 @@ impl Choice {
             Choice::VersionSize => s.version_size_limit = value as u32,
             Choice::EditorResolution => s.plugin_editor_resolution = value as u8,
             Choice::GridColor => s.grid_color = value as u8,
+            Choice::AudioDriver => s.audio_driver = value as u8,
         }
     }
 
@@ -1877,7 +1890,8 @@ mod tests {
         for ppp in [1.0, 2.0] {
             let rig = Rig::at(ppp, SCALE_200, NARROW_U);
             for r in ROWS.iter().filter(|r| {
-                matches!(
+                !hidden(r)
+                    && matches!(
                     r.kind,
                     Kind::Dropdown(_)
                         | Kind::MidiDropdown

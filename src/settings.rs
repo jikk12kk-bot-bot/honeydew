@@ -88,6 +88,11 @@ pub const GRID_COLORS: [(&str, u32); 14] = [
     ("Pink", 0xF06AB4),
 ];
 
+/// `Audio driver:` items (Android), in menu order, the index stored: which of Android's audio APIs the output uses
+/// (`honeydew_audio::device::set_android_driver`). `Per sound mode` is FL Studio Mobile's: `NATIVE` through AAudio,
+/// `FAST` and `SAFE` through OpenSL ES, `ULTRASAFE` through `AudioTrack`.
+pub const AUDIO_DRIVERS: [&str; 4] = ["Per sound mode", "AAudio", "OpenSL ES", "AudioTrack"];
+
 /// Buffer-size slider positions. Zero keeps the audio device's native/default buffer;
 /// positive values are targets that the backend clamps to the device's supported range.
 pub const BUFFER_SIZES: [u32; 7] = [0, 64, 128, 256, 512, 1024, 2048];
@@ -222,6 +227,9 @@ pub struct Settings {
     /// `Grid color:`, an index into [`GRID_COLORS`] (our own key): the beat lines of the playlist and the editors.
     #[serde(rename = "gridColor")]
     pub grid_color: u8,
+    /// `Audio driver:` (Android; our own key), an index into [`AUDIO_DRIVERS`]. `Per sound mode` by default.
+    #[serde(rename = "audioDriverAndr")]
+    pub audio_driver: u8,
     /// `Enable audio recording latency compensation` (our own key): ON compensates. Honeydew change (#129, #130): the
     /// earlier `reclatency` toggle compensated while OFF or unset; a load moves it here once, keeping whether it
     /// compensated ([`migrate_keys`]). On by default, as the earlier unset key compensated.
@@ -481,6 +489,7 @@ impl Default for Settings {
             sound_mode: DEFAULT_SOUND_MODE,
             low_latency_mode: false,
             grid_color: 0,
+            audio_driver: 0,
             latency_compensation: true,
             multitrack_recording: false,
             count_in: true,
@@ -606,6 +615,9 @@ impl Settings {
         }
         if usize::from(s.grid_color) >= GRID_COLORS.len() {
             s.grid_color = d.grid_color;
+        }
+        if usize::from(s.audio_driver) >= AUDIO_DRIVERS.len() {
+            s.audio_driver = d.audio_driver;
         }
         if !(0.0..=1.0).contains(&s.metronome_level) {
             s.metronome_level = d.metronome_level;
@@ -960,6 +972,7 @@ mod tests {
                 .unwrap_or(d.sound_mode),
             low_latency_mode: !d.low_latency_mode,
             grid_color: 3,
+            audio_driver: 2,
             latency_compensation: !d.latency_compensation,
             multitrack_recording: !d.multitrack_recording,
             count_in: !d.count_in,
