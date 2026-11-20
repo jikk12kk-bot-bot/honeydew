@@ -55,6 +55,9 @@ const HEADER_GROW: f32 = 12.0;
 const COLUMN_RATE: f32 = 0.4;
 const COLUMN_SNAP: f32 = 0.05;
 const ROW_H: f32 = 2.0;
+/// The thinnest the rows open, in U: a song's stored zoom (the default 50 device pixels a row, about 0.7 U on a
+/// phone) made them far too thin to touch; 3 U is over 4 times that.
+const OPEN_ROW_H: f32 = 3.0;
 /// The rows' zoom range, in U (zoom y in [0.24/U, 0.5/U] rows a pixel).
 const ROW_RANGE: [f32; 2] = [0.75, 12.0];
 /// One beat of the grid at zoom 0 (the reference of [`MainScreen::zoom`]).
@@ -1870,9 +1873,9 @@ impl MainScreen {
         };
         let at = |v: f64| if v.is_finite() { v } else { 0.0 };
         let [mut ax, mut ay] = self.axes(area, c, m);
-        // Rows open at least [`ROW_H`] tall: the default per device pixel (and a song saved zoomed far out, or on a
-        // screen of another density) made them too thin to touch on a phone.
-        let thinnest = 1.0 / f64::from(m.u(ROW_H));
+        // Rows open at least [`OPEN_ROW_H`] tall: the default per device pixel (and a song saved zoomed far out, or
+        // on a screen of another density) made them too thin to touch on a phone.
+        let thinnest = 1.0 / f64::from(m.u(OPEN_ROW_H));
         ay.zoom = ay.clamp_zoom(zoom(zoom_y, 0.02).min(thinnest));
         ay.range[1] = rows_range(c.rows, ay.zoom, m);
         ay.pos = at(y);
@@ -4307,11 +4310,11 @@ mod tests {
 
     #[test]
     fn the_stored_view_is_in_device_pixels_or_u() {
-        // HEAD@296 per device pixel (a song without the zoom-units flag). At 2 pixels a point, rows of 2.5·U_px
-        // pixels are 2.5 U, and 0.01 beats a pixel is a beat of 50 points.
+        // HEAD@296 per device pixel (a song without the zoom-units flag). At 2 pixels a point, rows of 3.5·U_px
+        // pixels are 3.5 U, and 0.01 beats a pixel is a beat of 50 points.
         let m = Metrics::from_pixels_per_point(2.0, DEFAULT_UI_SCALE);
         let mut screen = MainScreen::default();
-        let mut stored = [0.0, 0.0, 0.01, 1.0 / f64::from(2.5 * m.u_px())];
+        let mut stored = [0.0, 0.0, 0.01, 1.0 / f64::from(3.5 * m.u_px())];
         let area = Rect::from_min_max(pos2(0.0, 48.0), pos2(1170.0, 349.0));
         let content = Content {
             rows: 3.0,
@@ -4319,19 +4322,23 @@ mod tests {
             d: 4,
         };
         screen.restore_view(&mut stored, 1.0 / m.ppp(), area, content, &m);
-        assert!((screen.row_u.expect("set") - 2.5).abs() < 1e-5);
+        assert!((screen.row_u.expect("set") - 3.5).abs() < 1e-5);
         assert!((screen.axis(0.0, &m).beat_w - 50.0).abs() < 1e-3);
         // Written back in device pixels too.
         assert!(
             (stored[2] - 0.01).abs() < 1e-9
-                && (stored[3] * f64::from(2.5 * m.u_px()) - 1.0).abs() < 1e-6
+                && (stored[3] * f64::from(3.5 * m.u_px()) - 1.0).abs() < 1e-6
         );
-        // Per U: 0.5 rows and 0.8 beats a U are rows of 2 U and beats of 1.25 U, written back as they are.
+        // Per U: 0.25 rows and 0.8 beats a U are rows of 4 U and beats of 1.25 U, written back as they are.
+        let mut stored = [0.0, 0.0, 0.8, 0.25];
+        screen.restore_view(&mut stored, m.u(1.0), area, content, &m);
+        assert!((screen.row_u.expect("set") - 4.0).abs() < 1e-5);
+        assert!((screen.axis(0.0, &m).beat_w - m.u(1.25)).abs() < 1e-3);
+        assert!((stored[2] - 0.8).abs() < 1e-6 && (stored[3] - 0.25).abs() < 1e-6);
+        // Thinner rows (2 U) open at 3 U.
         let mut stored = [0.0, 0.0, 0.8, 0.5];
         screen.restore_view(&mut stored, m.u(1.0), area, content, &m);
-        assert!((screen.row_u.expect("set") - 2.0).abs() < 1e-5);
-        assert!((screen.axis(0.0, &m).beat_w - m.u(1.25)).abs() < 1e-3);
-        assert!((stored[2] - 0.8).abs() < 1e-6 && (stored[3] - 0.5).abs() < 1e-6);
+        assert!((screen.row_u.expect("set") - OPEN_ROW_H).abs() < 1e-5);
     }
 
     #[test]
