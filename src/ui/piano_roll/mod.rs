@@ -2744,14 +2744,16 @@ fn paint_grid(
     for key in shown.clone().filter(|&k| rows.light[usize::from(k)]) {
         painter.rect_filled(row(key), 0.0, light);
     }
-    // The theme's horizontal grid: a line along each row's top.
+    // The theme's horizontal grid at α 0.3: a line along each row's top and bottom (1 px of `background` each by
+    // default).
     let (line, h_px) = (
-        crate::theme::grid_h_ink(c),
+        crate::theme::grid_h_ink(c).gamma_multiply(0.3),
         crate::theme::grid_h_px(&cx.theme.options) * px,
     );
     for key in shown.clone().filter(|_| h_px > 0.0) {
         let r = row(key);
         painter.rect_filled(r.with_max_y(r.top() + h_px), 0.0, line);
+        painter.rect_filled(r.with_min_y(r.bottom() - h_px), 0.0, line);
     }
     let lit = color.to_color32().gamma_multiply(LIT_ALPHA);
     for key in shown.clone().filter(|&k| rows.lit[usize::from(k)]) {

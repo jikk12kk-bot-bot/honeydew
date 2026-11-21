@@ -109,9 +109,10 @@ pub struct ThemeColors {
 /// (they were `background`, barely darker than the rows, in the built-in themes).
 pub const GRID_INK: f32 = 0.32;
 
-/// The vertical grid's default in a theme of `control_fill` and `text`.
+/// The vertical grid's default in a theme of `control_fill` and `text`, in whole 1/255 steps as a theme file stores
+/// it, so a saved theme loads back the same.
 fn default_grid(control_fill: Rgba, text: Rgba) -> Rgba {
-    let mix = |x: f32, y: f32| x + (y - x) * GRID_INK;
+    let mix = |x: f32, y: f32| ((x + (y - x) * GRID_INK) * 255.0).round() / 255.0;
     Rgba::rgb(
         mix(control_fill.r, text.r),
         mix(control_fill.g, text.g),
