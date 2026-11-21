@@ -1190,8 +1190,7 @@ fn type_in(
                 if pad.is_some() && r.lost_focus() && !done && !escape {
                     r.request_focus();
                 }
-                cancel =
-                    escape || (pad.is_none() && r.lost_focus() && !done && !fresh && !opening);
+                cancel = escape || (pad.is_none() && r.lost_focus() && !done && !fresh && !opening);
             });
         })
         .response

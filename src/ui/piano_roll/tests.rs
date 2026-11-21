@@ -4188,7 +4188,9 @@ mod grid {
                 cx,
             );
         });
-        let faded = RED.to_color32().gamma_multiply(crate::ui::piano_roll::OFF_SCALE_ALPHA);
+        let faded = RED
+            .to_color32()
+            .gamma_multiply(crate::ui::piano_roll::OFF_SCALE_ALPHA);
         assert_eq!(
             rects.iter().map(|r| r.1).collect::<Vec<_>>(),
             [RED.to_color32(), faded]

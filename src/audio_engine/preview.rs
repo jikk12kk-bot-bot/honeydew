@@ -66,5 +66,4 @@ impl Preview {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

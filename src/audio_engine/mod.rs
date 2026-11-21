@@ -1373,7 +1373,6 @@ mod parallel_tests {
         parallel.render(&mut actual, 2);
         assert_eq!(actual, expected);
     }
-
 }
 
 impl SongAudioEngine {

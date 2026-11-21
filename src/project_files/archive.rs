@@ -2543,5 +2543,4 @@ mod tests {
             assert_eq!(open(&mut files), None, "{cut}");
         }
     }
-
 }

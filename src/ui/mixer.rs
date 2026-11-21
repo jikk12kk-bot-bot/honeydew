@@ -1631,5 +1631,4 @@ mod tests {
         };
         assert_eq!(one, [bar(cap + 2.0), bar(cap + 10.0)]);
     }
-
 }

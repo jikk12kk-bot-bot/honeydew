@@ -602,7 +602,10 @@ impl MeterBank {
             cell.frames[slot].write(end, 0, renderer.meter(index), &[]);
         }
         let clock = &self.5;
-        let (last, gap) = (clock.last.load(Ordering::Relaxed), clock.gap.load(Ordering::Relaxed));
+        let (last, gap) = (
+            clock.last.load(Ordering::Relaxed),
+            clock.gap.load(Ordering::Relaxed),
+        );
         if last > 0 && end < last + gap {
             return;
         }
