@@ -23,8 +23,8 @@
 //!   dB/octave: White (0), Pink (+3), Default (+4.5, the default), Brown (+6), or `Custom`, which
 //!   reads the `dB/oct` knob beside it continuously from −12 to +12. The Spectrogram's columns and the marker read with
 //!   the same tilt. It takes the place of the two SETTINGS spacers: DC Block and Tilt (and the knob)
-//!   share the first row, Channel, Reactivity and Input Gain the second. A third row (Honeydew's own) holds the
-//!   global `Pause hidden` and `Light pitch` switches, every Analyzer's at once ([`global_switches`]).
+//!   share the first row, Channel, Reactivity and Input Gain the second (2.87 U each). A third row (1 U, Honeydew's
+//!   own) holds the global `Pause hidden` and `Light pitch` switches, every Analyzer's at once ([`global_switches`]).
 //! - The marker's value is the drawn curve's at its x (the scope's a column's last sample); without a curve point there
 //!   (no pitch, no feed) neither dot nor readout shows.
 //! - The scope reads the engine's min, max and last sample of each quarter millisecond: a column takes the buckets
@@ -103,7 +103,7 @@ pub fn panel() -> Option<Panel> {
                     .value_fn(tilt_text)
                     .show(Show::Setting(TILT, 4)),
             ])
-            .h(Size::U(3.37))
+            .h(Size::U(ROW_H))
             .show(Show::Tab(5)),
             hstack([
                 spinner(14, "Channel")
@@ -114,10 +114,13 @@ pub fn panel() -> Option<Panel> {
                     .default(1.0),
                 knob(17, "Input Gain").default(0.5).value_fn(gain),
             ])
-            .h(Size::U(3.37))
+            .h(Size::U(ROW_H))
             .show(Show::Tab(5)),
             // Honeydew's own: every Analyzer's switches, not this module's settings.
-            display(GLOBALS).draw(global_switches).show(Show::Tab(5)),
+            display(GLOBALS)
+                .h(Size::U(GLOBALS_H))
+                .draw(global_switches)
+                .show(Show::Tab(5)),
         ])
         .show(Show::Tab(5)),
         tabs(
@@ -128,8 +131,11 @@ pub fn panel() -> Option<Panel> {
     ])))
 }
 
-/// The display of the global switches on the SETTINGS page ([`global_switches`]).
+/// The display of the global switches on the SETTINGS page ([`global_switches`]), and its height in U.
 const GLOBALS: u32 = 21;
+const GLOBALS_H: f32 = 1.0;
+/// The SETTINGS page's two rows of controls, in U: what the 7.99 U page leaves above the tab strip and the switches.
+const ROW_H: f32 = 2.87;
 
 /// The SETTINGS page's global switches, side by side as label-right pills: `Pause hidden` and `Light pitch`
 /// (`honeydew_audio::analysis::set_analyzer_options`). They are every Analyzer's at once, not this module's: no song
@@ -162,7 +168,7 @@ fn global_switches(
         let rect = Rect::from_x_y_ranges(left..=left + w, r.y_range());
         let c = widgets::Control {
             menu: widgets::ParamMenu::Unbound,
-            ..widgets::Control::new(id.with(i), rect, *label, ink, 1.0)
+            ..widgets::Control::new(id.with(i), rect, label, ink, 1.0)
         };
         let pill = widgets::Pill {
             label_right: true,
@@ -171,7 +177,7 @@ fn global_switches(
         let before = *value;
         widgets::pill_toggle(ui, cx, &c, pill, value, |_| String::new());
         changed |= *value != before;
-        crate::ui::tooltip::tip(ui, rect, *tip, None);
+        crate::ui::tooltip::tip(ui, rect, tip, None);
     }
     if changed {
         analysis::set_analyzer_options(values[0] != 0.0, values[1] != 0.0);
@@ -1755,6 +1761,11 @@ const TABS: Row = row(
 )
 .h(Size::U(1.25));
 
+/// The global switches' display under the SETTINGS rows.
+#[cfg(test)]
+const GLOBALS_ROW: Row =
+    row(GLOBALS, Widget::Display, "", [0.0, 5.74, 14.0, 1.0]).h(Size::U(GLOBALS_H));
+
 /// A graph of the five views with a side column.
 #[cfg(test)]
 const fn graph(id: u32) -> Row {
@@ -1855,16 +1866,17 @@ pub const REFERENCE: Reference = Reference {
             tab: 5,
             settings: &[(TILT, 4.0)],
             rows: &[
-                row(16, Widget::Spinner, "DC Block", [0.0, 0.0, 4.66, 3.37]).items("On · Off"),
-                row(TILT, Widget::Spinner, "Tilt", [4.66, 0.0, 4.67, 3.37])
+                row(16, Widget::Spinner, "DC Block", [0.0, 0.0, 4.66, 2.87]).items("On · Off"),
+                row(TILT, Widget::Spinner, "Tilt", [4.66, 0.0, 4.67, 2.87])
                     .items("White · Pink · Default · Brown · Custom"),
-                row(TILT_STEP, Widget::Knob, "dB/oct", [9.33, 0.0, 4.67, 3.37])
+                row(TILT_STEP, Widget::Knob, "dB/oct", [9.33, 0.0, 4.67, 2.87])
                     .value("+4.5 dB/oct"),
-                row(14, Widget::Spinner, "Channel", [0.0, 3.37, 4.66, 3.37])
+                row(14, Widget::Spinner, "Channel", [0.0, 2.87, 4.66, 2.87])
                     .items("Left · Right · L + R"),
-                row(15, Widget::Spinner, "Reactivity", [4.66, 3.37, 4.67, 3.37])
+                row(15, Widget::Spinner, "Reactivity", [4.66, 2.87, 4.67, 2.87])
                     .items("Slow · Medium · Fast"),
-                row(17, Widget::Knob, "Input Gain", [9.33, 3.37, 4.67, 3.37]).value("×1.00"),
+                row(17, Widget::Knob, "Input Gain", [9.33, 2.87, 4.67, 2.87]).value("×1.00"),
+                GLOBALS_ROW,
                 TABS,
             ],
             ..Case::DEFAULT
@@ -1873,14 +1885,15 @@ pub const REFERENCE: Reference = Reference {
             name: "SETTINGS",
             tab: 5,
             rows: &[
-                row(16, Widget::Spinner, "DC Block", [0.0, 0.0, 7.0, 3.37]).items("On · Off"),
-                row(TILT, Widget::Spinner, "Tilt", [7.0, 0.0, 7.0, 3.37])
+                row(16, Widget::Spinner, "DC Block", [0.0, 0.0, 7.0, 2.87]).items("On · Off"),
+                row(TILT, Widget::Spinner, "Tilt", [7.0, 0.0, 7.0, 2.87])
                     .items("White · Pink · Default · Brown · Custom"),
-                row(14, Widget::Spinner, "Channel", [0.0, 3.37, 4.66, 3.37])
+                row(14, Widget::Spinner, "Channel", [0.0, 2.87, 4.66, 2.87])
                     .items("Left · Right · L + R"),
-                row(15, Widget::Spinner, "Reactivity", [4.66, 3.37, 4.67, 3.37])
+                row(15, Widget::Spinner, "Reactivity", [4.66, 2.87, 4.67, 2.87])
                     .items("Slow · Medium · Fast"),
-                row(17, Widget::Knob, "Input Gain", [9.33, 3.37, 4.67, 3.37]).value("×1.00"),
+                row(17, Widget::Knob, "Input Gain", [9.33, 2.87, 4.67, 2.87]).value("×1.00"),
+                GLOBALS_ROW,
                 TABS,
             ],
             ..Case::DEFAULT
