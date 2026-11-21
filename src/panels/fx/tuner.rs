@@ -509,12 +509,13 @@ fn tuner(
     let (u, px) = (m.u(1.0), 1.0 / m.ppp());
     let control = colors.control_fill.to_color32();
     painter.rect_filled(d, 0.0, control);
-    let grid = Stroke::new(px, colors.background.to_color32());
+    // The theme's grid ([`crate::theme::graph_grid`]).
+    let (v_line, h_line) = crate::theme::graph_grid(cx.theme, m.ppp());
     for x in tenths(d.left(), d.width()) {
-        painter.vline(x, d.y_range(), grid);
+        painter.vline(x, d.y_range(), v_line);
     }
     for y in tenths(d.top(), d.height()) {
-        painter.hline(d.x_range(), y, grid);
+        painter.hline(d.x_range(), y, h_line);
     }
     let a = shade(channel, view.dim);
     let b_raw = view.b(colors.text.to_color32(), channel);

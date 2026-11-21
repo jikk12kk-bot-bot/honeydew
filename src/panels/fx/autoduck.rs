@@ -58,6 +58,7 @@ fn duck(params: &[f32], x: f32) -> f32 {
 
 /// The envelope graph's step 2: the 1 px grid lines across E (points) at `ppp`, each with its `background` alpha;
 /// vertical then horizontal per fraction. Snapped to whole pixels by the XY pad's [`widgets::line`].
+#[cfg(test)]
 fn grid(e: Rect, ppp: f32) -> [(Rect, f32); 6] {
     let mut lines = [(Rect::NOTHING, 0.0); 6];
     for (i, (f, alpha)) in GRID.into_iter().enumerate() {
@@ -89,8 +90,18 @@ fn graph(
     let e = rect.expand(1.0 / ppp);
     let background = colors.background.to_color32();
     painter.rect_filled(e, 0.0, colors.control_fill.to_color32());
-    for (line, alpha) in grid(e, ppp) {
-        painter.rect_filled(line, 0.0, background.gamma_multiply(alpha));
+    // The theme's grid ([`crate::theme::graph_grid`]) at the quarters of E, the middle lines at full strength.
+    let (v_line, h_line) = crate::theme::graph_grid(cx.theme, ppp);
+    for (f, alpha) in GRID {
+        let alpha = (alpha / GRID[1].1).min(1.0);
+        let lines = [
+            (true, v_line, e.left() + f * e.width()),
+            (false, h_line, e.top() + f * e.height()),
+        ];
+        for (vertical, stroke, at) in lines.into_iter().filter(|l| l.1.width > 0.0) {
+            let line = widgets::line(e, vertical, at, stroke.width * ppp, ppp);
+            painter.rect_filled(line, 0.0, stroke.color.gamma_multiply(alpha));
+        }
     }
     widgets::curve_plot(painter, rect, CURVE_PX / ppp, ppp, ink, |x| {
         duck(&module.params, x)

@@ -79,6 +79,7 @@ fn wobble(
     let points = live_analysis(ui, module.instance_id).and_then(|s| analysis::wow_flutter(&s));
     let painter = ui.painter();
     painter.rect_filled(p, 0.0, cx.theme.colors.control_fill.to_color32());
+    crate::theme::paint_graph_grid(painter, p, cx.theme, cx.m.ppp(), (8, 4));
     let stroke = Stroke::new(1.0 / cx.m.ppp(), ink);
     match points {
         Some(points) => {

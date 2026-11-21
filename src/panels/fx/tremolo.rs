@@ -83,6 +83,7 @@ fn plot(
     let (m, colors) = (cx.m, &cx.theme.colors);
     let painter = ui.painter();
     painter.rect_filled(rect, 0.0, colors.control_fill.to_color32());
+    crate::theme::paint_graph_grid(painter, rect, cx.theme, cx.m.ppp(), (8, 4));
     for p in [3, 4] {
         let v = module.params.get(p).copied().unwrap_or(0.0);
         painter.rect_filled(

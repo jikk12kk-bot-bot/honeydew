@@ -1,7 +1,7 @@
 //! Vertical and horizontal sliders.
 //! The horizontal one is the vertical one turned on its side: same strips, the track runs left to right.
 
-use eframe::egui::{Pos2, Rect, Response, Ui, vec2};
+use eframe::egui::{Align, Align2, Painter, Pos2, Rect, Response, Ui, pos2, vec2};
 
 use super::{Control, Law, drag_control, growth, hovered, primary_down_on};
 use crate::ui::UiCtx;
@@ -98,7 +98,8 @@ fn slider(
     horizontal: bool,
 ) -> Response {
     let (m, colors) = (cx.m, &cx.theme.colors);
-    let (_, body, _) = c.strips(m);
+    let (label, body, _) = c.strips(m);
+    let label_bottom = label.map_or(c.rect.top(), |r| r.bottom());
     let t = m.t();
     let track = track(body, horizontal, t, m.u(1.0));
     let len = if horizontal {
@@ -109,7 +110,7 @@ fn slider(
     let law = Law::Track { len, horizontal };
     let (response, v) = drag_control(ui, cx, c, value, law, &display);
     let painter = ui.painter();
-    c.strip_texts(painter, m, v, display);
+    c.strip_texts(painter, m, v, &display);
 
     let (body_ink, ink) = match c.flat {
         Some(flat) => (flat, flat),
@@ -128,6 +129,9 @@ fn slider(
             0.0,
             c.channel.gamma_multiply(HALO),
         );
+    }
+    if horizontal && let Some(align) = c.value_above {
+        value_above(painter, cx, c, track, label_bottom, align, display(v));
     }
     painter.rect_filled(track, 0.0, body_ink);
     painter.rect_filled(fill(track, horizontal, v, c.bipolar), 0.0, ink);
@@ -241,4 +245,37 @@ mod tests {
         assert_eq!(fill(tr, true, 0.25, true), rect(25.0, 0.0, 50.0, 4.0));
         assert_eq!(fill(tr, true, 1.0, true), rect(50.0, 0.0, 100.0, 4.0));
     }
+}
+
+/// The gap between a value text above the thumb and the thumb's largest reach, in U.
+const ABOVE_GAP: f32 = 0.1;
+
+/// Honeydew change: a horizontal slider's value `text` just above its thumb ([`Control::value_above`]): its bottom
+/// [`ABOVE_GAP`] over the largest thumb's top, along `track`'s left end, centre or right end (`align`), in the label's
+/// font and the channel colour; left out where it would reach above `top` (the label strip's bottom, or the rect's top).
+fn value_above(
+    painter: &Painter,
+    cx: &UiCtx,
+    c: &Control,
+    track: Rect,
+    top: f32,
+    align: Align,
+    text: String,
+) {
+    let m = cx.m;
+    if text.is_empty() {
+        return;
+    }
+    let galley = painter.layout_no_wrap(text, m.font_id(c.label_font), c.channel);
+    let bottom = track.center().y - thumb_radius(1.0, m.t()) - m.u(ABOVE_GAP);
+    if bottom - galley.size().y < top {
+        return;
+    }
+    let (x, anchor) = match align {
+        Align::Min => (track.left(), Align2::LEFT_BOTTOM),
+        Align::Center => (track.center().x, Align2::CENTER_BOTTOM),
+        Align::Max => (track.right(), Align2::RIGHT_BOTTOM),
+    };
+    let rect = anchor.anchor_size(pos2(x, bottom), galley.size());
+    painter.galley(pos2(m.round_px(rect.left()), m.round_px(rect.top())), galley, c.channel);
 }

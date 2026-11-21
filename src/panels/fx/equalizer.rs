@@ -261,6 +261,7 @@ fn curve(
     let painter = ui.painter();
     let px = 1.0 / m.ppp();
     painter.rect_filled(rect, 0.0, colors.control_fill.to_color32());
+    crate::theme::paint_graph_grid(painter, rect, cx.theme, cx.m.ppp(), (8, 4));
     let mid = m.floor_px(rect.center().y);
     let zero = Rect::from_x_y_ranges(rect.x_range(), mid..=mid + px);
     painter.rect_filled(zero, 0.0, colors.module_fill.to_color32());

@@ -329,18 +329,18 @@ fn train(
     let plot = train.plot;
     // 1.
     painter.rect_filled(rect, 0.0, fill);
-    // 2.
-    for x in train.time_lines(m) {
+    // 2. and 3., in the theme's grid ([`crate::theme::graph_grid`]).
+    let (v_line, h_line) = crate::theme::graph_grid(cx.theme, m.ppp());
+    for x in train.time_lines(m).into_iter().filter(|_| v_line.width > 0.0) {
         let x = m.floor_px(x);
-        let line = Rect::from_x_y_ranges(x..=x + px, plot.y_range());
-        painter.rect_filled(line, 0.0, ink.gamma_multiply(0.2));
+        let line = Rect::from_x_y_ranges(x..=x + v_line.width, plot.y_range());
+        painter.rect_filled(line, 0.0, v_line.color);
     }
-    // 3.
     let pitches = train.pitch_lines(m);
-    for &v in &pitches {
+    for &v in pitches.iter().filter(|_| h_line.width > 0.0) {
         let y = m.floor_px(train.y(v));
-        let line = Rect::from_x_y_ranges(plot.x_range(), y..=y + px);
-        painter.rect_filled(line, 0.0, ink.gamma_multiply(0.15));
+        let line = Rect::from_x_y_ranges(plot.x_range(), y..=y + h_line.width);
+        painter.rect_filled(line, 0.0, h_line.color);
     }
     // 4. The galley is egui's line box of the text: its bottom on the line.
     let font = m.font_id(FontSize::Pt8);

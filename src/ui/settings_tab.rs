@@ -191,6 +191,9 @@ enum Kind {
     Scan,
     /// The metronome level: the label line and a full-width slider.
     Level,
+    /// `Analyzer refresh limit` (Honeydew's own): the label line with the limit, and a full-width slider in steps of
+    /// 1 over `Off` (0, no limit) and 1 ..= [`crate::settings::ANALYZER_REFRESH_MAX`] per second.
+    AnalyzerRefresh,
     /// `Scaling:`: the UI scale's label line and a full-width slider, 60 % to 200 %, applied when it is let go.
     Scaling,
     /// The note under `Scaling:` while the window width limits the scale; the row is left out otherwise.
@@ -269,9 +272,6 @@ enum Choice {
     SampleRate,
     /// `Audio driver:` (Android, [`crate::settings::AUDIO_DRIVERS`]): which audio API the output uses.
     AudioDriver,
-    /// `Analyzer refresh limit:` ([`crate::settings::ANALYZER_REFRESH`]): how often the modules' displays take the
-    /// engine's analysis, at most.
-    AnalyzerRefresh,
     /// `Screen orientation:` (#41): `Auto`, `Portrait` or `Landscape` ([`crate::settings::ORIENTATIONS`]).
     Orientation,
     /// `Project version size limit:` (#69), in MB ([`crate::settings::VERSION_SIZE_LIMITS`]).
@@ -325,7 +325,7 @@ fn hidden(r: &Row) -> bool {
 }
 
 /// Every row of the SETTINGS tab, in order.
-const ROWS: [Row; 62] = {
+const ROWS: [Row; 61] = {
     use Kind::*;
     [
         row("MIDI:", Header),
@@ -363,7 +363,7 @@ const ROWS: [Row; 62] = {
         row("Audio driver:", Dropdown(Choice::AudioDriver)),
         row("Sample memory limit:", Dropdown(Choice::SampleMemory)),
         // The modules' displays' cost on the audio thread (Honeydew's own).
-        row("Analyzer refresh limit:", Dropdown(Choice::AnalyzerRefresh)),
+        row("Analyzer refresh limit", AnalyzerRefresh),
         row("Recording:", Header),
         row("Audio input:", AudioInput),
         row("Input gain", InputGain),
@@ -384,8 +384,6 @@ const ROWS: [Row; 62] = {
         row("Scaling:", Scaling),
         row("Scale is currently limited to", ScaleLimit),
         row("Animation:", Dropdown(Choice::Animation)),
-        // Honeydew change (#171).
-        row("Show value while dragging", Toggle(|s| &mut s.value_bubble)),
         row(
             "Plugin editor resolution:",
             Dropdown(Choice::EditorResolution),
@@ -752,7 +750,12 @@ impl SettingsTab {
         let (m, colors) = (cx.m, &cx.theme.colors);
         // Headers and the metronome row take the whole slot; the other rows are a control row, centred in it.
         let r = match row.kind {
-            Kind::Header | Kind::Level | Kind::Scaling | Kind::BufferSize | Kind::InputGain => slot,
+            Kind::Header
+            | Kind::Level
+            | Kind::Scaling
+            | Kind::BufferSize
+            | Kind::InputGain
+            | Kind::AnalyzerRefresh => slot,
             _ => Rect::from_center_size(slot.center(), vec2(slot.width(), m.u(ROW_H))),
         };
         let text = colors.text.to_color32();
@@ -919,10 +922,6 @@ impl SettingsTab {
                     let sound_mode_tip = "NATIVE: device/OS default audio behavior.";
                     crate::ui::tooltip::tip(ui, button_rect, sound_mode_tip, None);
                 }
-                if matches!(choice, Choice::AnalyzerRefresh) {
-                    let tip = "How many times a second the module displays update at most: the Analyzer, the Tuner, the Limiter and every other module that draws its sound. Fewer updates take less CPU from the audio. Unlimited: after every bit of audio the engine plays, the fastest. It changes only the pictures, never the sound; the level meters are not limited.";
-                    crate::ui::tooltip::tip(ui, button_rect, tip, None);
-                }
                 if matches!(choice, Choice::AudioDriver) {
                     let tip = "Which Android audio system plays the sound.\nAAudio: Android's newest, lowest latency (OpenSL ES on Android 8.0); works with low latency mode.\nOpenSL ES: Android's older native audio.\nAudioTrack: Android's oldest, highest latency, widest compatibility.";
                     crate::ui::tooltip::tip(ui, button_rect, tip, None);
@@ -984,6 +983,45 @@ impl SettingsTab {
                 );
                 let c = level_control(id, body, text);
                 h_slider(ui, cx, &c, &mut s.metronome_level, |_| String::new());
+            }
+            Kind::AnalyzerRefresh => {
+                let (line, body) = r.split_top_bottom_at_y(r.top() + m.u(LEVEL_LABEL_H));
+                let (room, value_room) =
+                    line.split_left_right_at_x(line.right() - m.u(PERCENT_W + 2.5));
+                label(ui, room, FontSize::Pt10);
+                let max = crate::settings::ANALYZER_REFRESH_MAX;
+                let c = Control {
+                    bipolar: false,
+                    steps: Some(usize::from(max) + 1),
+                    menu: ParamMenu::Unbound,
+                    ..Control::new(
+                        id,
+                        body,
+                        "",
+                        text,
+                        f32::from(Settings::default().analyzer_refresh_hz) / f32::from(max),
+                    )
+                };
+                let stored = f32::from(s.analyzer_refresh_hz.min(max)) / f32::from(max);
+                let mut value = stored;
+                h_slider(ui, cx, &c, &mut value, |_| String::new());
+                // Written back only when moved, so that the round trip never changes the setting.
+                if value != stored {
+                    s.analyzer_refresh_hz = (value.clamp(0.0, 1.0) * f32::from(max)).round() as u16;
+                }
+                let display = match s.analyzer_refresh_hz {
+                    0 => "Off".to_owned(),
+                    hz => format!("{hz} per second"),
+                };
+                plain(
+                    ui,
+                    value_room,
+                    &display,
+                    FontSize::Pt10,
+                    Align2::RIGHT_CENTER,
+                );
+                let tip = "How many times a second the module displays update at most: the Analyzer, the Tuner, the Limiter and every other module that draws its sound. Fewer updates take less CPU from the audio. Off: no limit, they update after every bit of audio the engine plays. It changes only the pictures, never the sound; the level meters are not limited.";
+                crate::ui::tooltip::tip(ui, r, tip, None);
             }
             Kind::InputGain => {
                 let (line, body) = r.split_top_bottom_at_y(r.top() + m.u(LEVEL_LABEL_H));
@@ -1492,12 +1530,6 @@ impl Choice {
             Choice::EditorResolution => (crate::settings::EDITOR_RESOLUTIONS.iter())
                 .map(|&p| (usize::from(p), format!("{p}%")))
                 .collect(),
-            Choice::AnalyzerRefresh => (crate::settings::ANALYZER_REFRESH.iter())
-                .map(|&hz| match hz {
-                    0 => (0, "Unlimited".to_owned()),
-                    hz => (usize::from(hz), format!("{hz} per second")),
-                })
-                .collect(),
             Choice::AudioDriver => (crate::settings::AUDIO_DRIVERS.iter())
                 .map(|&label| label.to_owned())
                 .enumerate()
@@ -1522,7 +1554,6 @@ impl Choice {
             Choice::Orientation => usize::from(s.screen_orientation),
             Choice::VersionSize => s.version_size_limit as usize,
             Choice::EditorResolution => usize::from(s.plugin_editor_resolution),
-            Choice::AnalyzerRefresh => usize::from(s.analyzer_refresh_hz),
             Choice::AudioDriver => usize::from(s.audio_driver),
         }
     }
@@ -1541,7 +1572,6 @@ impl Choice {
             Choice::Orientation => s.screen_orientation = value as u8,
             Choice::VersionSize => s.version_size_limit = value as u32,
             Choice::EditorResolution => s.plugin_editor_resolution = value as u8,
-            Choice::AnalyzerRefresh => s.analyzer_refresh_hz = value as u16,
             Choice::AudioDriver => s.audio_driver = value as u8,
         }
     }

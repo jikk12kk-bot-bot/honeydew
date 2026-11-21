@@ -14,8 +14,9 @@
 //! A strip control's press or parameter menu pick is the app's recent control ([`MixerState::touch`]); its menu's
 //! `Unlink from MIDI CC` follows the channel's `CCLK`.
 //!
-//! The level in dB (#133, a Honeydew addition): under a tall fader's cap, where its lowest value leaves room
-//! ([`widgets::below_cap`]); and in the name slot while the fader is held, at every height.
+//! The level in dB (#133, a Honeydew addition), in 8 pt at every fader height: under a tall fader's cap, where its
+//! lowest value leaves room ([`widgets::below_cap`]), else in a strip under a shorter fader ([`fader_and_readout`]).
+//! The name slot keeps the name while the fader is held.
 //!
 //! The master's live peak in dB (#143, a Honeydew addition): in its name slot while it is over −60 dB, held a second and then
 //! falling at the meters' release ([`Peak`]). The slot turns the record red once the peak goes over 0 dBFS, until a
@@ -41,8 +42,8 @@ use crate::ui::widgets::{self, Button, Control, ParamMenu, Pill};
 
 /// Strip width in U, which is also the scroll unit (the wheel's step).
 pub const STRIP_W: f32 = 4.0;
-/// The least room under a fader's cap (U) that shows its level in dB: the 6 pt readout's size.
-const DB_ROOM: f32 = 0.375;
+/// The least room under a fader's cap (U) that shows its level in dB: the 8 pt readout's size.
+const DB_ROOM: f32 = 0.5;
 /// How long the master's peak readout holds a peak (s) before it falls.
 const PEAK_HOLD: f64 = 1.0;
 
@@ -144,6 +145,18 @@ fn strip_meters(fader: Rect, peaks: [f32; 2], m: &Metrics) -> Vec<Rect> {
             Rect::from_x_y_ranges(x..=x + 3.0 * t, top..=track.bottom())
         })
         .collect()
+}
+
+/// The fader's rect and its dB readout's in the fader slot `r` (points): the readout under the cap at its lowest
+/// value where a tall fader leaves room for it ([`widgets::below_cap`]); else (a short strip, such as with the keyboard
+/// moved up) a [`DB_ROOM`] strip at the slot's bottom, the fader above it, so the level always shows.
+fn fader_and_readout(r: Rect, m: &Metrics) -> (Rect, Rect) {
+    let room = widgets::below_cap(r, m);
+    if room.height() >= m.u(DB_ROOM) {
+        return (r, room);
+    }
+    let split = m.round_px((r.bottom() - m.u(DB_ROOM)).max(r.top()));
+    r.split_top_bottom_at_y(split)
 }
 
 /// The rects (device pixels) of the parts a strip in `rect_px` shows, in drawing order, spacers left out.
@@ -263,16 +276,12 @@ pub fn show(
             };
             let none = |_| String::new();
             let changed = match leaf {
-                // In the channel colour, truncated keeping 5 tail characters; the level while the fader is held, else
-                // the master's peak. Red on the master after an over.
+                // In the channel colour, truncated keeping 5 tail characters; the master's peak. Red on the master
+                // after an over.
                 NAME => {
-                    let fader = ui.ctx().read_response(base.with((i, FADER)));
-                    let level = CHANNEL_PARAMS[0].display_text(params[0]);
-                    let held = fader.is_some_and(|f| f.is_pointer_button_down_on());
                     let font = m.font_id(FontSize::Pt10);
                     let text = match &peak {
-                        _ if held => level.as_str(),
-                        Some(peak) if master => peak,
+                        Some(peak) if master => peak.as_str(),
                         _ => name,
                     };
                     let ink = if master && state.peak.clipped {
@@ -286,28 +295,25 @@ pub fn show(
                 }
                 // Reset to 0.85312, unity, not the 0.8531 a new channel stores.
                 FADER => {
-                    let c = control("", widgets::UNITY);
+                    let (fader, room) = fader_and_readout(r, m);
+                    let c = Control {
+                        rect: fader,
+                        ..control("", widgets::UNITY)
+                    };
                     let level = |v| CHANNEL_PARAMS[0].display_text(v);
                     let changed = widgets::fader(&mut ui, cx, &c, &mut params[0], level).changed();
-                    for bar in strip_meters(r, mini_mixer::meter_peaks(meters, i), m) {
+                    for bar in strip_meters(fader, mini_mixer::meter_peaks(meters, i), m) {
                         ui.painter().rect_filled(bar, 0.0, color);
                     }
-                    let room = widgets::below_cap(r, m);
-                    if room.height() >= m.u(DB_ROOM) {
-                        let text = CHANNEL_PARAMS[0].display_text(params[0]);
-                        let font = m.font_id(FontSize::Pt6);
-                        let at = room.center();
-                        ui.painter()
-                            .text(at, Align2::CENTER_CENTER, text, font, color);
-                    }
+                    let text = CHANNEL_PARAMS[0].display_text(params[0]);
+                    let font = m.font_id(FontSize::Pt8);
+                    ui.painter()
+                        .text(room.center(), Align2::CENTER_CENTER, text, font, color);
                     changed
                 }
-                // Honeydew change (#171): no text on the ring, the pan in the drag bubble.
+                // The pan on the ring.
                 KNOB => {
-                    let c = Control {
-                        ring_text: false,
-                        ..control("", 0.5)
-                    };
+                    let c = control("", 0.5);
                     let pan = |v| CHANNEL_PARAMS[1].display_text(v);
                     widgets::knob(&mut ui, cx, &c, &mut params[1], pan).changed()
                 }

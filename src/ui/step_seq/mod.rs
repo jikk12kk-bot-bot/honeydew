@@ -61,7 +61,7 @@
 //!
 //! The step grid ([`StepSeqView::paint_row`]): a cell per step from content beat 0 to the grid's right edge, past the
 //! loop too (the grid has no end), 1 px short of the step and the row; in the loop the beats alternate `controlFill` /
-//! `moduleFill`, past it every cell is `controlFill`, and nothing is a line. An active step sits on its own step's cell
+//! `moduleFill`, past it every cell is `controlFill`. The theme's grid lies in the gaps ([`paint_lines`]). An active step sits on its own step's cell
 //! ([`active_rect`], [`dashes`]). While the current row's header is held, that row is drawn last over a `background`
 //! band, grown by the header's press. The playhead line ([`timeline::playhead_line`]) sits at the playhead folded into
 //! the loop (s + ((pos − s) mod L), [`ruler::folded`]), playing or stopped, down to the last row.
@@ -621,6 +621,49 @@ struct RowLook<'a> {
     now: f64,
 }
 
+/// Honeydew change: the theme's grid over the step grid, in the gaps between the cells and centred on them, from
+/// content beat 0: the vertical grid at each step (1 px), beat (2 px) and bar (4 px) at the theme's `gridThickness`,
+/// and the horizontal grid between the rows at its own ([`crate::theme::grid_h_px`]).
+fn paint_lines(painter: &Painter, l: &Layout, sig: TimeSig, cx: &UiCtx) {
+    let (colors, options) = (&cx.theme.colors, &cx.theme.options);
+    let px = 1.0 / l.ppp;
+    let rows = l.visible_rows();
+    if rows.is_empty() {
+        return;
+    }
+    // The gap before each boundary is 1 px; a line w px wide covers it and reaches ⌊(w − 1)/2⌋ px past it.
+    let start = |b: f32, w: f32| b - (((w + 1.0) / 2.0).floor()) * px;
+    let ys = l.row_top() + rows.start as f32 * l.pitch..=l.row_top() + rows.end as f32 * l.pitch;
+    let (d, bar) = (sig.steps_per_beat() as usize, (sig.steps_per_beat() * sig.bar_beats()) as usize);
+    let ink = crate::theme::grid_ink(colors);
+    let steps = l.visible_steps();
+    for step in steps.start.max(1)..=steps.end {
+        let base = if step % bar == 0 {
+            4.0
+        } else if step % d == 0 {
+            2.0
+        } else {
+            1.0
+        };
+        let w = crate::theme::grid_width(base, options);
+        if w <= 0.0 {
+            continue;
+        }
+        let x = start(l.snap(l.x0 + step as f32 * l.step_w), w);
+        painter.rect_filled(Rect::from_x_y_ranges(x..=x + w * px, ys.clone()), 0.0, ink);
+    }
+    let h = crate::theme::grid_h_px(options);
+    if h <= 0.0 {
+        return;
+    }
+    let xs = l.x0.max(l.grid_left())..=l.rect.right();
+    let h_ink = crate::theme::grid_h_ink(colors);
+    for row in rows.start.max(1)..=rows.end {
+        let y = start(l.snap(l.row_top() + row as f32 * l.pitch), h);
+        painter.rect_filled(Rect::from_x_y_ranges(xs.clone(), y..=y + h * px), 0.0, h_ink);
+    }
+}
+
 /// The pop-in's a `elapsed` seconds after a new hit first showed: 1, then times `rate` per 60 Hz frame, 0 once under
 /// 0.01. Step mode's rate is [`STEP_POP`]; the free note-grid's 0.6.
 pub(crate) fn pop_in(rate: f32, elapsed: f64) -> f32 {
@@ -1028,6 +1071,7 @@ impl StepSeqView {
                 self.paint_row(&cells, &l, row, 0.0, &look);
             }
         }
+        paint_lines(&cells, &l, sig, cx);
         if let Some(grow) = held {
             let band = l.cell(self.selected, 0).y_range().expand(grow / 2.0);
             let grid = l.grid();

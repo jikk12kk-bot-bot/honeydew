@@ -204,6 +204,7 @@ fn strip(
     }
     let painter = ui.painter();
     painter.rect_filled(rect, 0.0, cx.theme.colors.control_fill.to_color32());
+    crate::theme::paint_graph_grid(painter, rect, cx.theme, cx.m.ppp(), (8, 4));
     for dot in dots(rect, cx.m) {
         painter.rect_filled(dot, 0.0, ink);
     }

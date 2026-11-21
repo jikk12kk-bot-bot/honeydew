@@ -18,7 +18,7 @@ fn scale_y(r: Rect, m: &Metrics, db: f32) -> f32 {
     r.bottom() - 1.0 / m.ppp() - r.height() * (60.0 + db) / 66.0
 }
 
-/// The history display (#3): no background fill, the grid's full-width 1 px rows in `text` at 10 %, the `series` (a
+/// The history display (#3): no background fill, the grid's full-width rows in the theme's horizontal grid, the `series` (a
 /// reset history without a feed: none), then the `threshold` row (dB) in `text`. With `band`, the Multiband band
 /// graph: a `controlFill` fill first and only 3 grid rows.
 pub(super) fn history(
@@ -39,8 +39,14 @@ pub(super) fn history(
     if band {
         painter.rect_filled(r, 0.0, cx.theme.colors.control_fill.to_color32());
     }
+    // The theme's horizontal grid ([`crate::theme::graph_grid`]).
+    let grid = crate::theme::graph_grid(cx.theme, m.ppp()).1;
     for &db in GRID_DB.iter().step_by(if band { 2 } else { 1 }) {
-        row(db, text.gamma_multiply(0.1));
+        if grid.width > 0.0 {
+            let y = scale_y(r, m, db);
+            let rect = Rect::from_x_y_ranges(r.x_range(), y..=y + grid.width);
+            painter.rect_filled(rect, 0.0, grid.color);
+        }
     }
     if let Some((series, ink)) = series {
         painter.extend(columns(r, m, series, text, ink));
