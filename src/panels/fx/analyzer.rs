@@ -1689,7 +1689,10 @@ fn pitch_track(
         grid: (false, true),
     };
     let p = frame.draw(ui, cx, r, ink);
-    let band = cx.theme.colors.background.to_color32().gamma_multiply(0.5);
+    let (px, band) = (
+        1.0 / cx.m.ppp(),
+        cx.theme.colors.background.to_color32().gamma_multiply(0.5),
+    );
     // The theme's horizontal grid between the semitones, as the piano roll's rows.
     let h_line = crate::theme::graph_grid(cx.theme, cx.m.ppp()).1;
     let painter = ui.painter();
