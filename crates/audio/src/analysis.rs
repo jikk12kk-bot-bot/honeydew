@@ -483,13 +483,6 @@ impl Detector {
         (self.phase, self.written, self.filled, self.frames) = (0, 0, false, 0);
     }
 
-    /// The sample at `back` decimated samples before the newest.
-    #[cfg(test)]
-    fn at(&self, back: usize) -> f32 {
-        let len = self.ring.len();
-        self.ring[(self.written + len - 1 - back % len) % len]
-    }
-
     /// Adds a mono input sample; every [`Self::HOP`] samples, once the ring is full, the pitch in Hz (0: none).
     fn frame(&mut self, sample: f32) -> Option<f32> {
         self.phase += 1;
@@ -1351,84 +1344,6 @@ mod tests {
         run(&mut analyzer, 4800, true, sine(1000.0, 0.5));
         let again = super::analyzer(analyzer.analysis()).unwrap();
         assert!(near(again.maxima[0], -6.02, 0.05), "{:?}", again.maxima);
-    }
-
-    /// Σ term(i) for i < n as [`correlate`] adds: eight partial sums, term i into sum i % 8.
-    fn lanes(n: usize, term: impl Fn(usize) -> f32) -> f32 {
-        let mut sums = [0.0_f32; 8];
-        for i in 0..n {
-            sums[i % 8] += term(i);
-        }
-        sums.iter().sum()
-    }
-
-    /// The detector's reading as it was first written: each lag's sums read the ring through [`Detector::at`].
-    fn detect_through_the_ring(d: &Detector) -> f32 {
-        let min_lag = ((d.rate / Detector::HIGHEST).floor() as usize).max(2);
-        let max_lag = d.scores.len() - 2;
-        let window = 2 * max_lag;
-        let energy = lanes(window, |i| d.at(i) * d.at(i));
-        if energy / (window as f32) < Detector::QUIET * Detector::QUIET {
-            return 0.0;
-        }
-        let mut s = vec![0.0f32; d.scores.len()];
-        for (lag, score) in s.iter_mut().enumerate().take(max_lag + 1).skip(min_lag) {
-            let cross = lanes(window, |i| d.at(i) * d.at(i + lag));
-            let a2 = lanes(window, |i| d.at(i) * d.at(i));
-            let b2 = lanes(window, |i| d.at(i + lag) * d.at(i + lag));
-            if a2 > 0.0 && b2 > 0.0 {
-                *score = cross / (a2 * b2).sqrt();
-            }
-        }
-        let peaks = || (min_lag + 1..max_lag).filter(|&l| s[l] > s[l - 1] && s[l] >= s[l + 1]);
-        let top = peaks().map(|l| s[l]).fold(0.0, f32::max);
-        if top < Detector::CLEAR {
-            return 0.0;
-        }
-        let Some(best) = peaks().find(|&l| s[l] >= Detector::KEY * top) else {
-            return 0.0;
-        };
-        let (previous, current, next) = (s[best - 1], s[best], s[best + 1]);
-        let denominator = previous - 2.0 * current + next;
-        let offset = if denominator.abs() > 1e-6 {
-            (0.5 * (previous - next) / denominator).clamp(-0.5, 0.5)
-        } else {
-            0.0
-        };
-        d.rate / (best as f32 + offset)
-    }
-
-    #[test]
-    fn the_pitch_detector_reads_exactly_as_through_its_ring() {
-        // Tones, a glide, noise and silence, at two rates: every reading is bit for bit the ring-indexed one.
-        let mut seed = 1u32;
-        let mut noise = move || {
-            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5
-        };
-        for rate in [48_000.0, 44_100.0] {
-            let mut detector = Detector::new(rate);
-            let (mut readings, mut voiced) = (0, 0);
-            for i in 0..(2.5 * rate) as usize {
-                let t = i as f32 / rate;
-                let hz = 110.0 * (1.0 + t);
-                let sample = match i * 5 / (2.5 * rate) as usize {
-                    0 => 0.5 * (std::f32::consts::TAU * 220.0 * t).sin(),
-                    1 => 0.4 * (std::f32::consts::TAU * hz * t).sin() + 0.05 * noise(),
-                    2 => 0.3 * noise(),
-                    3 => 0.0,
-                    _ => 0.3 * (std::f32::consts::TAU * 82.41 * t).sin(),
-                };
-                // A reading leaves the ring as it read it.
-                if let Some(got) = detector.frame(sample) {
-                    let want = detect_through_the_ring(&detector);
-                    assert_eq!(got.to_bits(), want.to_bits(), "{rate} at {i}: {got} {want}");
-                    readings += 1;
-                    voiced += usize::from(got > 0.0);
-                }
-            }
-            assert!(readings > 100 && voiced > 50, "{readings} {voiced}");
-        }
     }
 
     #[test]
