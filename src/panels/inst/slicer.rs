@@ -135,6 +135,7 @@ fn waveform(
 ) -> Vec<usize> {
     let painter = ui.painter();
     painter.rect_filled(rect, 0.0, cx.theme.colors.control_fill.to_color32());
+    crate::theme::paint_graph_grid(painter, rect, cx.theme, cx.m.ppp(), (8, 4));
     let posted = loop_path(module).and_then(|p| ui.data(|d| d.get_temp::<Posted>(loop_id(&p))));
     let Some((sample, posted)) = posted.and_then(|p| Some((p.data.upgrade()?, p))) else {
         return Vec::new();

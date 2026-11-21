@@ -39,7 +39,8 @@ pub(super) fn history(
     if band {
         painter.rect_filled(r, 0.0, cx.theme.colors.control_fill.to_color32());
     }
-    // The theme's horizontal grid ([`crate::theme::graph_grid`]).
+    // The theme's vertical grid (8 columns), then its horizontal grid ([`crate::theme::graph_grid`]).
+    crate::theme::paint_graph_grid(painter, r, cx.theme, m.ppp(), (8, 1));
     let grid = crate::theme::graph_grid(cx.theme, m.ppp()).1;
     for &db in GRID_DB.iter().step_by(if band { 2 } else { 1 }) {
         if grid.width > 0.0 {

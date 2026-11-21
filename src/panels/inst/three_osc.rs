@@ -3,7 +3,8 @@
 //! without a param picks the sub-page (UI state, `Show::Setting`).
 //!
 //! The LFO displays ([`lfo`]) and the envelope displays ([`envelopes`]) are module-drawn graph displays: a
-//! controlFillColor rect, the curve on top in the channel colour with line width t = ceil(U/16) px, no grid lines.
+//! controlFillColor rect, the theme's grid on it (Honeydew change), the curve on top in the channel colour with line
+//! width t = ceil(U/16) px.
 //! Envelope displays draw the three inactive envelopes first at 20 % alpha, then the current one; breakpoint discs
 //! (current envelope only) are channel discs of radius 2 t, with a controlFillColor centre of radius t only while
 //! that envelope's `Enable` is off. With the display rect (x, y, w, h) and H = h − t, a value v (0…1) is drawn at
@@ -150,8 +151,8 @@ fn tension(u: f32, tau: f32) -> f32 {
     }
 }
 
-/// The graph display of the tab's LFO, one polyline with no grid and no dots: PAN (tab 1) is LFO 0, VOL … PITCH
-/// (tabs 2–5) LFOs 1–4. Nothing to edit.
+/// The graph display of the tab's LFO over the theme's grid, one polyline with no dots: PAN (tab 1) is LFO 0,
+/// VOL … PITCH (tabs 2–5) LFOs 1–4. Nothing to edit.
 fn lfo(
     ui: &mut Ui,
     cx: &UiCtx,
@@ -164,6 +165,7 @@ fn lfo(
     let t = cx.m.t();
     let painter = ui.painter();
     painter.rect_filled(rect, 0.0, cx.theme.colors.control_fill.to_color32());
+    crate::theme::paint_graph_grid(painter, rect, cx.theme, cx.m.ppp(), (8, 4));
     let points = lfo_points(&module.params, state.tab.saturating_sub(1), rect, t);
     painter.add(Shape::line(points, Stroke::new(t, ink)));
     Vec::new()
@@ -194,6 +196,7 @@ fn envelopes(
     let (p, current) = (&module.params, state.tab.saturating_sub(2));
     let painter = ui.painter();
     painter.rect_filled(rect, 0.0, fill);
+    crate::theme::paint_graph_grid(painter, rect, cx.theme, ppp, (8, 4));
     let dim = Stroke::new(t, ink.gamma_multiply(0.2));
     for e in (0..4).filter(|&e| e != current && param(p, 106 + e) != 0.5) {
         painter.add(Shape::line(envelope(p, e, rect, t, ppp).0, dim));
