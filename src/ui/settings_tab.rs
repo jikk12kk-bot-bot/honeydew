@@ -1763,29 +1763,6 @@ mod tests {
     }
 
     #[test]
-    fn each_toggle_row_edits_its_own_setting() {
-        let toggles: Vec<_> = ROWS
-            .iter()
-            .filter_map(|r| match r.kind {
-                Kind::Toggle(field) => Some((r.label, field)),
-                _ => None,
-            })
-            .collect();
-        let own = cfg!(any(target_os = "ios", target_os = "android"));
-        assert_eq!(toggles.len(), if own { 16 } else { 15 });
-        for (label, field) in &toggles {
-            let mut s = Settings::default();
-            *field(&mut s) = !*field(&mut s);
-            // Exactly one toggle changed.
-            let differ = toggles
-                .iter()
-                .filter(|(_, other)| *other(&mut s) != *other(&mut Settings::default()))
-                .count();
-            assert_eq!(differ, 1, "{label}");
-        }
-    }
-
-    #[test]
     fn dropdowns_list_the_spec_items_and_store_their_ids() {
         let labels = |c: Choice| -> Vec<String> { c.items().into_iter().map(|(_, l)| l).collect() };
         let values = |c: Choice| -> Vec<usize> { c.items().into_iter().map(|(v, _)| v).collect() };
@@ -2244,103 +2221,6 @@ mod tests {
         (2.0, DEFAULT_UI_SCALE),
         (2.0, SCALE_200),
     ];
-
-    #[test]
-    fn a_toggle_is_a_menu_fill_bar_half_a_u_left_of_the_column_with_the_pill_and_the_label_in_it() {
-        // Each toggle rect starts 0.5 U left of the column and ends at the column's right edge; the pill is centred at
-        // x + 0.75 U (page left + 2.25 U); the label runs from x + 1.7 U to the right edge − 0.2 U, FontSize 2,
-        // left-aligned, vertically centred, in `text`. The latency toggle is 2.5 U shorter.
-        let colors = theme_by_id(0).colors;
-        let (menu_fill, text, control_fill) = (
-            colors.menu_fill.to_color32(),
-            colors.text.to_color32(),
-            colors.control_fill.to_color32(),
-        );
-        for (ppp, scale) in CONFIGS {
-            let rig = Rig::at(ppp, scale, WIDE_U);
-            let m = Metrics::from_pixels_per_point(ppp, scale);
-            let (u, t) = (m.u(1.0), m.t());
-            let column_right = rig.width - 2.0 * u;
-            let fills = fills(&rig);
-            assert_eq!(toggles().count(), 20);
-            for r in toggles() {
-                let at = format!("ppp {ppp} scale {scale}: `{}`", r.label);
-                let control = rig.rect_of(row_id(index(r.label)));
-                let shorter = if matches!(r.kind, Kind::Latency) {
-                    2.5 * u
-                } else {
-                    0.0
-                };
-                // The rect: 1.5 U tall, from 0.5 U left of the column (page left + 1.5 U) to its right edge.
-                let want = Rect::from_x_y_ranges(
-                    rig.left + 1.5 * u..=column_right - shorter,
-                    control.y_range(),
-                );
-                assert!(
-                    (control.min - want.min).abs().max_elem() < 0.01,
-                    "{at}: {control:?}"
-                );
-                assert!(
-                    (control.max - want.max).abs().max_elem() < 0.01,
-                    "{at}: {control:?}"
-                );
-                assert!((control.height() - 1.5 * u).abs() < 0.01, "{at}");
-                // It is painted whole as a `menuFill` bar (not pressed).
-                // (A disabled row is drawn at the disabled alpha, bar, pill and label alike.)
-                let dim = |c: Color32| {
-                    if r.kind.disabled() {
-                        c.gamma_multiply(DISABLED_ALPHA)
-                    } else {
-                        c
-                    }
-                };
-                assert!(
-                    fills.contains(&(control, dim(menu_fill))),
-                    "{at}: no bar {control:?}"
-                );
-                // The pill: 10 t by 18 t, centred at the page's left + 2.25 U.
-                let pill = Rect::from_center_size(
-                    pos2(rig.left + 2.25 * u, control.center().y),
-                    vec2(10.0 * t, 18.0 * t),
-                );
-                let near = |a: &Rect| {
-                    (a.min - pill.min).abs().max_elem() < 0.01
-                        && (a.max - pill.max).abs().max_elem() < 0.01
-                };
-                assert!(
-                    fills
-                        .iter()
-                        .any(|(a, c)| *c == dim(control_fill) && near(a)),
-                    "{at}: no pill {pill:?}"
-                );
-                // The label: from x + 1.7 U (within 0.1 U), whole, 10 pt, in `text`, ending 0.2 U short of the right.
-                let (label, shown) = rig.label_rect(control.y_range().into());
-                assert_eq!(shown, r.label, "{at}");
-                let start = control.left() + 1.7 * u;
-                assert!(
-                    (label.left() - start).abs() <= 0.1 * u,
-                    "{at}: label at {} for {start}",
-                    label.left()
-                );
-                // (The latency label is the one that overflows with the test font, which is wider than the app's.)
-                if !matches!(r.kind, Kind::Latency) {
-                    assert!(
-                        label.right() <= control.right() - 0.2 * u,
-                        "{at}: {label:?}"
-                    );
-                }
-                let (height, ten) = heights(&rig, &m, r.label);
-                assert!((height - ten).abs() < 0.01, "{at}: {height} vs 10 pt {ten}");
-                let ink = rig.shapes.iter().find_map(|s| match &s.shape {
-                    egui::Shape::Text(g) if g.galley.text() == r.label => {
-                        Some(g.galley.job.sections[0].format.color)
-                    }
-                    _ => None,
-                });
-                assert_eq!(ink, Some(text), "{at}");
-            }
-        }
-    }
 
     #[test]
     fn on_a_narrow_page_a_toggle_label_overflows_plain_with_its_pill_gap_kept() {

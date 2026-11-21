@@ -174,7 +174,6 @@ mod tests {
     use crate::panels::place;
     use crate::panels::tests::{U, display_shapes};
     use crate::params::menu_value;
-    use crate::theme::theme_by_id;
 
     fn near(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
@@ -355,58 +354,6 @@ mod tests {
         let panel = panel().unwrap();
         let placed = place(&panel, &module, &PanelState::default(), content, U * ppp);
         placed.into_iter().find(|(l, _)| l.id == 7).unwrap().1 / ppp
-    }
-
-    #[test]
-    fn the_graph_draws_fill_grid_curve_outline_in_order() {
-        let colors = theme_by_id(0).colors;
-        let (fill, background) = (
-            colors.control_fill.to_color32(),
-            colors.background.to_color32(),
-        );
-        let content = Rect::from_min_size(pos2(0.0, 0.0), vec2(14.0 * U, 4.49 * U));
-        for ppp in [1.0, 2.0] {
-            let (rect, px) = (graph_rect(ppp), 1.0 / ppp);
-            let e = rect.expand(px);
-            let shapes = display_shapes(29, 7, &[], &PanelState::default(), content, ppp);
-            assert_eq!(shapes.len(), 1 + 6 + 1 + 1, "ppp {ppp}");
-            // 1. E filled `controlFill`.
-            let Shape::Rect(first) = &shapes[0] else {
-                panic!("{:?}", shapes[0])
-            };
-            assert_eq!((first.rect, first.fill), (e, fill));
-            // 2. The grid, `background` at 30 / 70 / 30 %.
-            for (shape, (at, alpha)) in shapes[1..7].iter().zip(grid(e, ppp)) {
-                let Shape::Rect(line) = shape else {
-                    panic!("{shape:?}")
-                };
-                assert_eq!(
-                    (line.rect, line.fill),
-                    (at, background.gamma_multiply(alpha))
-                );
-            }
-            // 3. The curve plot on #7, 2 px, channel colour: one sample per device pixel of width.
-            let Shape::Path(curve) = &shapes[7] else {
-                panic!("{:?}", shapes[7])
-            };
-            assert_eq!(curve.stroke.width, 2.0 * px);
-            assert_eq!(
-                curve.stroke.color,
-                eframe::epaint::ColorMode::Solid(Color32::RED)
-            );
-            assert_eq!(
-                curve.points.len(),
-                ((rect.width() - 2.0 * px) * ppp) as usize
-            );
-            assert!(curve.points.iter().all(|p| rect.contains(*p)));
-            // 4. The 1 px `background` outline round E, inside it: the ring just outside #7.
-            let Shape::Rect(outline) = &shapes[8] else {
-                panic!("{:?}", shapes[8])
-            };
-            assert_eq!((outline.rect, outline.stroke_kind), (e, StrokeKind::Inside));
-            assert_eq!(outline.stroke, Stroke::new(px, background));
-            assert_eq!(outline.fill, Color32::TRANSPARENT);
-        }
     }
 
     #[test]

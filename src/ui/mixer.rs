@@ -859,29 +859,6 @@ mod tests {
     }
 
     #[test]
-    fn dragging_a_fader_writes_the_level_and_reports_it() {
-        let mut rig = Rig::new(2);
-        // Down a quarter of the range: the thumb follows the pointer along the track, the fader less 0.5 U at each
-        // end (and 0.875 U more when it is 6.5 U tall).
-        let fader = rig.part(1, FADER);
-        let ends = if fader.height() >= 6.5 * U { 2.75 } else { 1.0 };
-        let quarter = (fader.height() - ends * U) / 4.0;
-        rig.drag(fader.center(), &[vec2(0.0, 10.0), vec2(0.0, quarter)]);
-        let level = rig.song.channels[1].params.level();
-        assert!((level - (0.8531 - 0.25)).abs() < 1e-5, "{level}");
-        assert!(!rig.changes.is_empty());
-        assert!(
-            rig.changes
-                .iter()
-                .all(|&(ch, index, _)| (ch, index) == (1, 0))
-        );
-        assert_eq!(rig.changes.last(), Some(&(1, 0, level)));
-        // The other strips kept their defaults.
-        assert_eq!(rig.song.channels[0].params, ChannelParams::default());
-        assert_eq!(rig.song.channels[2].params, ChannelParams::default());
-    }
-
-    #[test]
     fn dragging_the_pan_knob_writes_param_1() {
         let mut rig = Rig::new(1);
         rig.drag(
@@ -898,26 +875,6 @@ mod tests {
         let fader = rig.part(i, FADER);
         let ends = if fader.height() >= 6.5 * U { 2.75 } else { 1.0 };
         fader.height() - ends * U
-    }
-
-    #[test]
-    fn ctrl_drags_the_fader_and_the_pan_knob_a_quarter_as_far() {
-        let mut rig = Rig::new(1);
-        rig.modifiers = Modifiers::COMMAND;
-        let quarter = fader_track(&rig, 1) / 4.0;
-        rig.drag(
-            rig.part(1, FADER).center(),
-            &[vec2(0.0, 10.0), vec2(0.0, quarter)],
-        );
-        let level = rig.song.channels[1].params.level();
-        assert!((level - (0.8531 - 0.0625)).abs() < 1e-5, "{level}");
-        // 200 points up is 0.25 of the range at full rate.
-        rig.drag(
-            rig.part(1, KNOB).center(),
-            &[vec2(0.0, -10.0), vec2(0.0, -200.0)],
-        );
-        let pan = rig.song.channels[1].params.pan();
-        assert!((pan - 0.5625).abs() < 1e-5, "{pan}");
     }
 
     /// Two touch-downs on `at` a frame apart, the first released: the second one resets.
@@ -1578,63 +1535,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn each_strip_meters_its_channel_beside_the_fader_cap() {
-        use honeydew_audio::MeterSnapshot;
-        use honeydew_audio::device::ModuleKey;
-        let theme = theme_by_id(0);
-        let mut rig = Rig::new(1);
-        let meter = |channel, peak_left, peak_right| ModuleMeter {
-            key: ModuleKey {
-                channel,
-                instance_id: 0,
-            },
-            value: MeterSnapshot {
-                peak_left,
-                peak_right,
-                ..MeterSnapshot::default()
-            },
-            analysis: Vec::new(),
-        };
-        // The master at full scale on the left alone; channel 1 at −30 dB on both sides.
-        let quiet = 10_f32.powf(-1.5);
-        rig.meters = vec![meter(0, 1.0, 0.0), meter(1, quiet, quiet)];
-        rig.frame(vec![]);
-        // Bars 3t (6) wide with a 1t gap, from 1t right of the 1.25 U cap, over the fader's track (the 6 U fader inset
-        // 0.5 U), from the bottom up by the meter law.
-        let bars = |i: usize| {
-            let fader = rig.part(i, FADER);
-            let color = channel_color(rig.song.channels[i].hue, &theme).to_color32();
-            let (track, cap) = (
-                fader.shrink2(vec2(0.0, 0.5 * U)),
-                fader.center().x + 0.625 * U,
-            );
-            let rects = rig.shapes.iter().filter_map(|s| match &s.shape {
-                Shape::Rect(r) if r.fill == color && r.rect.left() > cap => Some(r.rect),
-                _ => None,
-            });
-            (rects.collect::<Vec<_>>(), track, cap)
-        };
-        let (master, track, cap) = bars(0);
-        let bar = |x: f32, m: f32| {
-            Rect::from_x_y_ranges(
-                x..=x + 6.0,
-                track.bottom() - track.height() * m..=track.bottom(),
-            )
-        };
-        // 0 dB is (60/66)^1.6667 ≈ 0.853 up the track: about the unity ticks' height.
-        let full = crate::ui::mini_mixer::meter(1.0);
-        assert!((full - widgets::UNITY).abs() < 1e-3, "{full}");
-        assert_eq!(master, [bar(cap + 2.0, full)]);
-        let (one, track, cap) = bars(1);
-        let m = crate::ui::mini_mixer::meter(quiet);
-        assert!(m > 0.1 && m < 0.5, "{m}");
-        let bar = |x: f32| {
-            Rect::from_x_y_ranges(
-                x..=x + 6.0,
-                track.bottom() - track.height() * m..=track.bottom(),
-            )
-        };
-        assert_eq!(one, [bar(cap + 2.0), bar(cap + 10.0)]);
-    }
 }

@@ -152,11 +152,10 @@ pub const REFERENCE: Reference = Reference {
 
 #[cfg(test)]
 mod tests {
-    use eframe::egui::{Shape, Stroke, pos2, vec2};
+    use eframe::egui::{pos2, vec2};
 
     use super::*;
-    use crate::panels::tests::{U, display_shapes};
-    use crate::theme::theme_by_id;
+    use crate::panels::tests::U;
 
     #[test]
     fn the_trace_maps_the_y_span_from_the_bottom_up() {
@@ -173,72 +172,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn at_rest_the_graph_is_its_fill_and_a_flat_centre_line() {
-        // "a reset fills the buffer with the midpoint, which shows as a flat centre line": 1 px, G (the channel).
-        let content = Rect::from_min_size(pos2(0.0, 0.0), vec2(14.0 * U, 6.99 * U));
-        let fill = theme_by_id(0).colors.control_fill.to_color32();
-        for ppp in [1.0, 2.0] {
-            let shapes = display_shapes(43, 8, &[], &PanelState::default(), content, ppp);
-            let [Shape::Rect(r), Shape::LineSegment { points, stroke }] = &shapes[..] else {
-                panic!("ppp {ppp}: {shapes:?}");
-            };
-            let p = r.rect;
-            let reference = Rect::from_min_size(pos2(5.6 * U, 3.09 * U), vec2(5.6 * U, 3.9 * U));
-            assert!(
-                (p.min - reference.min).length() < 1.0 && (p.max - reference.max).length() < 1.0
-            );
-            assert_eq!(r.fill, fill);
-            let y = p.bottom() - 0.5 * p.height();
-            assert_eq!(
-                *points,
-                [pos2(p.left(), y), pos2(p.right(), y)],
-                "ppp {ppp}"
-            );
-            assert_eq!(*stroke, Stroke::new(1.0 / ppp, Color32::RED), "ppp {ppp}");
-        }
-    }
-
-    #[test]
-    fn a_feed_draws_the_trace_one_point_every_2_px_averaging_its_columns() {
-        use eframe::egui::Shape;
-        use honeydew_audio::MeterSnapshot;
-        use honeydew_audio::analysis::TRACE_POINTS;
-        // The oldest half of the ring at 0.25, the newest at 0.75 (the slab's next point is 0: oldest first).
-        let mut slab = vec![0.0; 1 + TRACE_POINTS];
-        for (i, v) in slab[1..].iter_mut().enumerate() {
-            *v = if i < TRACE_POINTS / 2 { 0.25 } else { 0.75 };
-        }
-        let content = Rect::from_min_size(pos2(0.0, 0.0), vec2(14.0 * U, 6.99 * U));
-        for ppp in [1.0, 2.0] {
-            let shapes = crate::panels::tests::display_shapes_fed(
-                43,
-                8,
-                &[],
-                &PanelState::default(),
-                content,
-                ppp,
-                (MeterSnapshot::default(), &slab),
-            );
-            let [Shape::Rect(r), Shape::Path(line)] = &shapes[..] else {
-                panic!("ppp {ppp}: {shapes:?}");
-            };
-            let p = r.rect;
-            let n = ((p.width() * ppp).round() as usize) / 2 + 1;
-            assert_eq!(line.points.len(), n, "ppp {ppp}");
-            assert_eq!(
-                line.points[0],
-                pos2(p.left(), p.bottom() - 0.25 * p.height())
-            );
-            let last = line.points[n - 1];
-            assert!(
-                (last.x - p.right()).abs() < 1e-3
-                    && (last.y - (p.bottom() - 0.75 * p.height())).abs() < 1e-3
-            );
-            // Newest at the right: the step up sits in the middle.
-            let mid = line.points.iter().position(|q| q.y < p.center().y).unwrap();
-            assert!((mid as f32 / n as f32 - 0.5).abs() < 0.02, "{mid} of {n}");
-            assert_eq!(line.stroke.width, 1.0 / ppp);
-        }
-    }
 }

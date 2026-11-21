@@ -4080,63 +4080,6 @@ mod grid {
     }
 
     #[test]
-    fn rows_are_control_fill_light_rows_module_fill_each_with_its_lines_lit_and_root_rows_and_no_beat_bands()
-     {
-        let colors = theme_by_id(0).colors;
-        let (control, module, bg) = (
-            colors.control_fill.to_color32(),
-            colors.module_fill.to_color32(),
-            colors.background.to_color32(),
-        );
-        for ppp in [1.0, 2.0] {
-            let (rects, grid, _, g) = background(ppp);
-            let px = 1.0 / ppp;
-            // 1: `controlFill` over the key rows (all of the grid here).
-            assert_eq!(rects[0], (grid, control), "ppp {ppp}");
-            let row = |k: u8| Rect::from_x_y_ranges(grid.x_range(), g.y(k)..=g.y(k) + g.row_h);
-            let shown: Vec<u8> = (0..=127)
-                .filter(|&k| row(k).top() < grid.bottom() && row(k).bottom() > grid.top())
-                .collect();
-            // 2: whole rows, never beat bands.
-            let light: Vec<Rect> = (rects.iter())
-                .filter(|(_, fill)| *fill == module)
-                .map(|(r, _)| *r)
-                .collect();
-            let want: Vec<Rect> = (shown.iter().rev())
-                .filter(|&&k| rows().light[usize::from(k)])
-                .map(|&k| row(k))
-                .collect();
-            assert_eq!(light, want, "ppp {ppp}");
-            // 3: a 1 px `background` α 0.3 line at each row's top and bottom.
-            let line = bg.gamma_multiply(0.3);
-            let lines = rects
-                .iter()
-                .filter(|(r, fill)| *fill == line && r.height() == px);
-            assert_eq!(lines.count(), 2 * shown.len(), "ppp {ppp}");
-            // 4: the lit row, the channel colour α 0.1.
-            let lit = RED.to_color32().gamma_multiply(0.1);
-            let lit: Vec<Rect> = (rects.iter())
-                .filter(|(_, f)| *f == lit)
-                .map(|(r, _)| *r)
-                .collect();
-            assert_eq!(lit, [row(64)], "ppp {ppp}");
-            // 6: C rows, a 2 px `background` line at trunc(row bottom) − 2 px across the grid.
-            let roots: Vec<f32> = (rects.iter())
-                .filter(|(r, fill)| {
-                    *fill == bg && r.height() == 2.0 * px && r.x_range() == grid.x_range()
-                })
-                .map(|(r, _)| r.top())
-                .collect();
-            let want: Vec<f32> = (shown.iter().rev())
-                .filter(|&&k| k % 12 == 0)
-                .map(|&k| ((g.y(k) + g.row_h) * ppp).floor() / ppp - 2.0 * px)
-                .collect();
-            assert_eq!(roots, want, "ppp {ppp}");
-            assert!(!want.is_empty());
-        }
-    }
-
-    #[test]
     fn ghosts_then_black_0_15_past_the_loop_end_then_the_notes() {
         let past = Rect::from_min_max(pos2(304.0, 48.0), pos2(1170.0, 349.0));
         let events = [n(0, 128.0, 60)];

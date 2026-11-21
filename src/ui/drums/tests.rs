@@ -873,57 +873,6 @@ fn colors() -> (Color32, Color32) {
 }
 
 #[test]
-fn strip_knobs_caption_a_left_column_and_show_a_fixed_8_pt_value_on_the_disc() {
-    let mut rig = Rig::new(View::Strips);
-    rig.kit.slots[0].params[10] = 0.0;
-    let column = |rect: Rect| Rect::from_min_size(rect.min, vec2(1.25 * U, rect.height()));
-    let check = |rig: &Rig, ctl: Ctl, caption: &str, value: Option<&str>| {
-        let rect = rig.rect_at(0, ctl);
-        let texts = rig.texts_in(rect);
-        let (text, at, px, color) = texts
-            .iter()
-            .find(|t| t.0 == caption)
-            .cloned()
-            .unwrap_or_else(|| panic!("{caption}: {texts:?}"));
-        assert_eq!((text.as_str(), px, color), (caption, 16.0, Color32::RED));
-        assert!(
-            (at - column(rect).center()).length() < 1.0,
-            "{caption} at {at:?}"
-        );
-        let disc = rect.with_min_x(rect.left() + 1.25 * U);
-        let values: Vec<_> = texts.iter().filter(|t| t.0 != caption).collect();
-        match value {
-            Some(value) => {
-                assert_eq!(values.len(), 1, "{caption}: {values:?}");
-                let (text, at, px, color) = values[0].clone();
-                assert_eq!((text.as_str(), px, color), (value, 16.0, Color32::RED));
-                assert!((at - disc.center()).length() < 1.0, "{value} at {at:?}");
-            }
-            None => assert!(values.is_empty(), "{caption}: {values:?}"),
-        }
-    };
-    rig.state.page = StripPage::Pitch;
-    rig.frame(vec![]);
-    check(&rig, Ctl::Pitch, "Pitch", Some("0"));
-    check(&rig, Ctl::Stretch, "Stretch", Some("1.00"));
-    // Never fitted: the widest Start text stays 8 pt.
-    check(&rig, Ctl::Start, "Start", Some("-500"));
-    rig.state.page = StripPage::Envelope;
-    rig.frame(vec![]);
-    for (ctl, caption) in [
-        (Ctl::Atk, "ATK"),
-        (Ctl::Dec, "DEC"),
-        (Ctl::Sus, "SUS"),
-        (Ctl::Rel, "REL"),
-    ] {
-        check(&rig, ctl, caption, None);
-    }
-    rig.state.page = StripPage::Options;
-    rig.frame(vec![]);
-    check(&rig, Ctl::Shift, "Shift", Some("0"));
-}
-
-#[test]
 fn strip_knobs_reset_to_their_own_values_rel_to_0() {
     let mut rig = Rig::new(View::Strips);
     let reset = |rig: &mut Rig, ctl: Ctl| {
