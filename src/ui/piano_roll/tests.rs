@@ -4015,11 +4015,11 @@ mod grid {
     use super::n;
     use crate::metrics::{DEFAULT_UI_SCALE, Metrics};
     use crate::song::scales::{SCALES, scale_to_stored};
-    use crate::song::{ChannelKind, Song, SynthKind, TimeSig};
+    use crate::song::{ChannelKind, Song, SynthKind};
     use crate::theme::{Rgba, theme_by_id};
     use crate::ui::UiCtx;
-    use crate::ui::piano_roll::notes::{Geom, GridSize};
-    use crate::ui::piano_roll::{PianoRoll, Rows, paint_grid, paint_notes};
+    use crate::ui::piano_roll::notes::Geom;
+    use crate::ui::piano_roll::{PianoRoll, paint_notes};
 
     const RED: Rgba = Rgba::rgb(1.0, 0.0, 0.0);
 
@@ -4053,30 +4053,6 @@ mod grid {
             })
             .collect();
         (rects, grid, u, g)
-    }
-
-    /// C major light rows from C4 (48) to C6 (72), key 64 lit, root C.
-    fn rows() -> Rows {
-        let white = |k: usize| [0, 2, 4, 5, 7, 9, 11].contains(&(k % 12));
-        Rows {
-            light: std::array::from_fn(|k| (48..=72).contains(&k) && white(k)),
-            lit: std::array::from_fn(|k| k == 64),
-            root: 0,
-        }
-    }
-
-    fn background(ppp: f32) -> (Vec<(Rect, Color32)>, Rect, f32, Geom) {
-        painted(ppp, &|p, grid, g, cx| {
-            paint_grid(
-                p,
-                grid,
-                g,
-                &rows(),
-                RED,
-                (TimeSig::default(), GridSize::Auto),
-                cx,
-            )
-        })
     }
 
     #[test]

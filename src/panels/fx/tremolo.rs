@@ -266,8 +266,6 @@ pub const REFERENCE: Reference = Reference {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panels::place;
-    use crate::panels::tests::U;
 
     fn near(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
@@ -383,22 +381,6 @@ mod tests {
         let points = wave(&p, rect);
         assert!(near(points[0].y, level_y(rect, 0.25)));
         assert!(near(points[128].y, level_y(rect, 0.25 + 0.99 * 0.5)));
-    }
-
-    /// The content rect at the reference, and #4, #5 and #6 (points) at `ppp`.
-    fn reference(ppp: f32) -> (Rect, [Rect; 3]) {
-        let content = Rect::from_min_size(pos2(0.0, 0.0), vec2(14.0 * U, 6.99 * U));
-        let module = ModuleInstance::new(46, 2);
-        let panel = panel().unwrap();
-        let placed = place(
-            &panel,
-            &module,
-            &PanelState::default(),
-            content * ppp,
-            U * ppp,
-        );
-        let rect = |n: u32| placed.iter().find(|(l, _)| l.id == n).unwrap().1 / ppp;
-        (content, [rect(4), rect(5), rect(6)])
     }
 
     #[test]

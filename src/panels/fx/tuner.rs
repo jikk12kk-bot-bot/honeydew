@@ -693,9 +693,6 @@ mod tests {
         u_rect(1.75, 0.0, 10.5, 4.99)
     }
 
-    /// Colour A at rest: `Color32::RED`, the test channel, dimmed to RGB × 0.75.
-    const A: Color32 = Color32::from_rgb(191, 0, 0);
-
     #[test]
     fn rects_a_to_h_follow_the_display_rect() {
         for ppp in [1.0, 2.0] {
