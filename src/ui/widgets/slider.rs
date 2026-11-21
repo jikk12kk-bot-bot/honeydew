@@ -106,7 +106,9 @@ fn slider(
     // out: the label (if any) goes tight to the top, the value under it, and the track moves down below both.
     let font = m.font_id(c.label_font);
     let text_h = |s: &str| {
-        let galley = ui.painter().layout_no_wrap(s.to_owned(), font.clone(), c.channel);
+        let galley = ui
+            .painter()
+            .layout_no_wrap(s.to_owned(), font.clone(), c.channel);
         galley.size().y
     };
     let value_h = text_h("0");
