@@ -327,14 +327,14 @@ enum CallbackCommand<R> {
     Replace(Box<R>, Arc<MeterBank>),
 }
 
-/// The visual frames each meter keeps (and the transport, [`OutputSnapshot::heard_tick`]): 680 ms at 48 kHz, for the
-/// output's latency (a Bluetooth headset's 200 ms or more, #92) and a callback beside it. A callback shorter than a
-/// sub-block is one, so at 128 frames they keep 171 ms.
-const SLOTS: usize = 64;
+/// The visual frames each meter keeps (and the transport, [`OutputSnapshot::heard_tick`]): 2.7 s at 48 kHz, for the
+/// output's latency (a Bluetooth headset's 200 ms or more, #92; a 32768-frame buffer's) and a callback beside it. A
+/// callback shorter than a sub-block is one, so at 128 frames they keep 683 ms. Levels only, so they cost little.
+const SLOTS: usize = 256;
 
 /// The analyses each meter keeps ([`MeterCell::analyses`]), written apart from its levels: every sub-block, or with
-/// [`set_analysis_throttle`] on at most once a [`SUB_BLOCK`] (about 94 a second at 48 kHz) and at least 1/32 of a
-/// callback apart, so the ring still holds two callbacks of a big buffer.
+/// [`set_analysis_throttle`] on at most once a [`SUB_BLOCK`] (about 94 a second at 48 kHz) and at least 1/16 of a
+/// callback apart, so the ring still holds four callbacks of a big buffer.
 const ANALYSES: usize = 64;
 
 /// Settings `Limit analyzer refresh`: the analyses publish at most once a [`SUB_BLOCK`] ([`ANALYSES`]). Off until the
@@ -564,7 +564,7 @@ impl MeterBank {
     /// A callback of `frames` frames starts: the analyses' gap for its sub-blocks ([`ANALYSES`]).
     fn pace(&self, frames: usize) {
         let gap = match ANALYSIS_THROTTLE.load(Ordering::Relaxed) {
-            true => SUB_BLOCK.max(frames / 32) as u64,
+            true => SUB_BLOCK.max(frames / 16) as u64,
             false => 0,
         };
         self.5.gap.store(gap, Ordering::Relaxed);

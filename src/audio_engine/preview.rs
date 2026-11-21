@@ -62,8 +62,3 @@ impl Preview {
         self.more || (self.pos as usize) < l.len()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-}

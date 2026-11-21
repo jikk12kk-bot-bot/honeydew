@@ -1312,7 +1312,7 @@ mod tests {
         assert_eq!(factory_file(&stored), Some(path.clone()));
         // It plays the kit's pad, rendered from code with no bytes.
         let key = sample_key(&files, &path);
-        let decoded = decode_pick(key, Ok(Vec::new()), false, None);
+        let decoded = decode_pick(key, Ok(Vec::new()), false, None, None);
         let pad = honeydew_audio::builtin_drums::builtin("Built-in/Foundry/Hard Kick").unwrap();
         assert_eq!(decoded.wave.map(|w| w.data.left.clone()), Some(pad.left));
     }

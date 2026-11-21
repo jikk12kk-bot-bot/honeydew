@@ -157,7 +157,7 @@ impl HoneydewApp {
         let span = f64::from(start)..end_tick(&clip);
         let room = |l: &Lane| {
             let clear = |c: &Clip| end_tick(c) <= span.start || f64::from(c.start_tick) >= span.end;
-            l.kind == LaneKind::Notes && !l.hidden && l.clips.iter().all(clear)
+            l.kind == LaneKind::Notes && l.clips.iter().all(clear)
         };
         let ch = &mut song.channels[channel];
         let lane = match ch.lanes.iter().position(room) {

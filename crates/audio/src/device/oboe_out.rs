@@ -176,7 +176,8 @@ impl<R: AudioRenderer> AudioOutputCallback for Callback<R> {
         }
         self.until_latency -= 1;
         // When its first frame is heard: now and the latency Oboe works out from the stream's timestamps.
-        let heard = clock().map(|now| now + self.latency_ns);
+        let latency = std::time::Duration::from_nanos(self.latency_ns.max(0) as u64);
+        let heard = clock().map(|now| (now, latency));
         let rate = self.sample_rate;
         state.callback(n, 2, rate, heard, &mut self.scratch, |at, rendered| {
             for (out, pair) in frames[at..].iter_mut().zip(rendered.chunks_exact(2)) {
