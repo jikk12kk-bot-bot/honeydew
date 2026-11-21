@@ -363,10 +363,7 @@ const ROWS: [Row; 62] = {
         row("Audio driver:", Dropdown(Choice::AudioDriver)),
         row("Sample memory limit:", Dropdown(Choice::SampleMemory)),
         // The modules' displays' cost on the audio thread (Honeydew's own).
-        row(
-            "Analyzer refresh limit:",
-            Dropdown(Choice::AnalyzerRefresh),
-        ),
+        row("Analyzer refresh limit:", Dropdown(Choice::AnalyzerRefresh)),
         row("Recording:", Header),
         row("Audio input:", AudioInput),
         row("Input gain", InputGain),

@@ -2377,7 +2377,9 @@ impl HoneydewApp {
         // engine tests running beside them see every analysis.
         #[cfg(not(test))]
         {
-            honeydew_audio::device::set_analysis_limit(u32::from(self.settings.analyzer_refresh_hz));
+            honeydew_audio::device::set_analysis_limit(u32::from(
+                self.settings.analyzer_refresh_hz,
+            ));
             let (skip_hidden, light_pitch) = honeydew_audio::analysis::analyzer_options();
             self.settings.analyzer_skip_hidden = skip_hidden;
             self.settings.analyzer_light_pitch = light_pitch;
