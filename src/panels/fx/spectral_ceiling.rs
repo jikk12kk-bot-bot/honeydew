@@ -70,13 +70,24 @@ fn graph(
     while db > BOTTOM_DB && h_line.width > 0.0 {
         let y = m.floor_px(y_of(db));
         let rows = y..=y + h_line.width;
-        painter.rect_filled(Rect::from_x_y_ranges(rect.x_range(), rows), 0.0, h_line.color);
+        painter.rect_filled(
+            Rect::from_x_y_ranges(rect.x_range(), rows),
+            0.0,
+            h_line.color,
+        );
         db -= GRID_DB;
     }
-    for hz in [100.0, 1000.0, 10_000.0].into_iter().filter(|_| v_line.width > 0.0) {
+    for hz in [100.0, 1000.0, 10_000.0]
+        .into_iter()
+        .filter(|_| v_line.width > 0.0)
+    {
         let x = m.floor_px(x_of(hz));
         let columns = x..=x + v_line.width;
-        painter.rect_filled(Rect::from_x_y_ranges(columns, rect.y_range()), 0.0, v_line.color);
+        painter.rect_filled(
+            Rect::from_x_y_ranges(columns, rect.y_range()),
+            0.0,
+            v_line.color,
+        );
     }
     // Outside Low…High nothing is touched: shaded.
     let (low, high) = range(params);

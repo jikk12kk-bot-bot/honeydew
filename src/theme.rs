@@ -152,7 +152,10 @@ pub fn graph_grid(theme: &Theme, ppp: f32) -> (eframe::egui::Stroke, eframe::egu
     let (c, o) = (&theme.colors, &theme.options);
     (
         eframe::egui::Stroke::new(scaled_px(1.0, o.grid_thickness) / ppp, grid_ink(c)),
-        eframe::egui::Stroke::new(scaled_px(1.0, o.grid_horizontal_thickness) / ppp, grid_h_ink(c)),
+        eframe::egui::Stroke::new(
+            scaled_px(1.0, o.grid_horizontal_thickness) / ppp,
+            grid_h_ink(c),
+        ),
     )
 }
 

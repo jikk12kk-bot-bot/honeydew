@@ -44,7 +44,8 @@
 //! anyway). The panel clips everything to its module card.
 
 use eframe::egui::{
-    Align, Align2, Color32, Id, Painter, PointerButton, Pos2, Rect, Response, Sense, Ui, Vec2, WidgetInfo,
+    Align, Align2, Color32, Id, Painter, PointerButton, Pos2, Rect, Response, Sense, Ui, Vec2,
+    WidgetInfo,
 };
 
 use crate::metrics::{FontSize, Metrics};

@@ -634,7 +634,10 @@ fn paint_lines(painter: &Painter, l: &Layout, sig: TimeSig, cx: &UiCtx) {
     // The gap before each boundary is 1 px; a line w px wide covers it and reaches ⌊(w − 1)/2⌋ px past it.
     let start = |b: f32, w: f32| b - (((w + 1.0) / 2.0).floor()) * px;
     let ys = l.row_top() + rows.start as f32 * l.pitch..=l.row_top() + rows.end as f32 * l.pitch;
-    let (d, bar) = (sig.steps_per_beat() as usize, (sig.steps_per_beat() * sig.bar_beats()) as usize);
+    let (d, bar) = (
+        sig.steps_per_beat() as usize,
+        (sig.steps_per_beat() * sig.bar_beats()) as usize,
+    );
     let ink = crate::theme::grid_ink(colors);
     let steps = l.visible_steps();
     for step in steps.start.max(1)..=steps.end {
@@ -660,7 +663,11 @@ fn paint_lines(painter: &Painter, l: &Layout, sig: TimeSig, cx: &UiCtx) {
     let h_ink = crate::theme::grid_h_ink(colors);
     for row in rows.start.max(1)..=rows.end {
         let y = start(l.snap(l.row_top() + row as f32 * l.pitch), h);
-        painter.rect_filled(Rect::from_x_y_ranges(xs.clone(), y..=y + h * px), 0.0, h_ink);
+        painter.rect_filled(
+            Rect::from_x_y_ranges(xs.clone(), y..=y + h * px),
+            0.0,
+            h_ink,
+        );
     }
 }
 

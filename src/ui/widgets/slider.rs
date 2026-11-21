@@ -277,5 +277,9 @@ fn value_above(
         Align::Max => (track.right(), Align2::RIGHT_BOTTOM),
     };
     let rect = anchor.anchor_size(pos2(x, bottom), galley.size());
-    painter.galley(pos2(m.round_px(rect.left()), m.round_px(rect.top())), galley, c.channel);
+    painter.galley(
+        pos2(m.round_px(rect.left()), m.round_px(rect.top())),
+        galley,
+        c.channel,
+    );
 }

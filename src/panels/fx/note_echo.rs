@@ -331,7 +331,11 @@ fn train(
     painter.rect_filled(rect, 0.0, fill);
     // 2. and 3., in the theme's grid ([`crate::theme::graph_grid`]).
     let (v_line, h_line) = crate::theme::graph_grid(cx.theme, m.ppp());
-    for x in train.time_lines(m).into_iter().filter(|_| v_line.width > 0.0) {
+    for x in train
+        .time_lines(m)
+        .into_iter()
+        .filter(|_| v_line.width > 0.0)
+    {
         let x = m.floor_px(x);
         let line = Rect::from_x_y_ranges(x..=x + v_line.width, plot.y_range());
         painter.rect_filled(line, 0.0, v_line.color);

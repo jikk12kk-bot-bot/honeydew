@@ -122,8 +122,7 @@ pub fn panel() -> Option<Panel> {
         .show(Show::Tab(5)),
         // Honeydew's own: every Analyzer's switches, not this module's settings.
         hstack([display(GLOBALS).draw(global_switches)]).show(Show::Tab(6)),
-        tabs(19, TAB_NAMES)
-        .h(Size::U(1.25)),
+        tabs(19, TAB_NAMES).h(Size::U(1.25)),
     ])))
 }
 
@@ -165,7 +164,10 @@ fn global_switches(
     let mut changed = false;
     for (i, ((label, tip), value)) in SWITCHES.iter().zip(&mut values).enumerate() {
         let top = inner.top() + i as f32 * (SWITCH_H + ABOUT_H) * u;
-        let rect = Rect::from_min_size(pos2(inner.left(), top), vec2(inner.width() / 2.0, SWITCH_H * u));
+        let rect = Rect::from_min_size(
+            pos2(inner.left(), top),
+            vec2(inner.width() / 2.0, SWITCH_H * u),
+        );
         let c = widgets::Control {
             menu: widgets::ParamMenu::Unbound,
             ..widgets::Control::new(id.with(i), rect, label, ink, 1.0)
@@ -179,8 +181,11 @@ fn global_switches(
         changed |= *value != before;
         crate::ui::tooltip::tip(ui, rect, tip, None);
         let font = m.font_id(crate::metrics::FontSize::Pt8);
-        let about = ui.painter().layout(tip.to_string(), font, ink, inner.width());
-        ui.painter().galley(pos2(inner.left(), rect.bottom() + 0.15 * u), about, ink);
+        let about = ui
+            .painter()
+            .layout(tip.to_string(), font, ink, inner.width());
+        ui.painter()
+            .galley(pos2(inner.left(), rect.bottom() + 0.15 * u), about, ink);
     }
     if changed {
         analysis::set_analyzer_options(values[0] != 0.0, values[1] != 0.0);
@@ -1892,7 +1897,10 @@ pub const REFERENCE: Reference = Reference {
         Case {
             name: "GLOBAL",
             tab: 6,
-            rows: &[row(GLOBALS, Widget::Display, "", [0.0, 0.0, 14.0, 6.74]), TABS],
+            rows: &[
+                row(GLOBALS, Widget::Display, "", [0.0, 0.0, 14.0, 6.74]),
+                TABS,
+            ],
             ..Case::DEFAULT
         },
     ],
