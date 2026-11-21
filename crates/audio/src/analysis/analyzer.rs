@@ -19,9 +19,15 @@
 //!   LUFS momentary (0.4 s) and short-term (3 s) of BS.1770's K-weighted channel sum. Integrated loudness gates the
 //!   momentary values (−70 LUFS, then −10 LU) and the loudness range the short-term ones (−70, then −20 LU; 10th to 95th
 //!   percentile), each through a histogram of 0.1 LU bins from −70 to +10 LUFS, so they run in fixed memory.
-//! - The pitch track takes the Tuner's detector's last reading for each 50 ms entry.
+//! - The pitch track takes the Tuner's detector's last reading for each 50 ms entry; with Settings `Light pitch
+//!   tracking` the detector reads once an entry.
+//! - With Settings `Pause hidden analyzers`, half a second after the app last drew an Analyzer's panel the display's
+//!   work stops (the spectrum's FFT, the oscilloscope, the vectorscope with its interferometer, the pitch track) until
+//!   one is drawn again; the loudness meter runs on.
 
-use super::{Correlation, Detector, PETAL_BINS, Petal};
+use std::sync::atomic::Ordering;
+
+use super::{ANALYZER_DRAWN, Correlation, Detector, LIGHT_PITCH, PETAL_BINS, Petal, SKIP_HIDDEN};
 use crate::biquad::flush;
 
 /// FFT size and its bins.
@@ -251,7 +257,17 @@ pub(super) struct Analyzer {
     // Pitch.
     detector: Detector,
     pitch: f32,
+    // The display's work ([`Self::check`]): on, the frames since the last check, the panel draws as last seen and
+    // the frames since they last moved.
+    shown: bool,
+    since_check: usize,
+    drawn: u32,
+    undrawn: usize,
 }
+
+/// The frames between two looks at the app's panel draws and the options, and how long without a draw hides it.
+const CHECK: usize = 512;
+const HIDE_AFTER_S: f32 = 0.5;
 
 impl Analyzer {
     pub(super) fn new(sample_rate: f32) -> Self {
@@ -305,7 +321,29 @@ impl Analyzer {
             correlation: Correlation::default(),
             detector: Detector::new(sample_rate),
             pitch: 0.0,
+            shown: true,
+            since_check: 0,
+            drawn: ANALYZER_DRAWN.load(Ordering::Relaxed),
+            undrawn: 0,
         }
+    }
+
+    /// Every [`CHECK`] frames: whether the display's work runs (a panel drew within [`HIDE_AFTER_S`], or Settings
+    /// `Pause hidden analyzers` is off), and how often the pitch detector reads.
+    fn check(&mut self) {
+        self.since_check = 0;
+        let drawn = ANALYZER_DRAWN.load(Ordering::Relaxed);
+        if drawn == self.drawn {
+            self.undrawn = self.undrawn.saturating_add(CHECK);
+        } else {
+            (self.drawn, self.undrawn) = (drawn, 0);
+        }
+        let hide_after = (HIDE_AFTER_S / 0.05 * self.entry as f32) as usize;
+        self.shown = !SKIP_HIDDEN.load(Ordering::Relaxed) || self.undrawn < hide_after;
+        self.detector.hop = match LIGHT_PITCH.load(Ordering::Relaxed) {
+            true => self.entry.max(Detector::HOP),
+            false => Detector::HOP,
+        };
     }
 
     /// Back to rest: nothing heard. The settings stay.
@@ -391,6 +429,10 @@ impl Analyzer {
             1 => r,
             _ => 0.5 * (l + r),
         };
+        self.since_check += 1;
+        if self.since_check >= CHECK {
+            self.check();
+        }
         // Spectrum.
         self.ring[self.written] = mono;
         self.written = (self.written + 1) % FFT;
@@ -398,8 +440,18 @@ impl Analyzer {
         self.since_fft += 1;
         if self.since_fft >= FFT / 2 && self.filled {
             self.since_fft = 0;
-            self.spectrum(&mut slab[SPECTRUM_AT..SPECTRUM_AT + BINS]);
+            if self.shown {
+                self.spectrum(&mut slab[SPECTRUM_AT..SPECTRUM_AT + BINS]);
+            }
         }
+        if self.shown {
+            self.display(slab, (l, r), mono);
+        }
+        self.loudness(slab, mono);
+    }
+
+    /// The oscilloscope, the vectorscope with its interferometer and the pitch, of one conditioned frame.
+    fn display(&mut self, slab: &mut [f32], (l, r): (f32, f32), mono: f32) {
         // Oscilloscope.
         self.low = self.low.min(mono);
         self.high = self.high.max(mono);
@@ -412,7 +464,21 @@ impl Analyzer {
             slab[SCOPE_AT] = ((next + 1) % SCOPE) as f32;
             (self.in_bucket, self.low, self.high) = (0, f32::INFINITY, f32::NEG_INFINITY);
         }
-        // Loudness.
+        // Vectorscope, interferometer, pitch.
+        self.petal
+            .frame(&mut slab[PETAL_AT..CORRELATION_AT], (l, r));
+        if let Some(c) = self.correlation.frame((l, r)) {
+            let next = slab[CORRELATION_AT] as usize % CORRELATIONS;
+            slab[CORRELATION_AT + 1 + next] = c;
+            slab[CORRELATION_AT] = ((next + 1) % CORRELATIONS) as f32;
+        }
+        if let Some(hz) = self.detector.frame(mono) {
+            self.pitch = hz;
+        }
+    }
+
+    /// The loudness meters of one source sample, and the 50 ms entries.
+    fn loudness(&mut self, slab: &mut [f32], mono: f32) {
         let x = f64::from(mono);
         let [a, b, c] = self.last;
         self.true_peak = self.true_peak.max(x.abs());
@@ -432,17 +498,6 @@ impl Analyzer {
         let [shelf, high_pass] = &mut self.k;
         let weighted = high_pass.run(shelf.run(x));
         self.k_energy += 2.0 * weighted * weighted;
-        // Vectorscope, interferometer, pitch.
-        self.petal
-            .frame(&mut slab[PETAL_AT..CORRELATION_AT], (l, r));
-        if let Some(c) = self.correlation.frame((l, r)) {
-            let next = slab[CORRELATION_AT] as usize % CORRELATIONS;
-            slab[CORRELATION_AT + 1 + next] = c;
-            slab[CORRELATION_AT] = ((next + 1) % CORRELATIONS) as f32;
-        }
-        if let Some(hz) = self.detector.frame(mono) {
-            self.pitch = hz;
-        }
         self.in_entry += 1;
         if self.in_entry == self.entry {
             self.entry_done(slab);

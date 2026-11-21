@@ -6,7 +6,8 @@
 //!   of that name left there, which goes into the bin unless it still holds the archive's files ([`bin_earlier`]),
 //!   and the song opens with the `.zip` as its path and the zip name as its title. Its `@L@` paths whose files the
 //!   archive holds now lead into that folder ([`relink`]), so the song plays them, and
-//!   still does once saved and opened again.
+//!   still does once saved and opened again. A song opened from that folder, or below it, is relinked to it the same
+//!   way (#157).
 //! - Any other archive's known files ([`import_folder`]) are counted: none is a message, some ask `Import %d files?`,
 //!   and `Yes` copies them into their user folders by type, in the archive's folders there, `name (2)` and so on on a
 //!   clash, then sums up how many went where. No delete-archive question.
@@ -15,7 +16,11 @@
 //!   folder's own name (`Drums/Kit/Kick.wav`: `My Samples/Drums/Kit/Kick.wav`). `Yes` only routes the files; the
 //!   provider copies them off the UI thread ([`super::FileProvider::copy`]), which a big folder needs, and `Imported %d
 //!   file%s` shows once it is done.
+//! - Issue #128 (a Honeydew change): an archive too large to read whole ([`MAX_FILE_BYTES`]) opens from disk instead
+//!   ([`OnDisk`], not on the web): checked as one read whole is, then each file streamed out of it as it is written,
+//!   never the archive whole. Its import copies the files out on a worker, as a picked folder's are.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -102,12 +107,17 @@ pub(super) fn earlier_in_bin(dir: &Path) -> String {
 }
 
 /// `dir` holds exactly `entries`, what extracting them would make: every file listed in it is one of them (so a
-/// smaller archive leaves nothing of a bigger one), and each of them is there with the same bytes, read by its path
-/// (so a hidden entry, `.DS_Store` or `__MACOSX/._*`, which the listing leaves out, counts too). Never so through a
-/// link (`dir`, or the folder it is in). The listing is compared first, so a file added reads nothing; the archive
-/// has no CRC of a file cheaper than its bytes, as a CRC of the file on disk would read it whole too. A hidden file
-/// or link the user put in `dir` stays, as `dir` is kept.
-fn holds(lib: &dyn SongLibrary, dir: &Path, entries: &[Entry]) -> bool {
+/// smaller archive leaves nothing of a bigger one), and each of them is there with the same bytes (`same`, given the
+/// entry and the file at its path; so a hidden entry, `.DS_Store` or `__MACOSX/._*`, which the listing leaves out,
+/// counts too). Never so through a link (`dir`, or the folder it is in). The listing is compared first, so a file
+/// added reads nothing; the archive has no CRC of a file cheaper than its bytes, as a CRC of the file on disk would
+/// read it whole too. A hidden file or link the user put in `dir` stays, as `dir` is kept.
+fn holds(
+    lib: &dyn SongLibrary,
+    dir: &Path,
+    entries: &[Entry],
+    same: impl Fn(&Entry, &Path) -> bool,
+) -> bool {
     if lib.is_link(dir) || dir.parent().is_some_and(|top| lib.is_link(top)) {
         return false;
     }
@@ -129,7 +139,98 @@ fn holds(lib: &dyn SongLibrary, dir: &Path, entries: &[Entry]) -> bool {
     let mut want: Vec<PathBuf> = entries.iter().map(|e| dir.join(&e.path)).collect();
     want.sort();
     files.iter().all(|f| want.binary_search(f).is_ok())
-        && (entries.iter()).all(|e| lib.read(&dir.join(&e.path)).is_ok_and(|b| b == e.data))
+        && (entries.iter()).all(|e| same(e, &dir.join(&e.path)))
+}
+
+/// The bytes of `entry` read by its path `file` from `lib` are its own.
+fn same_in(lib: &dyn SongLibrary, entry: &Entry, file: &Path) -> bool {
+    lib.read(file).is_ok_and(|b| b == entry.data)
+}
+
+/// Issue #128 (a Honeydew change): what an archive streamed from disk ([`OnDisk`]) may unpack to in all, a bound on the
+/// disk it fills, as [`MAX_FILE_BYTES`] bounds the memory an archive read whole takes. The ratio cap applies too.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_STREAMED_BYTES: u64 = 16 << 30;
+
+/// Issue #128 (a Honeydew change): an archive too large to read whole ([`MAX_FILE_BYTES`]), opened from disk: its
+/// directory checked as [`zip::read`] checks an archive's ([`zip::scan`]), each file streamed out of it as it is
+/// written or read ([`zip::stream`]), never the archive whole.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) struct OnDisk {
+    pub(super) path: PathBuf,
+    files: Vec<zip::Listed>,
+    /// Each file's index in `files`, by its path.
+    index: HashMap<String, usize>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl OnDisk {
+    /// The archive at `path`, read from `file`, opened there.
+    pub(super) fn scan(path: &Path, file: &std::fs::File) -> Result<Self, ZipError> {
+        let files = zip::scan(file, MAX_STREAMED_BYTES)?;
+        let index = (files.iter().enumerate())
+            .map(|(i, f)| (f.path.clone(), i))
+            .collect();
+        Ok(Self {
+            path: path.to_owned(),
+            files,
+            index,
+        })
+    }
+
+    /// Its files as [`zip::read`] gives them, with no bytes: they stream from disk when needed.
+    fn entries(&self) -> Vec<Entry> {
+        let entry = |f: &zip::Listed| Entry {
+            path: f.path.clone(),
+            data: Vec::new(),
+        };
+        self.files.iter().map(entry).collect()
+    }
+
+    fn listed(&self, name: &str) -> io::Result<&zip::Listed> {
+        let at = self.index.get(name).ok_or(io::ErrorKind::NotFound)?;
+        Ok(&self.files[*at])
+    }
+
+    /// Its file `name` whole, up to [`MAX_FILE_BYTES`]: a song, a sample to decode.
+    fn read(&self, name: &str) -> Result<Vec<u8>, String> {
+        let at = |e: io::Error| format!("{name}: {e}");
+        let archive = std::fs::File::open(&self.path).map_err(at)?;
+        let bytes = zip::stream(&archive, self.listed(name).map_err(at)?).map_err(at)?;
+        super::read_limited(bytes, MAX_FILE_BYTES).map_err(|e| format!("{name}: {e}"))
+    }
+
+    /// Writes its file `name` into `out` as it streams from `archive`, this archive's file.
+    pub(super) fn copy_to(
+        &self,
+        archive: &std::fs::File,
+        name: &str,
+        out: &mut std::fs::File,
+    ) -> io::Result<()> {
+        let mut out = io::BufWriter::with_capacity(1 << 20, out);
+        io::copy(&mut zip::stream(archive, self.listed(name)?)?, &mut out)?;
+        io::Write::flush(&mut out)
+    }
+
+    /// The file at `path` has the bytes of its file `name`: its size, and its CRC-32 read from disk, never inflated.
+    fn same(&self, name: &str, path: &Path) -> bool {
+        use std::io::Read;
+        let (Ok(listed), Ok(mut file)) = (self.listed(name), std::fs::File::open(path)) else {
+            return false;
+        };
+        if !file.metadata().is_ok_and(|m| m.len() == listed.size) {
+            return false;
+        }
+        let (mut hasher, mut buf) = (crc32fast::Hasher::new(), vec![0; 1 << 16]);
+        loop {
+            match file.read(&mut buf) {
+                Ok(0) => return hasher.finalize() == listed.crc,
+                Ok(n) => hasher.update(&buf[..n]),
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => return false,
+            }
+        }
+    }
 }
 
 /// `path` for a message: a deep one as its first 60 characters, `…` and its last 60.
@@ -142,6 +243,14 @@ fn shown(path: &Path) -> String {
     let head: String = full.chars().take(60).collect();
     let tail: String = full.chars().skip(n - 60).collect();
     format!("{head}…{tail}")
+}
+
+/// The message title of an archive `zip` cannot read.
+fn failed(err: ZipError) -> &'static str {
+    match err {
+        ZipError::NotZip => ARCHIVE_FAILED,
+        ZipError::Corrupt => DECOMPRESS_FAILED,
+    }
 }
 
 /// Every content path `song`'s samples come from that `map` maps (the sources `audio_engine::samples::walk` reads):
@@ -234,14 +343,66 @@ impl ProjectFiles {
     /// The archive's files; `None` once the message says why not (not a ZIP file, or a damaged or hostile one).
     pub(super) fn unzip(&mut self, bytes: &[u8]) -> Option<Vec<Entry>> {
         let read = zip::read(bytes, MAX_FILE_BYTES);
-        read.map_err(|err| {
-            let title = match err {
-                ZipError::NotZip => ARCHIVE_FAILED,
-                ZipError::Corrupt => DECOMPRESS_FAILED,
-            };
-            self.fail(title, err.to_string());
-        })
-        .ok()
+        read.map_err(|err| self.fail(failed(err), err.to_string()))
+            .ok()
+    }
+
+    /// [`Self::unzip`] of the archive at `path`, read as `bytes`. Issue #128: one too large to read whole (`bytes` empty,
+    /// [`Self::streams`]) is listed from disk instead, its files with no bytes: they stream from there when needed
+    /// ([`Self::data_of`], [`Self::extract`], [`Self::stream_import`]).
+    pub(super) fn unzip_file(&mut self, path: &Path, bytes: &[u8]) -> Option<Vec<Entry>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.streamed = None;
+            if bytes.is_empty() && self.streams(path) {
+                let file = std::fs::File::open(path);
+                let file = file.map_err(|e| (READ_FAILED, format!("{}: {e}", path.display())));
+                let scanned = file.and_then(|f| {
+                    OnDisk::scan(path, &f).map_err(|err| (failed(err), err.to_string()))
+                });
+                return match scanned {
+                    Ok(scanned) => {
+                        let entries = scanned.entries();
+                        self.streamed = Some(scanned);
+                        Some(entries)
+                    }
+                    Err((title, err)) => {
+                        self.fail(title, err);
+                        None
+                    }
+                };
+            }
+        }
+        let _ = path;
+        self.unzip(bytes)
+    }
+
+    /// The bytes of `entry`, one of the files [`Self::unzip_file`] gave: its own, or those of the archive's file it
+    /// streams from disk (#128).
+    pub(super) fn data_of<'a>(&self, entry: &'a Entry) -> Result<Cow<'a, [u8]>, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(on_disk) = self.streamed.as_ref().filter(|_| entry.data.is_empty()) {
+            return on_disk.read(&entry.path).map(Cow::Owned);
+        }
+        Ok(Cow::Borrowed(&entry.data))
+    }
+
+    /// Issue #128: the files of an archive streamed from disk whose import [`Self::ask_import`] asks go in as a picked
+    /// folder's do ([`FolderImport`]), copied out of the archive on a worker (a source `<archive>\0<path>`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn stream_import(&mut self) {
+        let Some(on_disk) = self.streamed.take() else {
+            return;
+        };
+        if self.importing.is_none() {
+            return;
+        }
+        let archive = on_disk.path.to_string_lossy();
+        let source = |f: &zip::Listed| (f.path.clone(), format!("{archive}\0{}", f.path));
+        self.folder = Some(FolderImport {
+            sources: on_disk.files.iter().map(source).collect(),
+            ..FolderImport::default()
+        });
     }
 
     /// Extracts `entries` into `<user>/Unzipped songs/<name of the .zip>/` and returns that folder, and whether an
@@ -274,7 +435,7 @@ impl ProjectFiles {
         }
         if self.copies {
             let files = &mut self.user_copies;
-            if holds(files, &dir, entries) {
+            if holds(files, &dir, entries, |e, file| same_in(files, e, file)) {
                 return Ok((dir, false));
             }
             let binned = files.exists(&dir);
@@ -297,12 +458,26 @@ impl ProjectFiles {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let mut lib = crate::ui::main_menu::NativeLibrary::user_folder(user);
-            if holds(&lib, &dir, entries) {
+            // Issue #128: an archive streamed from disk is compared and written file by file from there.
+            let streamed = (self.streamed.take())
+                .filter(|on_disk| on_disk.path == zip)
+                .map(|on_disk| std::fs::File::open(zip).map(|file| (on_disk, file)))
+                .transpose()
+                .map_err(|e| format!("{}: {e}", shown(zip)))?;
+            let same = |e: &Entry, file: &Path| match &streamed {
+                Some((on_disk, _)) => on_disk.same(&e.path, file),
+                None => same_in(&lib, e, file),
+            };
+            if holds(&lib, &dir, entries, same) {
                 return Ok((dir, false));
             }
             // A link there is removed, not binned.
             let binned = lib.exists(&dir) && !lib.is_link(&dir);
-            extract_on_disk(&top, &staging, &dir, entries, |dir| {
+            let write = |e: &Entry, out: &mut std::fs::File| match &streamed {
+                Some((on_disk, archive)) => on_disk.copy_to(archive, &e.path, out),
+                None => io::Write::write_all(out, &e.data),
+            };
+            extract_on_disk(&top, &staging, &dir, entries, write, |dir| {
                 bin_earlier(&mut lib, dir)
             })?;
             Ok((dir, binned))
@@ -318,13 +493,17 @@ impl ProjectFiles {
     /// again ([`Self::library_changes`]). A file that is gone, no archive or a damaged one, or a folder that cannot be
     /// written, shows its message as opening one does.
     pub fn unzip_archive(&mut self, path: &Path) {
-        // ponytail: runs on the UI thread, like `Open`: reading, inflating and writing up to MAX_FILE_BYTES can stall
-        // the frame. Upgrade: do it on a worker and report with a `FileEvent`.
-        let bytes = match self.library.read(path) {
+        // ponytail: runs on the UI thread, like `Open`: reading, inflating and writing up to MAX_FILE_BYTES (any size
+        // streamed, #128) can stall the frame. Upgrade: do it on a worker and report with a `FileEvent`.
+        let read = match self.streams(path) {
+            true => Ok(Vec::new()),
+            false => self.library.read(path),
+        };
+        let bytes = match read {
             Ok(bytes) => bytes,
             Err(err) => return self.fail(READ_FAILED, format!("{}: {err}", path.display())),
         };
-        let Some(entries) = self.unzip(&bytes) else {
+        let Some(entries) = self.unzip_file(path, &bytes) else {
             return;
         };
         match self.extract(path, &entries) {
@@ -339,6 +518,15 @@ impl ProjectFiles {
             }
             Err(err) => self.fail(DECOMPRESS_FAILED, err),
         }
+    }
+
+    /// The folder `Unzipped songs/<name>/` an archive was extracted into that the file `path` is in, or below it.
+    pub(super) fn extracted_dir(&self, path: &Path) -> Option<PathBuf> {
+        let top = self.user.as_ref()?.join(UNZIPPED_FOLDER);
+        let mut inside = path.strip_prefix(&top).ok()?.components();
+        let name = inside.next()?;
+        inside.next()?;
+        Some(top.join(name))
     }
 
     /// The song an archive extracted into `dir` gave: its `@L@` paths whose file `dir` holds at the same relative path
@@ -428,7 +616,12 @@ impl ProjectFiles {
         let (name, source) = (name.into_owned(), path.to_string_lossy().into_owned());
         if matches!(
             self.pick.take(),
-            Some(super::Pick::Sample | super::Pick::PluginPreset | super::Pick::Midi)
+            Some(
+                super::Pick::Sample
+                    | super::Pick::PluginPreset
+                    | super::Pick::Midi
+                    | super::Pick::Program
+            )
         ) {
             let Some(dir) = self.import_dir.take() else {
                 return self.fail(IMPORT_FAILED, path.display().to_string());
@@ -711,11 +904,11 @@ fn imported_lines(entries: &[Entry]) -> Vec<String> {
         .collect()
 }
 
-/// [`ProjectFiles::extract`] on disk. `top` must be no link, so that nothing is removed or written outside the user
-/// folder. `staging` is made new (one a crash left is removed first) and each file in it new, plainly: the folder is
-/// the extraction's own, so a file is no song to keep whole (no sync, no rename per file). Then `dir` goes into the
-/// bin through `bin` (a link there is removed, not what it points at) and `staging` is renamed to it; on any error
-/// `staging` goes and `dir` stays.
+/// [`ProjectFiles::extract`] on disk, each file's bytes written by `write`. `top` must be no link, so that nothing is
+/// removed or written outside the user folder. `staging` is made new (one a crash left is removed first) and each file
+/// in it new, plainly: the folder is the extraction's own, so a file is no song to keep whole (no sync, no rename per
+/// file). Then `dir` goes into the bin through `bin` (a link there is removed, not what it points at) and `staging` is
+/// renamed to it; on any error `staging` goes and `dir` stays.
 // ponytail: checked, then used by path: a process of the same user that swaps a folder on the way for a link between
 // the check and the write is followed. `openat` with `O_NOFOLLOW` from the user folder down would close it.
 #[cfg(not(target_arch = "wasm32"))]
@@ -724,10 +917,10 @@ fn extract_on_disk(
     staging: &Path,
     dir: &Path,
     entries: &[Entry],
+    write: impl Fn(&Entry, &mut std::fs::File) -> io::Result<()>,
     bin: impl FnOnce(&Path) -> Result<(), String>,
 ) -> Result<(), String> {
     use std::fs;
-    use std::io::Write;
     fn at(path: &Path) -> impl Fn(io::Error) -> String + '_ {
         move |e| format!("{}: {e}", shown(path))
     }
@@ -750,7 +943,7 @@ fn extract_on_disk(
             .write(true)
             .create_new(true)
             .open(&path);
-        file.and_then(|mut f| f.write_all(&entry.data))
+        file.and_then(|mut f| write(entry, &mut f))
             .map_err(at(&path))
     });
     let moved = written.and_then(|()| {
@@ -1562,7 +1755,7 @@ mod tests {
 
     /// Issue #91: a pick too large to read whole, of a type a user folder takes, is imported unread up to
     /// `MAX_IMPORT_BYTES`: copied on a worker as a picked folder's files are, into its user folder or a sample picker's
-    /// folder. A song or an archive that large is still refused, as is anything larger.
+    /// folder. A song that large is still refused, as is anything larger (an archive that large streams, #128).
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_pick_too_large_to_read_whole_is_imported_unread() {
@@ -1583,7 +1776,7 @@ mod tests {
             FileEvent::Picked(font)
         );
         assert!(matches!(
-            sized("Big.zip", MAX_FILE_BYTES + 1),
+            sized("Big.flm", MAX_FILE_BYTES + 1),
             FileEvent::Failed(..)
         ));
         assert!(matches!(
@@ -1964,6 +2157,32 @@ mod tests {
         (user, songs, files)
     }
 
+    /// Writes `zip` to `path` behind a hole of `hole` bytes, its offsets moved past it as a self-extracting archive's
+    /// are: a sparse file, so an archive that large is quick to make and takes no disk.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn sparse(path: &Path, zip: &[u8], hole: u64) {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut zip = zip.to_vec();
+        let u16_at = |z: &[u8], at: usize| usize::from(u16::from_le_bytes([z[at], z[at + 1]]));
+        let u32_at = |z: &[u8], at: usize| u32::from_le_bytes(z[at..at + 4].try_into().unwrap());
+        let shift = |z: &mut Vec<u8>, at: usize| {
+            let moved = u32_at(z, at) + u32::try_from(hole).unwrap();
+            z[at..at + 4].copy_from_slice(&moved.to_le_bytes());
+        };
+        // The writer adds no comment: the end record is the last 22 bytes. Each directory record's local header
+        // offset is at +42.
+        let end = zip.len() - 22;
+        let mut at = u32_at(&zip, end + 16) as usize;
+        while at < end {
+            shift(&mut zip, at + 42);
+            at += 46 + u16_at(&zip, at + 28) + u16_at(&zip, at + 30) + u16_at(&zip, at + 32);
+        }
+        shift(&mut zip, end + 16);
+        let mut file = std::fs::File::create(path).unwrap();
+        file.seek(SeekFrom::Start(hole)).unwrap();
+        file.write_all(&zip).unwrap();
+    }
+
     /// A hostile entry name makes the archive unreadable, so that `Unzip` writes nothing, not even beside the user
     /// folder, where `../` would lead.
     #[cfg(not(target_arch = "wasm32"))]
@@ -2324,4 +2543,5 @@ mod tests {
             assert_eq!(open(&mut files), None, "{cut}");
         }
     }
+
 }

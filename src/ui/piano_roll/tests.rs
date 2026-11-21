@@ -4157,11 +4157,11 @@ mod grid {
             paint_notes(
                 p,
                 g,
-                &events,
-                &[false],
+                (&events, &[false]),
                 &[],
                 Some(past),
                 (RED, (0, 0xFFF)),
+                None,
                 cx,
             );
         });
@@ -4173,27 +4173,27 @@ mod grid {
     }
 
     #[test]
-    fn a_note_off_the_project_scale_is_gray() {
-        // C major (0xAD5): C4 in the channel colour, C#4 in its gray.
+    fn a_note_off_the_project_scale_is_faded() {
+        // C major (0xAD5): C4 in the channel colour, C#4 in it faded.
         let events = [n(0, 128.0, 60), n(0, 128.0, 61)];
         let (rects, ..) = painted(1.0, &|p, _, g, cx| {
             paint_notes(
                 p,
                 g,
-                &events,
-                &[false, false],
+                (&events, &[false, false]),
                 &[],
                 None,
                 (RED, (0, 0xAD5)),
+                None,
                 cx,
             );
         });
-        let gray = crate::ui::piano_roll::gray(RED).to_color32();
+        let faded = RED.to_color32().gamma_multiply(crate::ui::piano_roll::OFF_SCALE_ALPHA);
         assert_eq!(
             rects.iter().map(|r| r.1).collect::<Vec<_>>(),
-            [RED.to_color32(), gray]
+            [RED.to_color32(), faded]
         );
-        assert_ne!(gray, RED.to_color32());
+        assert_ne!(faded, RED.to_color32());
     }
 
     #[test]

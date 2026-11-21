@@ -25,7 +25,8 @@ use crate::song::{ChannelKind, PPQ, Song};
 /// drift apart, and a late first block leaves a backlog too; this bounds the monitoring latency to about this plus one
 /// block. It must exceed the input and output callback periods together, or the reads keep skipping: 2048 frames is
 /// 43 ms at 48 kHz. Android's can be longer (its callbacks come in bursts where AAudio refuses its low-latency mode,
-/// and a Bluetooth output's always do): 8192 frames, 171 ms.
+/// and a Bluetooth output's always do): 8192 frames, 171 ms. A large output buffer raises it to twice the buffer (#145:
+/// a 4096-frame callback finds a buffer of input come in since the last).
 // ponytail: a fixed bound and a hard skip (one discontinuity per skip); a resampler would follow drift smoothly.
 pub const MONITOR_MAX_LAG_FRAMES: u64 = if cfg!(target_os = "android") {
     8192
@@ -253,8 +254,9 @@ impl Monitor {
     /// the call takes, is skipped first. Never allocates.
     fn read_block(&mut self, cursor: usize, total: usize) {
         let (rest, frames) = (total - cursor, (total - cursor).min(MAX_BLOCK));
-        let keep = MONITOR_MAX_LAG_FRAMES / 2 + rest as u64;
-        if self.reader.available() > MONITOR_MAX_LAG_FRAMES + rest as u64 {
+        let most = MONITOR_MAX_LAG_FRAMES.max(2 * u64::from(self.buffer));
+        let keep = most / 2 + rest as u64;
+        if self.reader.available() > most + rest as u64 {
             while self.reader.available() > keep {
                 let skip = (self.reader.available() - keep) as usize;
                 let take = skip.min(self.scratch.len());

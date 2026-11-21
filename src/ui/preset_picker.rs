@@ -60,6 +60,10 @@
 //!   listing, even with the search bar shown. The path's folders are joined with `/`.
 //!
 //! Every picker's rows are the side browsers' ([`crate::ui::search_bar::ROW_H`]).
+//!
+//! Honeydew change (#144, #155, #165): `My Files` ends in the library folders the user added on Android
+//! ([`crate::ui::main_menu::library::library_folders`]), after its own rows: places, never selected, and read-only
+//! inside, as a factory folder is. The search leaves them out.
 
 use std::cell::OnceCell;
 use std::cmp::Ordering;
@@ -303,6 +307,9 @@ pub struct PresetPicker {
     pending: Option<Place>,
     /// Where it keeps its place ([`Self::keep_place`]).
     place: Option<Id>,
+    /// The library folders, which `My Files` lists after its own rows, read-only (Honeydew change, #144, #155, #165:
+    /// [`crate::ui::main_menu::library::library_folders`]).
+    roots: Vec<SongEntry>,
 }
 
 /// Where a picker was left: its folders open and its scroll.
@@ -358,6 +365,7 @@ impl PresetPicker {
             scrolls: HashMap::new(),
             pending: None,
             place: None,
+            roots: crate::ui::main_menu::library::library_rows(),
         }
     }
 
@@ -596,7 +604,8 @@ impl PresetPicker {
 
     /// Issue #98: the preset `by` (−1 or 1) rows on from the file `current`, among the presets of the folder it is listed
     /// in ([`Self::reveal`]), round and round, in the order the rows show. From `None` (`Default`), or a file no folder
-    /// lists, the first (`by` > 0) or last preset of the root's first folder. `None` when there is no other to go to.
+    /// lists, the first (`by` > 0) or last preset of the root's first folder (Honeydew change, #149: `My Files` where
+    /// the root has none, a plugin's picker). `None` when there is no other to go to.
     pub fn step(
         &mut self,
         library: &dyn SongLibrary,
@@ -616,10 +625,18 @@ impl PresetPicker {
             }
             None => {
                 self.folders.clear();
-                let first = self.rows("").into_iter().find_map(|item| match item {
-                    Item::Entry(e) if e.is_folder => Some(e.clone()),
-                    _ => None,
-                })?;
+                let rows = self.rows("");
+                let first = (rows.iter())
+                    .find_map(|item| match item {
+                        Item::Entry(e) if e.is_folder => Some((*e).clone()),
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        rows.iter().find_map(|item| match item {
+                            Item::MyFiles(Some(dir)) => Some(folder(MY_FILES, dir)),
+                            _ => None,
+                        })
+                    })?;
                 self.listing = Some(self.read_open(library, &first.path));
                 self.folders.push(first);
                 let presets = self.presets();
@@ -700,6 +717,17 @@ impl PresetPicker {
         plays.extend(strip.take_plays());
         self.panel.sample = Some(strip);
         self.held_plays = plays;
+    }
+
+    /// The sample strip's sample decoded further ([`SampleStrip::grow`]).
+    pub fn grow_sample(
+        &mut self,
+        wave: Option<crate::sample_cache::Waveform>,
+        whole: Option<usize>,
+    ) {
+        if let Some(strip) = &mut self.panel.sample {
+            strip.grow(wave, whole);
+        }
     }
 
     /// The name the sample strip shows, if it shows one.
@@ -846,8 +874,8 @@ impl PresetPicker {
         let header = self.header();
         let back = !self.folders.is_empty() || self.nested;
         let mut buttons = vec![SideButton::Search];
-        // The user's presets only: a factory folder is read-only.
-        let mine = back && !self.in_factory();
+        // The user's presets only: a factory folder and the library folders are read-only.
+        let mine = back && !self.in_factory() && !self.in_library_folder();
         let instruments = self.categories.is_some();
         // The Instruments picker shows them inside `My Files` only.
         if actions && (mine || !instruments) {
@@ -901,8 +929,10 @@ impl PresetPicker {
                 .collect()
         });
         let selecting = mine && self.selection.is_some();
+        // A library folder's row is a place: never selected.
+        let place = |e: &SongEntry| self.roots.contains(e);
         let path_of = |item: Item| match item {
-            Item::Entry(e) => Some(e.path.clone()),
+            Item::Entry(e) if !place(e) => Some(e.path.clone()),
             Item::Found(f) => Some(f.entry.path.clone()),
             _ => None,
         };
@@ -924,7 +954,7 @@ impl PresetPicker {
             PanelClick::Row(Item::Shortcut(shortcut)) => Go::Open(shortcut.entry.clone()),
             PanelClick::Row(Item::Bin(path)) => Go::Open(folder(RECENTLY_DELETED, path)),
             PanelClick::Row(Item::Default) => Go::Pick(None, Vec::new()),
-            PanelClick::Row(Item::Entry(e)) if selecting => Go::Toggle(e.path.clone()),
+            PanelClick::Row(Item::Entry(e)) if selecting && !place(e) => Go::Toggle(e.path.clone()),
             PanelClick::Row(Item::Entry(e)) if e.is_folder => Go::Open(e.clone()),
             PanelClick::Row(Item::Entry(e)) => Go::Pick(Some(e.path.clone()), Vec::new()),
             PanelClick::Row(Item::Found(f)) if selecting => Go::Toggle(f.entry.path.clone()),
@@ -1163,6 +1193,17 @@ impl PresetPicker {
         }
     }
 
+    /// `My Files` is the open folder.
+    fn in_my_files(&self) -> bool {
+        matches!(&self.folders[..], [open] if Some(&open.path) == self.my_files.as_ref())
+    }
+
+    /// The open folder is a library folder, or one inside it: read-only.
+    fn in_library_folder(&self) -> bool {
+        let open = self.folders.last();
+        open.is_some_and(|f| self.roots.iter().any(|r| f.path.starts_with(&r.path)))
+    }
+
     /// The open folder is a factory folder, or one inside it, or a category: read-only.
     fn in_factory(&self) -> bool {
         let first = self.folders.first().map(|f| &f.path);
@@ -1355,7 +1396,15 @@ impl PresetPicker {
                 (b.is_folder.cmp(&a.is_folder)).then_with(|| natural(&a.name, &b.name))
             });
         }
-        rows.into_iter().map(Item::Entry).collect()
+        // `My Files` ends in the library folders.
+        let lower = query.to_lowercase();
+        let roots = (self
+            .in_my_files()
+            .then_some(&self.roots)
+            .into_iter()
+            .flatten())
+        .filter(|e| e.name.to_lowercase().contains(&lower));
+        rows.into_iter().chain(roots).map(Item::Entry).collect()
     }
 
     /// The rows' names, for `query`, once the folders `path` are opened from the root one by one, as clicks would.

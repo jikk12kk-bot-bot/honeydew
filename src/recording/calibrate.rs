@@ -33,13 +33,18 @@ pub fn succeeded(samples: u32, rate: u32) -> String {
 const TONE_HZ: f64 = 4000.0;
 /// Input louder than this in the second second of silence is noise.
 const NOISE: f32 = 0.1;
-/// Input louder than this during the tone is its echo.
+/// Input louder than this during the tone is its echo, whatever the room.
 const ECHO: f32 = 0.2;
+/// Honeydew change (#129): the echo threshold is the second second's loudest input times this (+12 dB), so that a quiet
+/// mic's echo counts once it rises clearly over its room; at least [`LEAST_ECHO`] (−40 dBFS), at most [`ECHO`].
+const RISE: f32 = 4.0;
+const LEAST_ECHO: f32 = 0.01;
 
 /// One latency measurement at Fs = `rate`: Fs samples of silence; Fs more, failing with noise on any input sample above
 /// 0.1; then cos(2πφ) at amplitude 1, φ from 0 advancing 4000/Fs a sample and wrapped to 0–1, with a counter from 0 on
-/// its first sample. The first input sample above 0.2 succeeds with the counter before that sample counts; the counter
-/// reaching Fs times out. Allocates nothing.
+/// its first sample. The first input sample above the echo threshold succeeds with the counter before that sample
+/// counts; the counter reaching Fs times out. The threshold is 0.2, or less over a quiet room (Honeydew
+/// change, #129: 4 × the second second's loudest input, at least 0.01). Allocates nothing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ping {
     rate: u32,
@@ -48,6 +53,8 @@ pub struct Ping {
     /// Samples into a silent phase, or the tone's counter.
     n: u32,
     phi: f64,
+    /// The loudest input of the second second of silence: the room the echo must rise over.
+    room: f32,
     result: Option<Result<u32, Failure>>,
 }
 
@@ -58,6 +65,7 @@ impl Ping {
             phase: 0,
             n: 0,
             phi: 0.0,
+            room: 0.0,
             result: None,
         }
     }
@@ -85,6 +93,9 @@ impl Ping {
                     self.result = Some(Err(Failure::Noise));
                     return 0.0;
                 }
+                if self.phase == 1 {
+                    self.room = self.room.max(x.abs());
+                }
                 self.n += 1;
                 if self.n == fs {
                     (self.phase, self.n) = (self.phase + 1, 0);
@@ -95,7 +106,7 @@ impl Ping {
                 let y = (std::f64::consts::TAU * self.phi).cos() as f32;
                 self.phi += TONE_HZ / f64::from(fs);
                 self.phi -= self.phi.floor();
-                if x.abs() > ECHO {
+                if x.abs() > (RISE * self.room).clamp(LEAST_ECHO, ECHO) {
                     self.result = Some(Ok(self.n));
                 } else {
                     self.n += 1;
@@ -189,10 +200,11 @@ mod tests {
 
     #[test]
     fn no_echo_within_fs_tone_samples_times_out_and_no_input_is_the_unknown_error() {
-        // Exactly 0.2 is no echo: the counter reaches Fs on the tone's Fs-th sample.
+        // Exactly the threshold is no echo (over a silent room its least, 0.01): the counter reaches Fs on the tone's
+        // Fs-th sample.
         let mut ping = Ping::new(RATE);
         let silence = std::iter::repeat_n(0.0, 2 * RATE as usize);
-        let (out, result) = run(&mut ping, silence.chain(std::iter::repeat(0.2)));
+        let (out, result) = run(&mut ping, silence.chain(std::iter::repeat(LEAST_ECHO)));
         assert_eq!(result, Some(Err(Failure::Timeout)));
         assert_eq!(out.len(), 3 * RATE as usize);
         // An echo on the last sample before that still counts.

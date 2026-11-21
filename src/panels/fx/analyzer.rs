@@ -612,6 +612,8 @@ impl Graphs {
     /// The analysis `view` draws: the rack's latest, or while frozen what it held.
     fn data(&mut self, view: View, ui: &Ui, module: &ModuleInstance) -> Option<AnalyzerView> {
         let graph = &mut self.graphs[view as usize];
+        // Its display's work runs while a panel draws (Settings `Pause hidden analyzers`).
+        honeydew_audio::analysis::analyzer_drawn();
         if !graph.frozen {
             graph.held = live_analysis(ui, module.instance_id);
             graph.at = ui.input(|i| i.time);

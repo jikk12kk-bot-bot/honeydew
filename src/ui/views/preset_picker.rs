@@ -379,7 +379,7 @@ pub(super) const WORKER_LOST: &str = "The file could not be loaded.";
 /// Runs `job` on a worker thread; on the web, which has none, at once. The sample picker's picks decode here too.
 // ponytail: no cancellation. A pick replaced or closed while it loads still runs to its end and its result is dropped
 // (`state.loading = None`); that is bounded by `MAX_FILE_BYTES` for the file and `MAX_FRAMES` of decoded samples.
-// Add a shared `AtomicBool` the decoder polls if abandoned picks ever pile up.
+// Only a sample pick's own decode stops (`sample_picker::Decoding`, #153); do the same here if abandoned picks pile up.
 pub(super) fn spawn<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> Receiver<T> {
     let (tx, rx) = mpsc::channel();
     #[cfg(test)]
@@ -625,7 +625,10 @@ pub fn show(
                 app.files.import_plugin_preset(dir);
             }
         } else if let Some(dir) = module_type.and_then(|t| import_dir(app.files, t)) {
-            app.files.import_audio(dir);
+            match module_type {
+                Some(DW) => app.files.import_program(dir),
+                _ => app.files.import_audio(dir),
+            }
         }
         return None;
     }
@@ -1225,7 +1228,7 @@ fn start(
                 type_id == THREE_OSC,
             );
             spawn(move || {
-                let decoded = sample_picker::decode_pick(key, Ok(bytes), shape, into);
+                let decoded = sample_picker::decode_pick(key, Ok(bytes), shape, into, None);
                 Done {
                     picked: Picked::Sample(decoded.wave),
                     samples: decoded.samples,

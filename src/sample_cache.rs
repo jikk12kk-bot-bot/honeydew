@@ -440,6 +440,13 @@ impl SampleCache {
         }
     }
 
+    /// `sample`, decoded already (a pick's, whose parts streamed to its preview), as `key`'s, under the budget as a
+    /// decode's: `None`, or one over it, is missing. A load then decodes it no more.
+    pub fn put(&mut self, key: SampleKey, sample: Option<Arc<SampleData>>) {
+        let sample = sample.filter(|s| pcm_bytes(s) <= self.room());
+        self.samples.insert(key, sample);
+    }
+
     /// Decodes `slot`'s sample and renders its `STR1` stretch and pitch ([`Refs::add_slot`]): a picked clip sample, on a
     /// worker's cache.
     pub fn render_slot(&mut self, slot: &SamplerSlot, read: &Reader<'_>) {

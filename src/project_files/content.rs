@@ -24,6 +24,7 @@ use std::path::{Component, Path, PathBuf};
 use super::ProjectFiles;
 use crate::flm::chunk::{ContentPath, ContentRoot};
 use crate::song::ModuleInstance;
+use crate::ui::main_menu::library::library_root_of;
 
 /// The folder's name, in the user folder.
 pub const CONTENT_FOLDER: &str = "Original Content";
@@ -247,7 +248,7 @@ impl ProjectFiles {
             (ContentRoot::App, self.content_dir()),
             (ContentRoot::User, self.user.clone()),
         ];
-        roots.into_iter().find_map(|(root, dir)| {
+        let found = roots.into_iter().find_map(|(root, dir)| {
             let dir = dir?;
             let relative = path.strip_prefix(&dir).ok()?;
             let parts: Vec<_> = relative.iter().map(|p| p.to_string_lossy()).collect();
@@ -256,8 +257,25 @@ impl ProjectFiles {
                 relative: parts.join("/"),
             };
             (!parts.is_empty()).then_some((shorthand, dir))
+        });
+        // Honeydew change (#144): a file in a library folder by its own path, named from the folder's name down.
+        found.or_else(|| {
+            let root = library_root_of(path).filter(|root| root != path)?;
+            let text = path.to_string_lossy().replace('\\', "/");
+            Some((ContentPath::Plain(text), root.parent()?.to_owned()))
         })
     }
+}
+
+/// A file a song names by its own path (`ContentPath::Plain`): only one in a library folder (Honeydew change, #144,
+/// [`library_root_of`]), absolute and with no `..` on the way.
+fn library_file(path: &ContentPath) -> Option<PathBuf> {
+    let ContentPath::Plain(text) = path else {
+        return None;
+    };
+    let path = PathBuf::from(text);
+    let clean = path.is_absolute() && !path.components().any(|c| c == Component::ParentDir);
+    (clean && library_root_of(&path).is_some()).then_some(path)
 }
 
 /// [`ProjectFiles::resolve`] for the roots `user` and `content` (the content folder; none on the web): all it needs of
@@ -268,7 +286,7 @@ pub(crate) fn resolve_in(
     path: &ContentPath,
 ) -> Option<PathBuf> {
     let ContentPath::Shorthand { root, relative } = path else {
-        return None;
+        return library_file(path);
     };
     if built_in(path).is_some() {
         return None;

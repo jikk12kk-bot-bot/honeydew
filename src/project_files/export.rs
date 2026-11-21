@@ -51,12 +51,12 @@ use honeydew_audio::ogg_writer::OggEncoder;
 use honeydew_audio::wav_writer::{HEADER_LEN, WavWriter, float32_wav, header, info_chunk};
 
 use super::{
-    FileEvent, MAX_FILE_BYTES, OVERWRITE, ProjectFiles, SAVE_FAILED, SAVE_FILE_FAILED, SAVED,
-    in_user_folder, stamped, stem, too_large,
+    FileEvent, MAX_FILE_BYTES, OVERWRITE, ProjectFiles, SAMPLES_FOLDER, SAVE_FAILED,
+    SAVE_FILE_FAILED, SAVED, in_user_folder, stamped, stem, too_large,
 };
 use crate::APP_NAME;
 use crate::displayer::mp4::Video;
-use crate::flm::chunk::ContentPath;
+use crate::flm::chunk::{ContentPath, ContentRoot};
 use crate::render::{Render, RenderError, RenderSpec, Stream};
 use crate::sample_cache::{self, SampleCache};
 use crate::smf::smf_with;
@@ -459,10 +459,10 @@ impl ProjectFiles {
     /// and the count of original content files left out. An error carries its message's title.
     fn archive(&self, song: &Song, name: &str) -> Result<(Vec<u8>, usize), (&'static str, String)> {
         // The plugins' states as they are now: a Lemon sampler's names the samples it plays (#168).
-        let song = &stamped(song, name.to_owned());
-        let flm = (self.codec.write)(song).map_err(|e| (SAVE_FAILED, e))?;
+        let mut song = stamped(song, name.to_owned());
+        let (user_files, left_out) = self.user_files_of(&mut song);
+        let flm = (self.codec.write)(&song).map_err(|e| (SAVE_FAILED, e))?;
         let mut entries = vec![(format!("{name}.flm"), flm)];
-        let (user_files, left_out) = self.user_files_of(song);
         entries.extend(user_files);
         let bytes = crate::zip::write(&entries).map_err(|e| (COMPRESS_FAILED, e.to_string()))?;
         if bytes.len() as u64 > MAX_FILE_BYTES {
@@ -477,17 +477,24 @@ impl ProjectFiles {
     /// A file it plays that really is in the Original Content folder, every link followed, is only counted.
     /// The samples of the built-in Lemon samplers, which open their files themselves and name them in their plugin's
     /// state ([`super::lemon_samples`]), are the files there that are in the user folder (#168).
-    fn user_files_of(&self, song: &Song) -> (BTreeMap<String, Vec<u8>>, usize) {
+    /// Honeydew change (#144): a sample from a library folder, which a song names by its own path, goes in by its
+    /// [`Self::outside_name`], the song relinked to that file in the user folder.
+    fn user_files_of(&self, song: &mut Song) -> (BTreeMap<String, Vec<u8>>, usize) {
         let (read, found) = (sample_cache::reader(self), RefCell::new(BTreeMap::new()));
         let left_out = RefCell::new(std::collections::BTreeSet::new());
+        let library = RefCell::new(Vec::new());
         let record = |path: &ContentPath| {
             let bytes = read(path)?;
             let file = self.resolve(path);
-            if let Some(file) = file.filter(|file| self.in_content(file)) {
+            if let Some(file) = file.clone().filter(|file| self.in_content(file)) {
                 left_out.borrow_mut().insert(file);
             } else if let Some(relative) = in_user_folder(path) {
                 let parts: Vec<_> = relative.iter().map(|p| p.to_string_lossy()).collect();
                 found.borrow_mut().insert(parts.join("/"), bytes.clone());
+            } else if let (ContentPath::Plain(_), Some(file)) = (path, file) {
+                library
+                    .borrow_mut()
+                    .push((path.clone(), file, bytes.clone()));
             }
             let (ContentPath::Shorthand { relative, .. } | ContentPath::Plain(relative)) = path;
             let ext = Path::new(relative).extension();
@@ -503,7 +510,34 @@ impl ProjectFiles {
                 record(&path);
             }
         }
-        (found.into_inner(), left_out.into_inner().len())
+        let (mut found, left_out) = (found.into_inner(), left_out.into_inner());
+        let mut packed = std::collections::HashMap::new();
+        for (path, file, bytes) in library.into_inner() {
+            let name = self.outside_name(&found, &file, &bytes);
+            found.insert(name.clone(), bytes);
+            let (root, relative) = (ContentRoot::User, name);
+            packed.insert(path, ContentPath::Shorthand { root, relative });
+        }
+        super::archive::relink(song, &|path| packed.get(path).cloned());
+        (found, left_out.len())
+    }
+
+    /// The archive name of the file `file` from outside the user folder, of `bytes` (#144): `My Samples/<its name>`,
+    /// numbered ` (2)` and up while the archive has other bytes of that name or the user folder a file of it.
+    fn outside_name(&self, found: &BTreeMap<String, Vec<u8>>, file: &Path, bytes: &[u8]) -> String {
+        let stem = file
+            .file_stem()
+            .unwrap_or("Sample".as_ref())
+            .to_string_lossy();
+        let ext = (file.extension()).map_or(String::new(), |e| format!(".{}", e.to_string_lossy()));
+        let user = self.user.clone().unwrap_or_default();
+        let taken = |name: &str| {
+            let name = format!("{name}{ext}");
+            (found.get(&name))
+                .map_or_else(|| self.user_file_exists(&user.join(&name)), |b| b != bytes)
+        };
+        let name = crate::token_map::free(&format!("{SAMPLES_FOLDER}/{stem}"), taken);
+        format!("{name}{ext}")
     }
 }
 

@@ -8,7 +8,7 @@ mod live;
 mod merge;
 mod midi_sends;
 mod modulation;
-#[cfg(desktop)]
+#[cfg(multi_core)]
 mod parallel;
 mod prepare;
 mod preview;
@@ -41,21 +41,21 @@ use honeydew_audio::sample::SampleData;
 use honeydew_audio::{MeterSnapshot, ProcessContext};
 use input::Monitor;
 use prepare::{Action, KIT, ParamTimeline, ScheduledAction, beat_frame};
-#[cfg(desktop)]
+#[cfg(multi_core)]
 use rayon::prelude::*;
 
 pub use slicer::{auto_clip as slicer_auto_clip, settle_first_notes};
 
 const BLOCK_FRAMES: usize = 1024;
 
-/// Prepare the desktop worker pool off the audio callback. Other platforms
-/// retain the sequential path even if an old preference is on.
+/// Prepare the worker pool off the audio callback: on the desktop and, a Honeydew change (#145, #156), Android. The
+/// web and iOS retain the sequential path even if an old preference is on.
 pub(crate) fn prepare_multi_core() -> bool {
-    #[cfg(desktop)]
+    #[cfg(multi_core)]
     {
         parallel::prepare()
     }
-    #[cfg(not(desktop))]
+    #[cfg(not(multi_core))]
     {
         false
     }
@@ -858,10 +858,10 @@ impl SongAudioEngine {
     }
 
     fn process_racks(&mut self, context: ProcessContext, frames: usize) -> bool {
-        // Only the desktop's multi-core path reads the block size.
-        #[cfg(not(desktop))]
+        // Only the multi-core path reads the block size.
+        #[cfg(not(multi_core))]
         let _ = frames;
-        #[cfg(desktop)]
+        #[cfg(multi_core)]
         if self.multi_core
             && frames >= 128
             && self.mixer.has_parallel_stage()
@@ -1165,6 +1165,13 @@ impl AudioRenderer for SongAudioEngine {
         self.preview = sample.map(|(data, from)| preview::Preview::new(data, from, rate));
     }
 
+    /// As [`Self::preview`], a count only.
+    fn preview_more(&mut self, data: Arc<SampleData>, more: bool) {
+        if let Some(preview) = &mut self.preview {
+            preview.grow(data, more);
+        }
+    }
+
     fn set_live_lane(&mut self, channel: usize, notes: bool) {
         if let Some(Some(live)) = self.live.get_mut(channel) {
             live.notes_lane = notes;
@@ -1304,15 +1311,26 @@ impl AudioRenderer for SongAudioEngine {
     }
 }
 
-#[cfg(all(test, desktop))]
+#[cfg(all(test, multi_core))]
 mod parallel_tests {
     use super::*;
     use crate::song::{ChannelKind, SendState, Song, SynthKind};
 
     #[test]
     fn parallel_racks_match_sequential_through_sends_and_live_toggle() {
-        if !prepare_multi_core() {
+        // Honeydew change (#145, #156): Android has the workers too, not only the desktop.
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert_eq!(prepare_multi_core(), cores >= 2);
+        if cores < 2 {
             return; // A single-core host keeps the sequential renderer.
+        }
+        // There the workers run at nice −19.
+        #[cfg(target_os = "android")]
+        {
+            // SAFETY: a plain system call on the calling worker.
+            let nice = (parallel::pool().unwrap())
+                .broadcast(|_| unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) });
+            assert!(nice.iter().all(|&n| n == -19), "{nice:?}");
         }
         let mut song = Song::default();
         song.add_channel(ChannelKind::EffectTrack);
@@ -1355,6 +1373,7 @@ mod parallel_tests {
         parallel.render(&mut actual, 2);
         assert_eq!(actual, expected);
     }
+
 }
 
 impl SongAudioEngine {
@@ -1636,7 +1655,7 @@ impl SongAudioEngine {
             self.note_off_params_to_initial();
             self.cover_replays += 1;
             self.cover_to(self.action_index);
-            self.release_uncovered(true);
+            self.release_uncovered(true, true);
         }
         self.restore_params(frame, true);
         self.relaunch_clips();
@@ -1670,7 +1689,7 @@ impl SongAudioEngine {
     fn release_held(&mut self) {
         let (keys, pads, input) = (&mut self.cover, &mut self.cover_pads, &mut self.cover_keys);
         cover(&[], &self.instruments, keys, pads, input);
-        self.release_uncovered(false);
+        self.release_uncovered(false, true);
     }
 
     /// Each key and pad the sequencer holds that the re-sync's cover does not cover gets its note-off (through the
@@ -1680,8 +1699,8 @@ impl SongAudioEngine {
     /// plays it; its own note-on and note-off count it, so the old hold ends here. Caveat: an instrument whose note-off
     /// releases one press of a key (the DW Sampler in Mono, which goes back to the key's earlier press still held)
     /// keeps the old voice past that note's note-off, until the key's next release; in Poly a note-off releases every
-    /// voice of its key.
-    fn release_uncovered(&mut self, now: bool) {
+    /// voice of its key. `pads`: the held pads too (a hit with no note-off holds its pad past its cover).
+    fn release_uncovered(&mut self, now: bool, pads: bool) {
         for channel in 0..self.held.len() {
             let mut uncovered = self.held_keys[channel] & !self.cover_keys[channel];
             for key in 0..=127 {
@@ -1719,7 +1738,7 @@ impl SongAudioEngine {
                     self.held[channel][row][k] = held.min(covered);
                 }
             }
-            for pad in 0..self.held_pads[channel].len() {
+            for pad in (0..self.held_pads[channel].len()).filter(|_| pads) {
                 let (held, covered) = (self.held_pads[channel][pad], self.cover_pads[channel][pad]);
                 let starts = |action| {
                     matches!(action, Action::Hit { pad: p, held: true, .. }

@@ -13,6 +13,29 @@ use crate::note_effects::NoteEffectTrace;
 use crate::pitcher::PitcherState;
 use analyzer::Analyzer;
 
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+/// Bumped each time the app draws an Analyzer's panel ([`analyzer_drawn`]): while it stands still, no panel shows one.
+static ANALYZER_DRAWN: AtomicU32 = AtomicU32::new(0);
+/// Settings `Pause hidden analyzers`: an Analyzer whose panel no one draws skips its display's work (the spectrum,
+/// the oscilloscope, the vectorscope and the pitch track); its loudness meter runs on.
+static SKIP_HIDDEN: AtomicBool = AtomicBool::new(false);
+/// Settings `Light pitch tracking`: the Analyzer reads the pitch once an entry of its track (50 ms), not every
+/// [`Detector::HOP`] samples.
+static LIGHT_PITCH: AtomicBool = AtomicBool::new(false);
+
+/// The app drew an Analyzer's panel this frame.
+pub fn analyzer_drawn() {
+    ANALYZER_DRAWN.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Settings `Pause hidden analyzers` and `Light pitch tracking` ([`SKIP_HIDDEN`], [`LIGHT_PITCH`]); the audio thread
+/// takes them within a few hundred samples.
+pub fn set_analyzer_options(skip_hidden: bool, light_pitch: bool) {
+    SKIP_HIDDEN.store(skip_hidden, Ordering::Relaxed);
+    LIGHT_PITCH.store(light_pitch, Ordering::Relaxed);
+}
+
 /// A history display's columns: 6.4 s at one entry per 50 ms.
 pub const HISTORY: usize = 128;
 /// The Wow & Flutter trace's averaged points (600 points of 200 entries each cover the 120 000-entry
@@ -422,6 +445,8 @@ struct Detector {
     linear: Vec<f32>,
     scores: Vec<f32>,
     frames: usize,
+    /// The samples between two readings: [`Self::HOP`] unless its owner asks for fewer readings.
+    hop: usize,
 }
 
 impl Detector {
@@ -449,6 +474,7 @@ impl Detector {
             linear: vec![0.0; 3 * max_lag],
             scores: vec![0.0; max_lag + 2],
             frames: 0,
+            hop: Self::HOP,
         }
     }
 
@@ -474,7 +500,7 @@ impl Detector {
             self.filled |= self.written == 0;
         }
         self.frames += 1;
-        if self.frames < Self::HOP || !self.filled {
+        if self.frames < self.hop || !self.filled {
             return None;
         }
         self.frames = 0;
@@ -496,8 +522,17 @@ impl Detector {
             return 0.0;
         }
         self.scores.fill(0.0);
+        // Each lag's window energy from the one before: one sample leaves it, one joins (in f64, so the running sum
+        // keeps its precision over the lags). Half the work of summing it anew.
+        let first = &x[min_lag..min_lag + window];
+        let mut b2 = f64::from(correlate(first, first).1);
         for lag in min_lag..=max_lag {
-            let (cross, b2) = correlate(&x[..window], &x[lag..lag + window]);
+            if lag > min_lag {
+                let (gone, new) = (x[lag - 1], x[lag - 1 + window]);
+                b2 += f64::from(new * new) - f64::from(gone * gone);
+            }
+            let cross = cross(&x[..window], &x[lag..lag + window]);
+            let b2 = b2.max(0.0) as f32;
             if a2 > 0.0 && b2 > 0.0 {
                 self.scores[lag] = cross / (a2 * b2).sqrt();
             }
@@ -540,6 +575,19 @@ fn correlate(a: &[f32], b: &[f32]) -> (f32, f32) {
         energy = std::array::from_fn(|k| energy[k] + b[k] * b[k]);
     }
     (cross.iter().sum(), energy.iter().sum())
+}
+
+/// Σ a·b over `a` and `b` (as long), in eight interleaved partial sums as [`correlate`].
+fn cross(a: &[f32], b: &[f32]) -> f32 {
+    let ((a8, a_rest), (b8, b_rest)) = (a.as_chunks::<8>(), b.as_chunks::<8>());
+    let (mut a_last, mut b_last) = ([0.0_f32; 8], [0.0_f32; 8]);
+    a_last[..a_rest.len()].copy_from_slice(a_rest);
+    b_last[..b_rest.len()].copy_from_slice(b_rest);
+    let mut sum = [0.0_f32; 8];
+    for (a, b) in a8.iter().zip(b8).chain([(&a_last, &b_last)]) {
+        sum = std::array::from_fn(|k| sum[k] + a[k] * b[k]);
+    }
+    sum.iter().sum()
 }
 
 /// A note effect's slab (it runs ahead of playback; the engine fills this from its [`NoteEffectTrace`]): an

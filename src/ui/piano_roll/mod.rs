@@ -8,7 +8,9 @@
 //! the note grid in the rest, over the graph lane (`Vel` / `Pan`, [`graph_lane`]) while its tab shows it. The x axis
 //! is the clip's content (tick 0 = content start). The grid background: no beat bands; rows light by scale and
 //! instrument range, lit by selection and sound, the shared adaptive beat marks, root lines, and black α 0.15 past the
-//! loop end ([`paint_grid`], [`paint_notes`]). Note names are not drawn.
+//! loop end ([`paint_grid`], [`paint_notes`]). With Settings `Show key names` on, a note wide enough names its key on
+//! it, `C5` or `F#4` (#154: the octave as the key column's C labels). The channel's name sits at the
+//! grid's top-left, under the ruler (#154, Honeydew's own: [`paint_name`]).
 //!
 //! Gestures on the grid, each decided from its touch-down by the shared law ([`gesture::is_long`],
 //! [`gesture::left_calm`]): within the 0.5 U calm zone a release after ≤ 0.3 s is a tap and after > 0.3 s a long press,
@@ -39,6 +41,10 @@
 //!   While held still, copied notes offer the `Paste` insert menu over the finger's row at the snapped beat, with the
 //!   insert cursor across the keys the paste takes ([`insert::paste`]). A later tap pastes there; dragging or another
 //!   press hides it.
+//!   A Honeydew change (#154): a long press released still on a ghost note (the last drawn under the touch-down) opens
+//!   that note's clip instead, in its channel's roll at this roll's zoom, scrolled so that the note lies where its
+//!   ghost did ([`PianoRollAction::GhostClip`]): no marquee catch, no `Paste`. A pinch makes the touch no long press,
+//!   so it never switches; a tap on a ghost adds a note as anywhere.
 //!   Out of the calm zone on either axis (each its own 0.5 U) the touch is the scroller's ([`scroller`]): it scrolls,
 //!   never a tap or a marquee. Two fingers zoom; the wheel zooms or scrolls by zone (`Self::scroll`).
 //! - The right button ([`gesture::Erase`]): a press on a note (its drawn box)
@@ -57,7 +63,8 @@
 //!   `Vel` or `Pan` ([`crate::ui::automation::value::snap_items`]): `Off` (the default), `1 %` … `25 %`, then Vel's
 //!   `MIDI` velocities or Pan's `L/C/R`. Each item keeps its own, an app setting. While it is on, the grid's lines show
 //!   in the lane in place of its guides, and a paint lands on it ([`Prop::landed`]); a lane drag shows its value
-//!   beside the finger.
+//!   beside the finger. Below it (#152), `Show` and `Hide` under `Ghosts` set Settings `Enable ghost notes`
+//!   ([`PianoRollAction::GhostNotes`]), the current one highlighted.
 //!
 //! A move or a handle's drag changes nothing until the pointer has left the calm zone, so a long press never nudges a
 //! note onto the grid.
@@ -160,21 +167,31 @@ const BEAT: f64 = PPQ as f64;
 // Sizes in U, from the playlist's proportions.
 /// The key column, as wide as the playlist's track headers.
 const KEYS_W: f32 = 1.5;
-/// Default beat width and key-row height, and their zoom ranges.
+/// Default beat width and key-row height, and their zoom ranges (#171, #175: zoomed out, a few hundred bars and all
+/// 128 keys fit a phone's roll; zoomed in, a 1/128 note is a U wide). Rows never shrink past filling the grid with
+/// the 128 keys.
 const BEAT_U: f32 = 2.0;
-const BEAT_U_RANGE: [f32; 2] = [0.0625, 32.0];
+const BEAT_U_RANGE: [f32; 2] = [1.0 / 32.0, 32.0];
 const ROW_U: f32 = 0.5;
-const ROW_U_RANGE: [f32; 2] = [0.125, 4.0];
-/// The vertical key column: a C row's channel-colour bar is 0.1 U wide (ceil to whole px), its label starts 0.08 U
+const ROW_U_RANGE: [f32; 2] = [1.0 / 16.0, 4.0];
+/// The vertical key column: the root row's channel-colour bar is 0.1 U wide (ceil to whole px), its label starts 0.08 U
 /// after the bar at 0.95 × the row height (its cap height half the row), up to 12 pt; below 6 pt the row has no label.
 const ROOT_BAR: f32 = 0.1;
 const LABEL_GAP: f32 = 0.08;
 const LABEL_SHARE: f32 = 0.95;
 const LABEL_PT: [f32; 2] = [6.0, 12.0];
+/// The channel's name at the grid's top-left (#154): its plate's inset from the grid's corner and its text's padding
+/// in it (x, y), the widest name before an ellipsis, and the plate's `background` alpha.
+const NAME_INSET: [f32; 2] = [0.25, 0.15];
+const NAME_PAD: [f32; 2] = [0.2, 0.05];
+const NAME_W: f32 = 8.0;
+const NAME_ALPHA: f32 = 0.6;
 
 // Colour treatments of theme roles.
 /// Ghost notes: their channel colour at this alpha (0.35 read too bold, #94).
 pub(crate) const GHOST_ALPHA: f32 = 0.2;
+/// A note off the project scale: its colour at this alpha (it fades, where it was gray).
+pub(crate) const OFF_SCALE_ALPHA: f32 = 0.5;
 /// A slide note's stripes (#130): `background` at this alpha, this many U wide and apart; its ▶ is this share of the
 /// row's height wide.
 const SLIDE_ALPHA: f32 = 0.4;
@@ -219,6 +236,17 @@ pub enum PianoRollAction {
     /// The Generate panel's preview went into the clip: a new engine plays it, and the undo step waits
     /// for `Apply`, as mid-drag ([`PianoRoll::audition`]).
     Audition,
+    /// The snap menu's `Ghosts` pick (#152): Settings `Enable ghost notes` becomes this.
+    GhostNotes(bool),
+    /// A long press on a ghost note (#154, a Honeydew change): the editor goes to that note's clip, `clip` of track
+    /// `lane` of `channel`, at this roll's view ([`PianoRoll::open_at`]): its zoom (a beat's width and a row's height,
+    /// in U) and its scroll, moved so that the note lies where its ghost did.
+    GhostClip {
+        channel: usize,
+        lane: usize,
+        clip: u32,
+        view: (f32, f32, Vec2),
+    },
 }
 
 /// The remembered note: what a tap's new note takes. Set whenever exactly one note becomes the selection (a touch-down,
@@ -342,6 +370,8 @@ pub struct PianoRoll {
     /// The `Generate` panel as it was last left: GENERATE opens it so again (its rows, its seed), not afresh. An app
     /// setting (`pianoRollGenerate`), kept over restarts (`views::piano_roll`); `Reset` brings the defaults back.
     pub(crate) generate_memory: Option<generate::Panel>,
+    /// The ghost notes the last frame drew, for a long press on one (#154, a Honeydew change).
+    drawn_ghosts: Vec<Ghost>,
 }
 
 /// A touch on the grid (module docs). Outside a touch, the selection is the one showing.
@@ -485,6 +515,7 @@ impl PianoRoll {
             recording: false,
             playing: false,
             generate_memory: None,
+            drawn_ghosts: Vec::new(),
         }
     }
 
@@ -518,6 +549,18 @@ impl PianoRoll {
                 ..Self::new(self.channel, lane, Some(clip_id))
             };
         }
+    }
+
+    /// [`Self::open`], at `view` (#154, a Honeydew change: a ghost note's long press,
+    /// [`PianoRollAction::GhostClip`]): a beat's width and a row's height in U, and the scroll.
+    pub fn open_at(
+        &mut self,
+        lane: usize,
+        clip_id: u32,
+        (beat_u, row_u, scroll): (f32, f32, Vec2),
+    ) {
+        self.open(lane, clip_id);
+        (self.beat_u, self.row_u, self.scroll) = (beat_u, row_u, Some(scroll));
     }
 
     fn clip<'a>(&self, song: &'a Song) -> Option<&'a Clip> {
@@ -568,7 +611,7 @@ impl PianoRoll {
         }
         ghost_notes(
             song,
-            self.channel,
+            (self.channel, self.lane),
             self.clip(song),
             song.time_sig.bar_beats(),
             view,
@@ -721,14 +764,15 @@ impl PianoRoll {
         let px = g.tick(grid.left() + 1.0 / m.ppp()) - view.start;
         let end = g.x(loop_ticks).max(grid.left());
         let past = (end < grid.right()).then(|| grid.with_min_x(end));
+        let ghosts = self.ghosts(song, opts, view, px);
         paint_notes(
             &grid_painter,
             &g,
-            events,
-            &self.selected,
-            &self.ghosts(song, opts, view, px),
+            (events, &self.selected),
+            &ghosts,
             past,
             (color, project_scale(song)),
+            opts.key_names.then_some(opts.middle_c_is_c4),
             cx,
         );
         // The playhead line's slot: over the notes, under their handles, the marquee and the floating row.
@@ -765,6 +809,9 @@ impl PianoRoll {
         if let Some(rect) = marquee {
             clips::paint_marquee(&grid_painter, rect, cx);
         }
+        if let Some(ch) = song.channels.get(self.channel) {
+            paint_name(&grid_painter, grid, &ch.name, color.to_color32(), cx);
+        }
         paint_keys(
             &ui.painter_at(keys),
             keys,
@@ -776,12 +823,22 @@ impl PianoRoll {
         );
         if let Some(lane) = lane {
             let preview = preview.as_deref();
-            self.graph_lane(ui, id, (lane, preview), &g, song, color, cx, &mut actions);
+            self.graph_lane(
+                ui,
+                id,
+                (lane, preview, &ghosts),
+                &g,
+                song,
+                color,
+                cx,
+                &mut actions,
+            );
         } else {
             // The lane went mid-drag: the drag ends as its release would.
             let events = self.clip(song).map_or(&[][..], |c| &c.events);
             self.graph_drag_end(events, &mut actions);
         }
+        self.drawn_ghosts = ghosts;
 
         // The ruler: a plain corner over the keys, bars over the grid, the range (the song's play loop, in the clip's
         // content ticks), and the playhead: the transport's, folded into the clip's loop.
@@ -868,7 +925,8 @@ impl PianoRoll {
             }
             None => {}
         }
-        self.menus(ui, id, (snap_center, rect), song, &mut actions, cx);
+        let at = (snap_center, rect, opts.ghost_notes);
+        self.menus(ui, id, at, song, &mut actions, cx);
         // After the menus, which take Escape first.
         self.keys(ui, grid, cx, song, &mut actions);
         // This frame's own edits are not outside changes.
@@ -1059,6 +1117,7 @@ impl PianoRoll {
         let scroll = self.scroll.unwrap_or_default();
         let (beat_w, row_h) = (f64::from(self.beat_u * u), f64::from(self.row_u * u));
         let range = |r: [f32; 2]| [1.0 / f64::from(r[1] * u), 1.0 / f64::from(r[0] * u)];
+        let (n_keys, rows) = (f64::from(TOP_KEY) + 1.0, range(ROW_U_RANGE));
         let mut axes = [
             Axis {
                 pos: f64::from(scroll.x) / beat_w,
@@ -1070,8 +1129,8 @@ impl PianoRoll {
             Axis {
                 pos: f64::from(scroll.y) / row_h,
                 zoom: 1.0 / row_h,
-                range: [0.0, f64::from(TOP_KEY) + 1.0],
-                zoom_range: range(ROW_U_RANGE),
+                range: [0.0, n_keys],
+                zoom_range: [rows[0], rows[1].min(n_keys / f64::from(grid.height()))],
                 view: grid.y_range(),
             },
         ];
@@ -1263,8 +1322,30 @@ impl PianoRoll {
                 self.paste =
                     (!stale && !multi && !marquee.dragged && !note_clipboard(ui.ctx()).is_empty())
                         .then_some(marquee.from);
+                let ghost = (up && !stale && !marquee.dragged)
+                    .then(|| {
+                        self.drawn_ghosts
+                            .iter()
+                            .rev()
+                            .find(|gh| gh.rect(&g).contains(marquee.from))
+                            .copied()
+                    })
+                    .flatten();
                 if !up {
                     self.gesture = Gesture::Box(marquee);
+                } else if let Some(ghost) = ghost {
+                    // #154 (a Honeydew change): released still on a ghost note, its clip opens, the note where its
+                    // ghost lay.
+                    let shift = ((ghost.at - ghost.pos) / BEAT) as f32 * g.beat_w;
+                    let scroll = self.scroll.unwrap_or_default() + vec2(shift, 0.0);
+                    actions.push(PianoRollAction::GhostClip {
+                        channel: ghost.channel,
+                        lane: ghost.lane,
+                        clip: ghost.clip,
+                        view: (self.beat_u, self.row_u, scroll),
+                    });
+                    self.selected.fill(false);
+                    self.paste = None;
                 } else if let Some(p) = pos.filter(|_| self.selected.contains(&true)) {
                     // Its release shows the floating row over what it caught, whatever showed before.
                     self.row.boxed(p);
@@ -1763,13 +1844,14 @@ impl PianoRoll {
     }
 
     /// The graph lane in the strip `strip`: `Vel` / `Pan` in the key column, the value area under the grid, and its
-    /// paint (see [`graph_lane::paint_notes`]), reported like a move; it draws `preview`'s notes when there is one.
+    /// paint (see [`graph_lane::paint_notes`]), reported like a move; it draws `preview`'s notes when there is one,
+    /// over the `ghosts`' values in their channel colours at [`GHOST_ALPHA`] (#152).
     #[allow(clippy::too_many_arguments)]
     fn graph_lane(
         &mut self,
         ui: &mut egui::Ui,
         id: Id,
-        (strip, preview): (Rect, Option<&[Event]>),
+        (strip, preview, ghosts): (Rect, Option<&[Event]>, &[Ghost]),
         g: &Geom,
         song: &mut Song,
         color: Rgba,
@@ -1894,6 +1976,32 @@ impl PianoRoll {
         }
         let tints = graph_lane::hit_tints(colors, color, prop);
         let events = preview.unwrap_or_else(|| self.clip(song).map_or(&[][..], |c| &c.events));
+        // A stem and a cap.
+        let mark = |pos: f64, len: f64, v: u16, ink: Color32| {
+            let x0 = m.round_px(g.x(pos));
+            let x1 = g.x(pos + len).max(x0 + px);
+            let from = match prop {
+                Prop::Pan => top - px + h / 2.0,
+                _ => bottom,
+            };
+            let y = cap_y(v);
+            let stem = Rect::from_x_y_ranges(x0..=x0 + 4.0 * px, y.min(from)..=y.max(from));
+            painter.rect_filled(stem, 0.0, ink);
+            painter.rect_filled(Rect::from_x_y_ranges(x0..=x1, y..=y + 2.0 * px), 0.0, ink);
+        };
+        for ghost in ghosts {
+            let v = match prop {
+                Prop::Pan => ghost.pan,
+                _ => ghost.velocity,
+            };
+            let ink = channel_color(ghost.hue, cx.theme).to_color32();
+            mark(
+                ghost.pos,
+                ghost.len,
+                v.into(),
+                ink.gamma_multiply(GHOST_ALPHA),
+            );
+        }
         for pass in [false, true] {
             for (e, _) in events
                 .iter()
@@ -1903,17 +2011,7 @@ impl PianoRoll {
                 let (Some((pos, len, _)), Some(v)) = (note(e), prop.get(e)) else {
                     continue;
                 };
-                let x0 = m.round_px(g.x(pos));
-                let x1 = g.x(pos + len).max(x0 + px);
-                let from = match prop {
-                    Prop::Pan => top - px + h / 2.0,
-                    _ => bottom,
-                };
-                let ink = graph_lane::hit_color(&tints, prop, v, pass);
-                let y = cap_y(v);
-                let stem = Rect::from_x_y_ranges(x0..=x0 + 4.0 * px, y.min(from)..=y.max(from));
-                painter.rect_filled(stem, 0.0, ink);
-                painter.rect_filled(Rect::from_x_y_ranges(x0..=x1, y..=y + 2.0 * px), 0.0, ink);
+                mark(pos, len, v, graph_lane::hit_color(&tints, prop, v, pass));
             }
         }
         // The value under a dragging finger, on its cap's row ([`value_label`]).
@@ -2024,13 +2122,13 @@ impl PianoRoll {
         }
     }
 
-    /// The open popup, if any: the snap menu, the note menu or one of its dialogs; the Humanize panel beside the roll
-    /// `over`.
+    /// The open popup, if any: the snap menu (its `Ghosts` pick showing `ghosts`), the note menu or one of its
+    /// dialogs; the Humanize panel beside the roll `over`.
     fn menus(
         &mut self,
         ui: &egui::Ui,
         id: Id,
-        (snap_center, over): (Pos2, Rect),
+        (snap_center, over, ghosts): (Pos2, Rect, bool),
         song: &mut Song,
         actions: &mut Vec<PianoRollAction>,
         cx: &UiCtx,
@@ -2049,13 +2147,20 @@ impl PianoRoll {
                     _ => (g, g.label()),
                 });
                 let vs = (self.value_snap[item], graph_lane::ROLL_LABELS[item]);
-                let items = value::snap_items(self.snap, vs, grids);
+                let mut items = value::snap_items(self.snap, vs, grids);
+                // Then `Ghosts` (#152), a row below the value column.
+                let shown = [(true, "Show"), (false, "Hide")].map(|(on, label)| PopupItem {
+                    current: on == ghosts,
+                    ..PopupItem::new(Pick::Ghosts(on), 3, 9 + usize::from(!on), label)
+                });
+                items.extend([PopupItem::header(3, 8, "Ghosts")].into_iter().chain(shown));
                 let result =
                     popup::show(ctx, id.with("snap_menu"), snap_center, bounds, &items, cx);
                 match result.selected {
                     Some(Pick::Value(grid)) => {
                         self.value_snap[item] = self.value_snap[item].picked(grid);
                     }
+                    Some(Pick::Ghosts(on)) => actions.push(PianoRollAction::GhostNotes(on)),
                     Some(pick) => self.snap = pick.snap(self.snap),
                     None => {}
                 }
@@ -2680,16 +2785,19 @@ fn paint_marks(
 }
 
 /// Grid background steps 7–9: the ghost notes, black α 0.15 `past` the clip's loop end, then the notes: in `color`,
-/// but a note off the project scale `(root, mask)` in [`gray`] (every key is in Chromatic).
+/// but a note off the project scale `(root, mask)` faded to [`OFF_SCALE_ALPHA`] (every key is in Chromatic). With
+/// `names` (the octave numbering, `middle_c_is_c4`: Settings `Show key names` is on) their key names (#154): the key
+/// column's label font, in `background`, 0.08 U in from the note's left (after a slide's ▶), only on a note wide
+/// enough for it and that gap on both sides.
 #[allow(clippy::too_many_arguments)]
 fn paint_notes(
     painter: &egui::Painter,
     g: &Geom,
-    events: &[Event],
-    selected: &[bool],
+    (events, selected): (&[Event], &[bool]),
     ghosts: &[Ghost],
     past: Option<Rect>,
     (color, (root, mask)): (Rgba, (u8, u16)),
+    names: Option<bool>,
     cx: &UiCtx,
 ) {
     let (theme, m) = (cx.theme, cx.m);
@@ -2702,13 +2810,12 @@ fn paint_notes(
         )
     };
     for ghost in ghosts {
-        let top = g.y(ghost.key);
-        let r = Rect::from_min_max(
-            pos2(g.x(ghost.pos), top),
-            pos2(g.x(ghost.pos + ghost.len), top + g.row_h),
-        );
         let ghost_color = channel_color(ghost.hue, theme).to_color32();
-        painter.rect_filled(cell(r), 0.0, ghost_color.gamma_multiply(GHOST_ALPHA));
+        painter.rect_filled(
+            cell(ghost.rect(g)),
+            0.0,
+            ghost_color.gamma_multiply(GHOST_ALPHA),
+        );
     }
     if let Some(past) = past {
         painter.rect_filled(past, 0.0, Color32::from_black_alpha(PAST_END_LANE_ALPHA));
@@ -2717,32 +2824,71 @@ fn paint_notes(
         color.to_color32(),
         mix(color, theme.colors.text, graph_lane::SELECTED_TINT),
     );
-    let off = gray(color);
-    let (off_normal, off_pale) = (
-        off.to_color32(),
-        mix(off, theme.colors.text, graph_lane::SELECTED_TINT),
-    );
+    let ink = theme.colors.background.to_color32();
+    let font = names.and(label_font(g, m));
     for (i, e) in events.iter().enumerate() {
         if let Some(r) = g.note_rect(e) {
             let in_key = !matches!(*e, Event::Note { key, .. } if !in_scale(key, root, mask));
-            let fill = match (selected.get(i) == Some(&true), in_key) {
-                (true, true) => pale,
-                (false, true) => normal,
-                (true, false) => off_pale,
-                (false, false) => off_normal,
+            let fill = if selected.get(i) == Some(&true) {
+                pale
+            } else {
+                normal
             };
-            painter.rect_filled(cell(r), 0.0, fill);
-            if matches!(e, Event::Note { slide: true, .. }) {
-                paint_slide(painter, cell(r), theme.colors.background.to_color32(), m);
+            let fill = if in_key {
+                fill
+            } else {
+                fill.gamma_multiply(OFF_SCALE_ALPHA)
+            };
+            let r = cell(r);
+            painter.rect_filled(r, 0.0, fill);
+            let &Event::Note { key, slide, .. } = e else {
+                continue;
+            };
+            if slide {
+                paint_slide(painter, r, ink, m);
+            }
+            if let (Some(c4), Some(font)) = (names, &font)
+                && painter.clip_rect().intersects(r)
+            {
+                let gap = m.u(LABEL_GAP);
+                let left = gap + if slide { SLIDE_ARROW * r.height() } else { 0.0 };
+                let text = painter.layout_no_wrap(key_name(key, true, c4), font.clone(), ink);
+                if left + text.size().x + gap <= r.width() {
+                    let at = pos2(r.left() + left, r.center().y - text.size().y / 2.0);
+                    painter.galley(at, text, ink);
+                }
             }
         }
     }
 }
 
-/// An off-scale note's colour: `color`'s gray, of the same luma.
-pub(crate) fn gray(color: Rgba) -> Rgba {
-    let luma = 0.299 * color.r + 0.587 * color.g + 0.114 * color.b;
-    Rgba::rgb(luma, luma, luma)
+/// The key column's label font for `g`'s rows: 0.95 × the row height, up to 12 pt; none below 6 pt.
+fn label_font(g: &Geom, m: &crate::metrics::Metrics) -> Option<egui::FontId> {
+    let pts = LABEL_SHARE * g.row_h / m.u(1.0) * 16.0;
+    (pts >= LABEL_PT[0]).then(|| m.font_id_pt(pts.min(LABEL_PT[1])))
+}
+
+/// The channel's `name` at the `grid`'s top-left, just under the ruler (#154, Honeydew's own): FontSize 10 in the
+/// channel colour `ink` on a `background` α 0.6 plate, cut to 8 U (or half the grid) with an end ellipsis. A label
+/// only: touches go through to the grid.
+fn paint_name(painter: &egui::Painter, grid: Rect, name: &str, ink: Color32, cx: &UiCtx) {
+    let m = cx.m;
+    let font = m.font_id(crate::metrics::FontSize::Pt10);
+    let room = m.u(NAME_W).min(grid.width() / 2.0);
+    let text = widgets::truncated_text(painter, name, font.clone(), room, 0);
+    if text.is_empty() {
+        return;
+    }
+    let text = painter.layout_no_wrap(text, font, ink);
+    let pad = vec2(m.u(NAME_PAD[0]), m.u(NAME_PAD[1]));
+    let at = grid.min + vec2(m.u(NAME_INSET[0]), m.u(NAME_INSET[1]));
+    let plate = Rect::from_min_size(
+        pos2(m.round_px(at.x), m.round_px(at.y)),
+        text.size() + 2.0 * pad,
+    );
+    let bg = cx.theme.colors.background.to_color32();
+    painter.rect_filled(plate, 0.0, bg.gamma_multiply(NAME_ALPHA));
+    painter.galley(plate.min + pad, text, ink);
 }
 
 /// A slide note's look over its fill in `r` (#130, #102): `ink` stripes slanting up to the right, and an `ink` ▶ at its
@@ -2768,8 +2914,9 @@ fn paint_slide(painter: &egui::Painter, r: Rect, ink: Color32, m: &crate::metric
 /// The key column, vertical, keyed as the keyboard is (#77). A full-width row per
 /// key in `whiteKey` or `blackKey` while the key is in the project scale `(root, mask)` (every key under Chromatic),
 /// else in `whiteKeyDisabled` or `blackKeyDisabled`, and a 1 px `background` α 0.3 line where two white keys meet
-/// (under each C and F). Each C has a channel-colour bar down its left edge (the root marker colour) and its octave
-/// label in `blackKeyDisabled` (as a root white key's label), left-aligned after the bar and centred on the row. With
+/// (under each C and F). Each row of the scale's root has a channel-colour bar down its left edge (the root marker, as
+/// the keyboard marks the root); each C has its octave label in `blackKeyDisabled` (as a root white key's label),
+/// left-aligned after the bar's room and centred on the row. With
 /// `key_names` every other in-scale key's name (no octave) sits there too, but no black key's under Chromatic, in the
 /// C labels' `blackKeyDisabled` (the keyboard's `whiteKeyDisabled` on a white key read too faint at row size, #77).
 fn paint_keys(
@@ -2802,13 +2949,15 @@ fn paint_keys(
         }
     }
     let bar = (m.u_px() * ROOT_BAR).ceil() * px;
-    let pts = LABEL_SHARE * g.row_h / m.u(1.0) * 16.0;
-    let font = (pts >= LABEL_PT[0]).then(|| m.font_id_pt(pts.min(LABEL_PT[1])));
+    let font = label_font(g, m);
     let chromatic = mask == SCALE_MASKS[CHROMATIC];
     for key in rows {
         let r = row(key);
-        let text = if key % 12 == 0 {
+        // The root marker sits on the scale's root, as the keyboard marks it; the octave labels stay on C.
+        if key % 12 == root % 12 {
             painter.rect_filled(r.with_max_x(r.left() + bar), 0.0, color.to_color32());
+        }
+        let text = if key % 12 == 0 {
             octave_label(key, middle_c_is_c4)
         } else if key_names && in_scale(key, root, mask) && !(black(key) && chromatic) {
             key_name(key, false, middle_c_is_c4)
