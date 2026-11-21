@@ -89,7 +89,7 @@ const LEGACY_GRID_COLORS: [u32; 14] = [
     0x3CC8E0, 0x4A7CF0, 0xA45CE8, 0xF06AB4,
 ];
 
-/// `Analyzer refresh limit:` items in Hz, in menu order: 0 is `Off` (every buffer, as fast as the engine goes).
+/// `Analyzer refresh limit:` items in Hz, in menu order: 0 is `Unlimited` (every sub-block, as fast as the engine goes).
 pub const ANALYZER_REFRESH: [u16; 11] = [0, 15, 24, 30, 45, 60, 75, 90, 120, 144, 240];
 
 /// `Audio driver:` items (Android), in menu order, the index stored: which of Android's audio APIs the output uses

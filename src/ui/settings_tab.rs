@@ -923,7 +923,7 @@ impl SettingsTab {
                     crate::ui::tooltip::tip(ui, button_rect, sound_mode_tip, None);
                 }
                 if matches!(choice, Choice::AnalyzerRefresh) {
-                    let tip = "How many times a second the module displays update at most: the Analyzer, the Tuner, the Limiter and every other module that draws its sound. Fewer updates take less CPU from the audio. Off: after every audio buffer. It changes only the pictures, never the sound; the level meters are not limited.";
+                    let tip = "How many times a second the module displays update at most: the Analyzer, the Tuner, the Limiter and every other module that draws its sound. Fewer updates take less CPU from the audio. Unlimited: after every bit of audio the engine plays, the fastest. It changes only the pictures, never the sound; the level meters are not limited.";
                     crate::ui::tooltip::tip(ui, button_rect, tip, None);
                 }
                 if matches!(choice, Choice::AudioDriver) {
@@ -1497,7 +1497,7 @@ impl Choice {
                 .collect(),
             Choice::AnalyzerRefresh => (crate::settings::ANALYZER_REFRESH.iter())
                 .map(|&hz| match hz {
-                    0 => (0, "Off".to_owned()),
+                    0 => (0, "Unlimited".to_owned()),
                     hz => (usize::from(hz), format!("{hz} per second")),
                 })
                 .collect(),
