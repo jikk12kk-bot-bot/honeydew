@@ -1,7 +1,7 @@
 # Honeydew 0.0.12: values on every module slider
 
 ## Values
-- Module sliders show their value in a fixed place, like the Analyzer's `Reference` (`440 Hz`): under the slider for vertical ones (GMSynth, SuperSaw, 3x Osc and every other module), and under or above the thumb for horizontal ones.
+- Every module slider shows its value underneath, like the Analyzer's `Reference` (`440 Hz`): GMSynth, SuperSaw, 3x Osc and every other module, vertical and horizontal. Short sliders too: their value line gets a little narrower so the slider keeps room to move.
 
 ## Mixer
 - The master strip shows its name (`MASTER`) again instead of its live peak. Its name still turns red after the output went over 0 dB, until you tap the strip.

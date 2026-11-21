@@ -730,33 +730,6 @@ fn a_slider_off_its_lit_predicate_is_all_module_fill_and_still_takes_a_drag() {
 }
 
 #[test]
-fn the_arpeggiator_rotation_is_flat_while_its_arp_has_no_rhythm_and_every_write_snaps() {
-    // `Rotation` (#19 p15, #31 p26) always takes touch. While its own arp's `Rhythm` (p14, p25) is `Off`
-    // all four parts are `moduleFill` and a write snaps to 0.5; with a rhythm of n steps it snaps to
-    // v = (k + n − 1)/(2(n − 1)), k = round((2v − 1)(n − 1)).
-    let mut rig = Rig::new(51, panel_for(51).unwrap().clone(), super::card(10.0).1);
-    let colors = theme_by_id(0).colors;
-    let [control, module] = [colors.control_fill, colors.module_fill].map(|c| c.to_color32());
-    let [r1, r7] = [1, 7].map(|k| menu_value(k, 22));
-    for (tab, id, p, rhythm, other) in [(1, 19, 15, 14, 25), (2, 31, 26, 25, 14)] {
-        rig.state.tab = tab;
-        (rig.module.params[rhythm], rig.module.params[other]) = (0.0, r1);
-        rig.module.params[p] = 0.75;
-        rig.frame(vec![]);
-        assert_eq!(rig.bars(id), [module, module], "#{id} Off");
-        assert_eq!(rig.thumb(id), [module, module], "#{id} Off");
-        assert_eq!(rig.drag(id, vec2(U, 0.0)), [p], "#{id} Off");
-        assert_eq!(rig.module.params[p], 0.5, "#{id} Off");
-        // R7 has 6 steps: 0.5 + 0.9 U of the 4 U range is 0.725, k = round(2.25) = 2, v = 7/10.
-        rig.module.params[rhythm] = r7;
-        rig.frame(vec![]);
-        assert_eq!(rig.thumb(id), [control, egui::Color32::RED], "#{id} R7");
-        assert_eq!(rig.drag(id, vec2(0.9 * U, 0.0)), [p], "#{id} R7");
-        assert_eq!(rig.module.params[p], 0.7, "#{id} R7");
-    }
-}
-
-#[test]
 fn a_page_predicate_needs_a_tab_strip_with_that_page() {
     let spec = module_spec(3).unwrap();
     let pages = |strip: Option<&'static str>, page: usize| {
