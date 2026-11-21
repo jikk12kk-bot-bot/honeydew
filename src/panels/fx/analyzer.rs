@@ -1693,7 +1693,7 @@ fn pitch_track(
         1.0 / cx.m.ppp(),
         cx.theme.colors.background.to_color32().gamma_multiply(0.5),
     );
-    // The theme's horizontal grid between the semitones, as the piano roll's rows.
+    // The theme's horizontal grid at E–F and B–C only (two lines an octave), so the track stays readable.
     let h_line = crate::theme::graph_grid(cx.theme, cx.m.ppp()).1;
     let painter = ui.painter();
     let at = |n: f32| p.bottom() - y.pos(n) * p.height();
@@ -1714,7 +1714,8 @@ fn pitch_track(
             }
             _ => {}
         }
-        if (p.top()..p.bottom()).contains(&at(n as f32 + 0.5)) {
+        let edge = matches!(n.rem_euclid(12), 4 | 11);
+        if edge && (p.top()..p.bottom()).contains(&at(n as f32 + 0.5)) {
             painter.hline(p.x_range(), at(n as f32 + 0.5), h_line);
         }
     }

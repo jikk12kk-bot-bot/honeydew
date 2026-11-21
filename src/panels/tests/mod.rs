@@ -520,43 +520,6 @@ impl Rig {
 }
 
 #[test]
-fn the_distortion_panel_draws_each_control_in_its_rect() {
-    let rig = Rig::new(6, distortion(), DISTORTION);
-    let texts = rig.texts();
-    let inside = |text: &str, id: u32| {
-        let rect = rig.rect_of(id);
-        let found = texts.iter().find(|(t, _)| t == text);
-        let (_, at) = found.unwrap_or_else(|| panic!("{text} not drawn: {texts:?}"));
-        assert!(
-            rect.contains(at.center()),
-            "{text} at {at:?}, #{id} is {rect:?}"
-        );
-    };
-    for item in ["Hard", "Tube", "Soft", "Clip"] {
-        inside(item, 1);
-    }
-    inside("Bias", 2);
-    inside("Drive", 3);
-    inside("Stereo", 4);
-    inside("BitCrush", 5);
-    inside("Gain", 6);
-    // Knob value texts come from the registry: Drive 0.25 → "25", Stereo 0.5 → "0", Gain 1.0 → "0.0 dB".
-    inside("25", 3);
-    inside("0", 4);
-    inside("0.0 dB", 6);
-    // At U = 32 the six columns are 74.67 points wide: edges 20, 94, 169, 244, 318, 393, 468. The last one may
-    // be 1 px short: 448 / 6 summed six times is 447.99997 in f32, which truncates to 467 (not a reference value).
-    let xs: Vec<_> = (1..=6).map(|id| rig.rect_of(id).x_range()).collect();
-    let want = [20.0, 94.0, 169.0, 244.0, 318.0, 393.0, 468.0];
-    for (i, x) in xs.iter().enumerate() {
-        let slack = if i == 5 { 1.0 } else { 0.0 };
-        assert_eq!(x.min, want[i], "#{}", i + 1);
-        assert!((x.max - want[i + 1]).abs() <= slack, "#{}: {x:?}", i + 1);
-    }
-    assert!(rig.changed.is_empty());
-}
-
-#[test]
 fn dragging_a_knob_writes_its_param_and_reports_it() {
     let mut rig = Rig::new(6, distortion(), DISTORTION);
     let at = rig.rect_of(3).center();

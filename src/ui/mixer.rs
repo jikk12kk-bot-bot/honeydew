@@ -14,13 +14,12 @@
 //! A strip control's press or parameter menu pick is the app's recent control ([`MixerState::touch`]); its menu's
 //! `Unlink from MIDI CC` follows the channel's `CCLK`.
 //!
-//! The level in dB (#133, a Honeydew addition), in 8 pt at every fader height: under a tall fader's cap, where its
-//! lowest value leaves room ([`widgets::below_cap`]), else in a strip under a shorter fader ([`fader_and_readout`]).
-//! The name slot keeps the name while the fader is held.
+//! The level in dB (#133, a Honeydew addition), in 8 pt at every fader height: under a tall fader, half way between
+//! its track's bottom and the knob ([`readout_at`]), else in a strip under a shorter fader ([`fader_and_readout`]).
+//! The name slot always shows the name, the master's too.
 //!
-//! The master's live peak in dB (#143, a Honeydew addition): in its name slot while it is over −60 dB, held a second and then
-//! falling at the meters' release ([`Peak`]). The slot turns the record red once the peak goes over 0 dBFS, until a
-//! tap on the master strip off its controls.
+//! The master's live peak (#143, a Honeydew addition, [`Peak`]): its name slot turns the record red once the peak goes
+//! over 0 dBFS, until a tap on the master strip off its controls.
 
 use eframe::egui::{Align2, Id, Pos2, Rect, Ui, UiBuilder, Vec2, pos2, vec2};
 use honeydew_audio::device::{ModuleMeter, RELEASE_DB_PER_S};
@@ -28,7 +27,7 @@ use honeydew_audio::device::{ModuleMeter, RELEASE_DB_PER_S};
 use crate::icons::draw_icon;
 use crate::metrics::{FontSize, Metrics};
 use crate::midi::links;
-use crate::params::{CHANNEL_PARAMS, Fmt, Sign};
+use crate::params::CHANNEL_PARAMS;
 use crate::song::{AutomationTarget, ChannelKind, Song};
 use crate::theme::{DISABLED_ALPHA, RECORD_COLOR, channel_color};
 use crate::ui::UiCtx;
@@ -159,6 +158,21 @@ fn fader_and_readout(r: Rect, m: &Metrics) -> (Rect, Rect) {
     r.split_top_bottom_at_y(split)
 }
 
+/// Where the dB readout's centre goes for a fader in `fader` at level `v` with its readout room `room`
+/// ([`fader_and_readout`]): under a tall fader, half way between the track's bottom end and the slot's bottom (the
+/// knob's top), unless the cap reaches down there, then just under the cap's lowest place; else `room`'s centre.
+fn readout_at(fader: Rect, room: Rect, v: f32, m: &Metrics) -> Pos2 {
+    if room.bottom() != fader.bottom() {
+        return room.center();
+    }
+    let y = m.round_px((widgets::fader_track(fader, m).bottom() + room.bottom()) / 2.0);
+    if widgets::fader_cap(fader, v, m).bottom() <= y - m.u(DB_ROOM) / 2.0 {
+        pos2(room.center().x, y)
+    } else {
+        room.center()
+    }
+}
+
 /// The rects (device pixels) of the parts a strip in `rect_px` shows, in drawing order, spacers left out.
 fn place_strip(rect_px: Rect, u_px: f32, master: bool) -> Vec<(NodeId, Rect)> {
     let mut placed = layout(&strip_tree(rect_px.height() / u_px, master), rect_px, u_px);
@@ -228,14 +242,8 @@ pub fn show(
     let soloed = any_soloed(song);
     let mut unsolo = false;
     let [left, right] = mini_mixer::meter_peaks(meters, 0);
-    let peak = state.peak.update(left.max(right), ui.input(|i| i.time));
-    // Over −60 dB, where the meters' law starts; it falls to there even with no more input to repaint for.
-    let peak = (mini_mixer::meter(peak) > 0.0).then(|| {
-        ui.ctx().request_repaint();
-        Fmt::new(1, " dB")
-            .sign(Sign::Positive)
-            .apply(f64::from(20.0 * peak.log10()))
-    });
+    // The master's peak only marks an over now: its name slot keeps the name (`MASTER`).
+    state.peak.update(left.max(right), ui.input(|i| i.time));
 
     ui.painter()
         .rect_filled(rect, 0.0, colors.module_fill.to_color32());
@@ -276,14 +284,10 @@ pub fn show(
             };
             let none = |_| String::new();
             let changed = match leaf {
-                // In the channel colour, truncated keeping 5 tail characters; the master's peak. Red on the master
-                // after an over.
+                // In the channel colour, truncated keeping 5 tail characters. Red on the master after an over.
                 NAME => {
                     let font = m.font_id(FontSize::Pt10);
-                    let text = match &peak {
-                        Some(peak) if master => peak.as_str(),
-                        _ => name,
-                    };
+                    let text = name;
                     let ink = if master && state.peak.clipped {
                         ui.painter().rect_filled(r, 0.0, RECORD_COLOR.to_color32());
                         colors.background.to_color32()
@@ -307,8 +311,9 @@ pub fn show(
                     }
                     let text = CHANNEL_PARAMS[0].display_text(params[0]);
                     let font = m.font_id(FontSize::Pt8);
+                    let at = readout_at(fader, room, params[0], m);
                     ui.painter()
-                        .text(room.center(), Align2::CENTER_CENTER, text, font, color);
+                        .text(at, Align2::CENTER_CENTER, text, font, color);
                     changed
                 }
                 // The pan on the ring.
