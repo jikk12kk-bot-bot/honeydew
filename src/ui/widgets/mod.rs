@@ -139,8 +139,9 @@ pub struct Control<'a> {
     /// Knobs: the value text on the ring (the default). Off, no value text (the graph knobs).
     pub ring_text: bool,
     /// Horizontal sliders (Honeydew change): the value text just above the thumb's top, in `label_font`, placed along
-    /// the track's left end, its centre or its right end; drawn only where it fits under the label strip (or the
-    /// rect's top). For sliders with no value strip: the mixers' and the drum strips'.
+    /// the track's left end, its centre or its right end. Where it does not fit under the label strip (or the rect's
+    /// top), the label goes tight to the top, the value under it and the track below both. For sliders with no value
+    /// strip: the mixers', the drum strips' and the sends'.
     pub value_above: Option<Align>,
     /// Sliders (Honeydew change): a value strip that would leave the body under `BODY_MIN` narrows instead, so a
     /// short module slider keeps both its track and its value ([`Control::strips`]).

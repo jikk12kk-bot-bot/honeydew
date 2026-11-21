@@ -98,10 +98,33 @@ fn slider(
     horizontal: bool,
 ) -> Response {
     let (m, colors) = (cx.m, &cx.theme.colors);
-    let (label, body, _) = c.strips(m);
+    let (label, mut body, _) = c.strips(m);
     let label_bottom = label.map_or(c.rect.top(), |r| r.bottom());
     let t = m.t();
-    let track = track(body, horizontal, t, m.u(1.0));
+    let mut track = track(body, horizontal, t, m.u(1.0));
+    // Honeydew change: a value over the thumb that does not fit there (a short drum strip or send row) is not left
+    // out: the label (if any) goes tight to the top, the value under it, and the track moves down below both.
+    let font = m.font_id(c.label_font);
+    let text_h = |s: &str| {
+        let galley = ui.painter().layout_no_wrap(s.to_owned(), font.clone(), c.channel);
+        galley.size().y
+    };
+    let value_h = text_h("0");
+    let compact = horizontal
+        && c.value_above.is_some()
+        && track.center().y - thumb_radius(1.0, t) - m.u(ABOVE_GAP) - value_h < label_bottom;
+    let label_h = if compact && !c.label.is_empty() {
+        text_h(c.label)
+    } else {
+        0.0
+    };
+    if compact {
+        let rest = thumb_radius(0.0, t);
+        let want = c.rect.top() + label_h + value_h + m.u(ABOVE_GAP) + rest;
+        let y = want.min(c.rect.bottom() - rest).max(track.center().y);
+        track = track.translate(vec2(0.0, y - track.center().y));
+        body = c.rect.with_min_y(c.rect.top() + label_h);
+    }
     let len = if horizontal {
         track.width()
     } else {
@@ -110,7 +133,14 @@ fn slider(
     let law = Law::Track { len, horizontal };
     let (response, v) = drag_control(ui, cx, c, value, law, &display);
     let painter = ui.painter();
-    c.strip_texts(painter, m, v, &display);
+    if compact {
+        if label_h > 0.0 {
+            let at = pos2(c.rect.center().x, c.rect.top());
+            painter.text(at, Align2::CENTER_TOP, c.label, font.clone(), c.channel);
+        }
+    } else {
+        c.strip_texts(painter, m, v, &display);
+    }
 
     let (body_ink, ink) = match c.flat {
         Some(flat) => (flat, flat),
@@ -131,12 +161,21 @@ fn slider(
         );
     }
     if horizontal && let Some(align) = c.value_above {
-        value_above(painter, cx, c, track, label_bottom, align, display(v));
+        if compact {
+            let top = c.rect.top() + label_h;
+            value_at(painter, cx, c, track, top + value_h, align, display(v));
+        } else {
+            value_above(painter, cx, c, track, label_bottom, align, display(v));
+        }
     }
     painter.rect_filled(track, 0.0, body_ink);
     painter.rect_filled(fill(track, horizontal, v, c.bipolar), 0.0, ink);
     let (center, r) = thumb(track, horizontal, v, c.bipolar, t);
-    let r = fitted_radius(r, body);
+    let r = if compact {
+        r.min(c.rect.bottom() - center.y).max(0.0)
+    } else {
+        fitted_radius(r, body)
+    };
     painter.circle_filled(center, r, body_ink);
     if r > 2.0 * t {
         painter.circle_filled(center, r - 2.0 * t, ink);
@@ -149,7 +188,8 @@ const ABOVE_GAP: f32 = 0.1;
 
 /// Honeydew change: a horizontal slider's value `text` just above its thumb ([`Control::value_above`]): its bottom
 /// [`ABOVE_GAP`] over the largest thumb's top, along `track`'s left end, centre or right end (`align`), in the label's
-/// font and the channel colour; left out where it would reach above `top` (the label strip's bottom, or the rect's top).
+/// font and the channel colour; where it would reach above `top` (the label strip's bottom, or the rect's top), the
+/// slider takes its compact layout instead ([`Control::value_above`]).
 fn value_above(
     painter: &Painter,
     cx: &UiCtx,
@@ -163,11 +203,27 @@ fn value_above(
     if text.is_empty() {
         return;
     }
-    let galley = painter.layout_no_wrap(text, m.font_id(c.label_font), c.channel);
     let bottom = track.center().y - thumb_radius(1.0, m.t()) - m.u(ABOVE_GAP);
+    let galley = painter.layout_no_wrap(text.clone(), m.font_id(c.label_font), c.channel);
     if bottom - galley.size().y < top {
         return;
     }
+    value_at(painter, cx, c, track, bottom, align, text);
+}
+
+/// A slider's value `text` with its bottom at `bottom`, along `track`'s left end, centre or right end (`align`), in
+/// the label's font and the channel colour, on whole pixels.
+fn value_at(
+    painter: &Painter,
+    cx: &UiCtx,
+    c: &Control,
+    track: Rect,
+    bottom: f32,
+    align: Align,
+    text: String,
+) {
+    let m = cx.m;
+    let galley = painter.layout_no_wrap(text, m.font_id(c.label_font), c.channel);
     let (x, anchor) = match align {
         Align::Min => (track.left(), Align2::LEFT_BOTTOM),
         Align::Center => (track.center().x, Align2::CENTER_BOTTOM),
