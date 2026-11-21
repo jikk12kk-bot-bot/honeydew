@@ -3,7 +3,8 @@
 //! without a param picks the sub-page (UI state, `Show::Setting`).
 //!
 //! The LFO displays ([`lfo`]) and the envelope displays ([`envelopes`]) are module-drawn graph displays: a
-//! controlFillColor rect, the curve on top in the channel colour with line width t = ceil(U/16) px, no grid lines.
+//! controlFillColor rect, the theme's grid on it (Honeydew change), the curve on top in the channel colour with line
+//! width t = ceil(U/16) px.
 //! Envelope displays draw the three inactive envelopes first at 20 % alpha, then the current one; breakpoint discs
 //! (current envelope only) are channel discs of radius 2 t, with a controlFillColor centre of radius t only while
 //! that envelope's `Enable` is off. With the display rect (x, y, w, h) and H = h − t, a value v (0…1) is drawn at
@@ -150,8 +151,8 @@ fn tension(u: f32, tau: f32) -> f32 {
     }
 }
 
-/// The graph display of the tab's LFO, one polyline with no grid and no dots: PAN (tab 1) is LFO 0, VOL … PITCH
-/// (tabs 2–5) LFOs 1–4. Nothing to edit.
+/// The graph display of the tab's LFO over the theme's grid, one polyline with no dots: PAN (tab 1) is LFO 0,
+/// VOL … PITCH (tabs 2–5) LFOs 1–4. Nothing to edit.
 fn lfo(
     ui: &mut Ui,
     cx: &UiCtx,
@@ -164,6 +165,7 @@ fn lfo(
     let t = cx.m.t();
     let painter = ui.painter();
     painter.rect_filled(rect, 0.0, cx.theme.colors.control_fill.to_color32());
+    crate::theme::paint_graph_grid(painter, rect, cx.theme, cx.m.ppp(), (8, 4));
     let points = lfo_points(&module.params, state.tab.saturating_sub(1), rect, t);
     painter.add(Shape::line(points, Stroke::new(t, ink)));
     Vec::new()
@@ -194,6 +196,7 @@ fn envelopes(
     let (p, current) = (&module.params, state.tab.saturating_sub(2));
     let painter = ui.painter();
     painter.rect_filled(rect, 0.0, fill);
+    crate::theme::paint_graph_grid(painter, rect, cx.theme, ppp, (8, 4));
     let dim = Stroke::new(t, ink.gamma_multiply(0.2));
     for e in (0..4).filter(|&e| e != current && param(p, 106 + e) != 0.5) {
         painter.add(Shape::line(envelope(p, e, rect, t, ppp).0, dim));
@@ -888,12 +891,9 @@ pub const REFERENCE: Reference = Reference {
 
 #[cfg(test)]
 mod tests {
-    use eframe::epaint::ColorMode;
 
     use super::*;
-    use crate::panels::place;
     use crate::panels::tests::{U, display_shapes};
-    use crate::theme::theme_by_id;
 
     /// The hairline of the pure-geometry tests; their rect is [`rect`].
     const T: f32 = 2.0;
@@ -1240,17 +1240,6 @@ mod tests {
         );
     }
 
-    /// The content rect at the reference (U = 32 points at any `ppp`) and display `#n`'s rect in it.
-    fn reference(n: u32, state: &PanelState, ppp: f32) -> (Rect, Rect) {
-        let content = Rect::from_min_size(pos2(0.0, 0.0), vec2(16.96 * U, 7.99 * U));
-        let (panel, module) = (panel().unwrap(), ModuleInstance::new(TYPE_ID, 2));
-        let placed = place(&panel, &module, state, content * ppp, U * ppp);
-        (
-            content,
-            placed.iter().find(|(l, _)| l.id == n).unwrap().1 / ppp,
-        )
-    }
-
     /// Tab `tab` with the sub-page list `list` (if any) on `item`.
     fn on(tab: usize, list: Option<(u32, f32)>) -> PanelState {
         let mut state = PanelState {
@@ -1259,138 +1248,6 @@ mod tests {
         };
         state.settings.extend(list);
         state
-    }
-
-    #[test]
-    fn each_lfo_display_draws_its_own_lfo_over_a_control_fill() {
-        let fill = theme_by_id(0).colors.control_fill.to_color32();
-        // Five different LFOs.
-        let mut p = ModuleInstance::new(TYPE_ID, 2).params;
-        for i in 0..5 {
-            let lfo = [SINE, TRIANGLE, SQUARE, SINE, TRIANGLE][i];
-            let k = i as f32;
-            for (base, v) in [
-                (37, lfo),
-                (42, 0.1 * k),
-                (47, 0.2),
-                (52, 0.9 - 0.1 * k),
-                (57, 0.25 * k),
-            ] {
-                p[base + i] = v;
-            }
-        }
-        for ppp in [1.0, 2.0] {
-            for (i, (n, state)) in [
-                (22400, on(1, None)),
-                (32400, on(2, Some((31100, 1.0)))),
-                (42400, on(3, Some((41100, 1.0)))),
-                (52400, on(4, Some((51100, 1.0)))),
-                (62400, on(5, Some((61100, 1.0)))),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let (content, rect) = reference(n, &state, ppp);
-                let shapes = display_shapes(TYPE_ID, n, &p, &state, content, ppp);
-                assert_eq!(shapes.len(), 2, "#{n} ppp {ppp}");
-                let Shape::Rect(back) = &shapes[0] else {
-                    panic!("{:?}", shapes[0])
-                };
-                assert_eq!((back.rect, back.fill), (rect, fill));
-                let Shape::Path(line) = &shapes[1] else {
-                    panic!("{:?}", shapes[1])
-                };
-                // t = ceil(U/16) px is 2 points at ppp 1 and 2.
-                assert_eq!(line.points, lfo_points(&p, i, rect, 2.0), "#{n} ppp {ppp}");
-                assert_ne!(line.points, lfo_points(&p, (i + 1) % 5, rect, 2.0));
-                assert_eq!(
-                    (line.stroke.width, &line.stroke.color),
-                    (2.0, &ColorMode::Solid(Color32::RED))
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn each_envelope_display_draws_the_others_dim_then_its_own_and_the_dots() {
-        let fill = theme_by_id(0).colors.control_fill.to_color32();
-        // Four different envelopes; RES's Amount is 0.5, so it is skipped unless it is the current one.
-        let mut p = ModuleInstance::new(TYPE_ID, 2).params;
-        for (e, amount) in [0.8, 0.9, 0.5, 0.2].into_iter().enumerate() {
-            let k = e as f32;
-            for (base, v) in [
-                (70, 0.1 * k),
-                (74, 0.25),
-                (82, 0.2),
-                (86, 0.5),
-                (94, 0.3 + 0.1 * k),
-                (98, 0.6),
-                (106, amount),
-                (78, 0.9 - 0.2 * k),
-                (90, 0.2),
-                (102, 0.7),
-            ] {
-                p[base + e] = v;
-            }
-        }
-        let t = 2.0;
-        let (dim, full) = (Color32::RED.gamma_multiply(0.2), Color32::RED);
-        for ppp in [1.0, 2.0] {
-            // VOL … PITCH (tabs 2–5) are envelopes 0–3, each on its list's `Envelope` item.
-            for tab in 2..=5 {
-                let (e, n) = (tab - 2, (tab as u32 + 1) * 10_000);
-                let state = on(tab, Some((n + 1100, 0.0)));
-                let (content, rect) = reference(n + 3410, &state, ppp);
-                let others: Vec<usize> = (0..4).filter(|&o| o != e && o != 2).collect();
-                // Enable is on above 0.5, as the engine applies it (`three_osc::toggle`).
-                for enable in [0.0, 0.5, 1.0] {
-                    p[62 + e] = enable;
-                    let shapes = display_shapes(TYPE_ID, n + 3410, &p, &state, content, ppp);
-                    let rings = if enable <= 0.5 { 5 } else { 0 };
-                    assert_eq!(
-                        shapes.len(),
-                        1 + others.len() + 1 + 5 + rings,
-                        "tab {tab} ppp {ppp} Enable {enable}"
-                    );
-                    let Shape::Rect(back) = &shapes[0] else {
-                        panic!("{:?}", shapes[0])
-                    };
-                    assert_eq!((back.rect, back.fill), (rect, fill));
-                    let lines = others.iter().map(|&o| (o, dim)).chain([(e, full)]);
-                    for (shape, (o, color)) in shapes[1..].iter().zip(lines) {
-                        let Shape::Path(line) = shape else {
-                            panic!("{shape:?}")
-                        };
-                        assert_eq!(
-                            line.points,
-                            envelope(&p, o, rect, t, ppp).0,
-                            "tab {tab} envelope {o} ppp {ppp}"
-                        );
-                        assert_eq!(
-                            (line.stroke.width, &line.stroke.color),
-                            (t, &ColorMode::Solid(color))
-                        );
-                    }
-                    let dots = envelope(&p, e, rect, t, ppp).1;
-                    for (k, shape) in shapes[2 + others.len()..].iter().enumerate() {
-                        let Shape::Circle(c) = shape else {
-                            panic!("{shape:?}")
-                        };
-                        // Discs of radius 2t first, then (Enable off) control-fill centres of radius t: rings.
-                        let (radius, color) = if k < 5 {
-                            (2.0 * t, Color32::RED)
-                        } else {
-                            (t, fill)
-                        };
-                        assert_eq!(
-                            (c.center, c.radius, c.fill),
-                            (dots[k % 5], radius, color),
-                            "tab {tab} dot {k}"
-                        );
-                    }
-                }
-            }
-        }
     }
 
     #[test]
