@@ -1,7 +1,7 @@
 name: zz-diagnose
 on:
   push:
-    branches: [arena/57cdf80a-honeydew]
+    branches: [arena/004cc526-honeydew]
 permissions:
   contents: write
 env:
