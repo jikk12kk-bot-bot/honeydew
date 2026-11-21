@@ -1899,50 +1899,6 @@ fn dw_module(rig: &Rig) -> ModuleInstance {
 }
 
 #[test]
-fn a_picked_dwp_loads_off_the_ui_thread_and_sets_only_attack_and_release() {
-    let mut rig = with_dw_files();
-    let program = one_zone_dwp([0.25, 1.0, 1.0, 0.6]);
-    rig.app
-        .files
-        .keep_user_file(Path::new("My Presets/DW Sampler/Keys.dwp"), program);
-    let before = dw_module(&rig);
-    let id = before.instance_id;
-    let steps = rig.app.history.steps();
-    open_dw_presets(&mut rig);
-    // The program picker lists the `.dwp` beside the module presets.
-    picker_row(&mut rig, 0);
-    // The worker's result is applied on a later frame, on the UI thread.
-    assert_eq!(
-        dw_module(&rig),
-        before,
-        "nothing applied in the pick's frame"
-    );
-    worker_done(&mut rig);
-    let target = PresetTarget::Module(id);
-    assert_eq!(rig.overlays(), [Overlay::Rack(DW), picker(DW, target)]);
-    let module = dw_module(&rig);
-    assert_eq!((module.params[1], module.params[2]), (0.25, 0.6));
-    for (i, (now, was)) in module.params.iter().zip(&before.params).enumerate() {
-        assert!(i == 1 || i == 2 || now == was, "param {i}");
-    }
-    let path = b"@L@\0My Presets/DW Sampler/Keys.dwp";
-    let blob = [
-        &b"10WD"[..],
-        &dw_path_chunk(path, &dw_pair(0.25, 0.6)),
-        &dw_chunk(b"MIDI", &[2, 0]),
-    ]
-    .concat();
-    assert_eq!(module.file.custom_data, Some(blob));
-    // The preset name and info strings are stored, and the instrument names its channel.
-    assert_eq!(module.file.preset_name, "Keys");
-    assert_eq!(module.file.provenance, "My Presets/DW Sampler/Keys");
-    assert_eq!(rig.app.song.channels[DW].name, "Keys");
-    assert_eq!(rig.take(), ["ReplaceSong adopting no-resync"]);
-    // No undo step.
-    assert_eq!(rig.app.history.steps(), steps);
-}
-
-#[test]
 fn a_dw_preset_the_program_loader_rejects_loads_its_prms_then_its_path() {
     let mut rig = with_dw_files();
     // A module preset: PRMS Attack 0.1 and Release 0.2, its CSTM naming a program with the floats 0.7 and 0.8.

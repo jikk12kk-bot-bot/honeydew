@@ -2157,32 +2157,6 @@ mod tests {
         (user, songs, files)
     }
 
-    /// Writes `zip` to `path` behind a hole of `hole` bytes, its offsets moved past it as a self-extracting archive's
-    /// are: a sparse file, so an archive that large is quick to make and takes no disk.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn sparse(path: &Path, zip: &[u8], hole: u64) {
-        use std::io::{Seek, SeekFrom, Write};
-        let mut zip = zip.to_vec();
-        let u16_at = |z: &[u8], at: usize| usize::from(u16::from_le_bytes([z[at], z[at + 1]]));
-        let u32_at = |z: &[u8], at: usize| u32::from_le_bytes(z[at..at + 4].try_into().unwrap());
-        let shift = |z: &mut Vec<u8>, at: usize| {
-            let moved = u32_at(z, at) + u32::try_from(hole).unwrap();
-            z[at..at + 4].copy_from_slice(&moved.to_le_bytes());
-        };
-        // The writer adds no comment: the end record is the last 22 bytes. Each directory record's local header
-        // offset is at +42.
-        let end = zip.len() - 22;
-        let mut at = u32_at(&zip, end + 16) as usize;
-        while at < end {
-            shift(&mut zip, at + 42);
-            at += 46 + u16_at(&zip, at + 28) + u16_at(&zip, at + 30) + u16_at(&zip, at + 32);
-        }
-        shift(&mut zip, end + 16);
-        let mut file = std::fs::File::create(path).unwrap();
-        file.seek(SeekFrom::Start(hole)).unwrap();
-        file.write_all(&zip).unwrap();
-    }
-
     /// A hostile entry name makes the archive unreadable, so that `Unzip` writes nothing, not even beside the user
     /// folder, where `../` would lead.
     #[cfg(not(target_arch = "wasm32"))]

@@ -2369,11 +2369,16 @@ impl HoneydewApp {
         crate::ui::anim::set_mode(ctx, self.settings.animations, self.settings.inertia);
         crate::ui::widgets::set_value_bubble(ctx, self.settings.value_bubble);
         // The analyzers' cost (Settings `Limit analyzer refresh`, `Pause hidden analyzers`, `Light pitch tracking`).
-        honeydew_audio::device::set_analysis_throttle(self.settings.analyzer_throttle);
-        honeydew_audio::analysis::set_analyzer_options(
-            self.settings.analyzer_skip_hidden,
-            self.settings.analyzer_light_pitch,
-        );
+        // Process-wide switches: the tests' apps leave them off, so the engine tests running beside them see every
+        // analysis.
+        #[cfg(not(test))]
+        {
+            honeydew_audio::device::set_analysis_throttle(self.settings.analyzer_throttle);
+            honeydew_audio::analysis::set_analyzer_options(
+                self.settings.analyzer_skip_hidden,
+                self.settings.analyzer_light_pitch,
+            );
+        }
         // As the frame starts; the settings tab edits `self.settings` meanwhile.
         let shown = self.settings.clone();
         // The roll's rows tint for the live notes and the engine's keys alike: each channel's, for the roll to take its
