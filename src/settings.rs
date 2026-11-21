@@ -85,7 +85,8 @@ pub const SOUND_MODES: [(u8, &str); 1] = [(3, "NATIVE")];
 /// The former `Grid color:` setting's colours (`gridColor`, an index; 0 was the theme's own), as `0xRRGGBB`: a stored
 /// one moves into the theme's `grid` once ([`Settings::load`]). The grid colours are the theme's now.
 const LEGACY_GRID_COLORS: [u32; 14] = [
-    0, 0xFFFFFF, 0xB4BABE, 0x7C8286, 0x454B4F, 0x000000, 0xE0474C, 0xF08A24, 0xF2D13A, 0x4CC26B, 0x3CC8E0, 0x4A7CF0, 0xA45CE8, 0xF06AB4,
+    0, 0xFFFFFF, 0xB4BABE, 0x7C8286, 0x454B4F, 0x000000, 0xE0474C, 0xF08A24, 0xF2D13A, 0x4CC26B,
+    0x3CC8E0, 0x4A7CF0, 0xA45CE8, 0xF06AB4,
 ];
 
 /// `Audio driver:` items (Android), in menu order, the index stored: which of Android's audio APIs the output uses

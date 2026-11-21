@@ -144,7 +144,11 @@ pub fn grid_h_px(o: &ThemeOptions) -> f32 {
 }
 
 fn scaled_px(w: f32, k: f32) -> f32 {
-    if k > 0.0 { (w * k).round().max(1.0) } else { 0.0 }
+    if k > 0.0 {
+        (w * k).round().max(1.0)
+    } else {
+        0.0
+    }
 }
 
 impl ThemeColors {

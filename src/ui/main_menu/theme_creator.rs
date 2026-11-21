@@ -30,8 +30,8 @@ use super::{MainMenuAction, light_button, scroll, text_field};
 use crate::metrics::FontSize;
 use crate::settings::Settings;
 use crate::theme::{
-    GRID_THICKNESS, MIN_NOTE_BRIGHTNESS, Rgba, Theme, ThemeColors, ThemeOptions, USER_THEME_ID, builtin_themes,
-    channel_color, theme_by_id,
+    GRID_THICKNESS, MIN_NOTE_BRIGHTNESS, Rgba, Theme, ThemeColors, ThemeOptions, USER_THEME_ID,
+    builtin_themes, channel_color, theme_by_id,
 };
 use crate::ui::UiCtx;
 use crate::ui::popup::{self, PopupItem};
@@ -114,7 +114,10 @@ const GROUPS: [(&str, [(&str, f32); 2]); 3] = [
         "Playlist tracks",
         [("Background transparency", 1.0), ("Note brightness", 0.65)],
     ),
-    ("Grid", [("Thickness", 0.25), ("Horizontal thickness", 0.25)]),
+    (
+        "Grid",
+        [("Thickness", 0.25), ("Horizontal thickness", 0.25)],
+    ),
 ];
 
 /// The group of the grid thickness sliders: ×0–×4 ([`crate::theme::GRID_THICKNESS`]) over the slider's 0–1.
@@ -370,7 +373,11 @@ impl ThemeCreator {
                 let value = option(options, g, i);
                 // The grid's thickness shows and drags as ×0–×4 over the slider's 0–1, in steps of ×0.25.
                 let thickness = g == THICKNESS_GROUP;
-                let scale = if thickness { *GRID_THICKNESS.end() } else { 1.0 };
+                let scale = if thickness {
+                    *GRID_THICKNESS.end()
+                } else {
+                    1.0
+                };
                 let shown = |v: f32| match thickness {
                     true => format!("×{:.2}", v * scale),
                     false => format!("{:.0}%", v * 100.0),
