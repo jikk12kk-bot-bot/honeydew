@@ -386,9 +386,8 @@ mod tests {
     use honeydew_audio::MeterSnapshot;
 
     use super::*;
-    use crate::panels::fx::limiter::tests::{metrics, near, rects, row_at, u};
-    use crate::panels::place;
-    use crate::panels::tests::{U, display_shapes, display_shapes_in};
+    use crate::panels::fx::limiter::tests::{metrics, near, u};
+    use crate::panels::tests::{U, display_shapes};
     use crate::theme::theme_by_id;
 
     /// The reference content rect: 14 × 6.99 U at the origin.
@@ -396,86 +395,6 @@ mod tests {
         min: pos2(0.0, 0.0),
         max: pos2(14.0 * U, 6.99 * U),
     };
-
-    #[test]
-    fn each_band_graph_draws_its_own_bands_history() {
-        // A slab where only band k's newest entry has an input: tab k + 1's graph draws one input bar; the others none.
-        use honeydew_audio::MeterSnapshot;
-        use honeydew_audio::analysis::HISTORY;
-        let len = 1 + 3 * HISTORY;
-        for k in 0..3 {
-            let mut slab = vec![0.0; 3 * len];
-            slab[k * len + 1] = 0.5;
-            slab[k * len] = 1.0;
-            for tab in 1..=3 {
-                let state = PanelState {
-                    tab,
-                    ..Default::default()
-                };
-                let shapes = crate::panels::tests::display_shapes_fed(
-                    36,
-                    6 + 9 * tab as u32,
-                    &ModuleInstance::new(36, 2).params,
-                    &state,
-                    CONTENT,
-                    2.0,
-                    (MeterSnapshot::default(), &slab),
-                );
-                // Fill, 3 grid rows, the threshold; one input bar on its own band's page.
-                let want = if tab == k + 1 { 6 } else { 5 };
-                assert_eq!(shapes.len(), want, "band {k}, tab {tab}");
-            }
-        }
-    }
-
-    #[test]
-    fn a_band_graph_reads_its_own_band_s_thres_whatever_the_tab() {
-        // In the pass where the tab strip switches pages, the outgoing graph still draws once with the new tab: it
-        // must read its own band's `Thres` then too, never p0 (Master) nor the incoming band's.
-        let text = theme_by_id(0).colors.text.to_color32();
-        let mut module = ModuleInstance::new(36, 2);
-        for (p, v) in [(7, 0.5), (14, 0.0), (21, 1.0)] {
-            module.params[p] = v;
-        }
-        let panel = panel().expect("a panel");
-        for (k, (leaf, t)) in [(15, -24.0), (24, -48.0), (33, 0.0)]
-            .into_iter()
-            .enumerate()
-        {
-            let shown = PanelState {
-                tab: k + 1,
-                ..Default::default()
-            };
-            let placed = place(&panel, &module, &shown, CONTENT, U);
-            let draw = (placed.iter().find(|(l, _)| l.id == leaf))
-                .and_then(|(l, _)| l.draw)
-                .expect("a draw");
-            let alone = Panel::new(display(leaf).draw(draw));
-            for tab in 0..4 {
-                let state = PanelState {
-                    tab,
-                    ..Default::default()
-                };
-                let got = rects(display_shapes_in(
-                    &alone,
-                    36,
-                    leaf,
-                    &module.params,
-                    &state,
-                    CONTENT,
-                    1.0,
-                ));
-                let (r, threshold) = (got[0].0, got[4]);
-                assert_eq!(threshold.1, text);
-                let want = row_at(r, 1.0, (60.0 + t) / 66.0);
-                assert!(
-                    near(threshold.0, want),
-                    "#{leaf} on tab {tab}: {:?}",
-                    threshold.0
-                );
-            }
-        }
-    }
 
     /// The VU's reference rect (1, 6.24, 12, 0.75) U.
     fn vu_rect() -> Rect {

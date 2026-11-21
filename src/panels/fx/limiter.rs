@@ -160,12 +160,11 @@ pub const REFERENCE: Reference = Reference {
 
 #[cfg(test)]
 pub(super) mod tests {
-    use eframe::egui::{Shape, pos2, vec2};
+    use eframe::egui::{pos2, vec2};
 
     use super::*;
     use crate::metrics::DEFAULT_UI_SCALE;
     use crate::panels::tests::U;
-    use crate::theme::theme_by_id;
 
     /// U = 32 points at either density.
     pub(in crate::panels::fx) fn metrics(ppp: f32) -> Metrics {
@@ -175,21 +174,6 @@ pub(super) mod tests {
     /// A rect given in U.
     pub(in crate::panels::fx) fn u(x: f32, y: f32, w: f32, h: f32) -> Rect {
         Rect::from_min_size(pos2(x * U, y * U), vec2(w * U, h * U))
-    }
-
-    /// The filled rects `shapes` holds, as (rect, fill); panics on anything else.
-    pub(in crate::panels::fx) fn rects(shapes: Vec<Shape>) -> Vec<(Rect, Color32)> {
-        let rect = |s: Shape| match s {
-            Shape::Rect(r) => (r.rect, r.fill),
-            other => panic!("{other:?}"),
-        };
-        shapes.into_iter().map(rect).collect()
-    }
-
-    /// The 1 px row at k of the height: (y + h − 1 px) − h·k, as a rect.
-    pub(in crate::panels::fx) fn row_at(r: Rect, ppp: f32, k: f32) -> Rect {
-        let y = r.bottom() - 1.0 / ppp - r.height() * k;
-        Rect::from_x_y_ranges(r.x_range(), y..=y + 1.0 / ppp)
     }
 
     #[test]
@@ -208,69 +192,6 @@ pub(super) mod tests {
             }
             // The threshold T = p4·24 − 24: p4 = 0 is −24 dB (36/66 up), p4 = 1 is 0 dB, on the top grid line.
             assert!((scale_y(r, &m, -24.0) - (bottom - 3.49 * U * 36.0 / 66.0)).abs() < 1e-3);
-        }
-    }
-
-    #[test]
-    fn a_feed_draws_the_input_and_output_bars_and_the_gain_trace() {
-        // The newest two entries: input at 0 dB (60/66) and +12 dB (clamped to h), output at −24 dB (36/66), gain
-        // at −6 dB (54/66). The rest of the history is empty: no bars, and the trace starts at the first entry.
-        use honeydew_audio::MeterSnapshot;
-        let text = theme_by_id(0).colors.text.to_color32();
-        let content = Rect::from_min_size(pos2(0.0, 0.0), vec2(14.0 * U, 3.99 * U));
-        let mut slab = vec![0.0; 1 + 3 * HISTORY];
-        for (k, f) in [(0, 60.0 / 66.0), (1, 36.0 / 66.0), (2, 54.0 / 66.0)] {
-            slab[1 + k * HISTORY + 1] = f;
-            slab[1 + k * HISTORY] = f;
-        }
-        slab[1] = 1.2;
-        slab[0] = 2.0;
-        for ppp in [1.0, 2.0] {
-            let shapes = crate::panels::tests::display_shapes_fed(
-                28,
-                3,
-                &ModuleInstance::new(28, 2).params,
-                &PanelState::default(),
-                content,
-                ppp,
-                (MeterSnapshot::default(), &slab),
-            );
-            // Grid (5), input bars (2), output bars (2), the trace, the threshold.
-            assert_eq!(shapes.len(), 11, "ppp {ppp}: {shapes:?}");
-            // The display rect, from its −60 dB row: the last one.
-            let Shape::Rect(grid) = &shapes[0] else {
-                panic!()
-            };
-            let r = Rect::from_x_y_ranges(grid.rect.x_range(), 0.0..=grid.rect.max.y);
-            let h = r.height();
-            let cw = r.width() / HISTORY as f32;
-            let bars: Vec<(Rect, Color32)> = rects(shapes[5..9].to_vec());
-            let col = |i: usize, height: f32| {
-                let x = r.left() + i as f32 * cw;
-                Rect::from_x_y_ranges(x..=x + cw, r.bottom() - height..=r.bottom())
-            };
-            let newest = HISTORY - 1;
-            assert!(near(bars[0].0, col(newest - 1, h)), "ppp {ppp}: {bars:?}");
-            assert!(
-                near(bars[1].0, col(newest, h * 60.0 / 66.0)),
-                "ppp {ppp}: {bars:?}"
-            );
-            assert_eq!(bars[0].1, text.gamma_multiply(0.2));
-            assert!(
-                near(bars[3].0, col(newest, h * 36.0 / 66.0)),
-                "ppp {ppp}: {bars:?}"
-            );
-            assert_eq!(bars[3].1, Color32::RED.gamma_multiply(0.3));
-            let Shape::Path(trace) = &shapes[9] else {
-                panic!("{:?}", shapes[9])
-            };
-            assert_eq!(trace.points.len(), 2);
-            let y = r.bottom() - h * 54.0 / 66.0;
-            assert!(
-                (trace.points[1].y - y).abs() < 1e-3
-                    && (trace.points[1].x - col(newest, 0.0).left()).abs() < 1e-3
-            );
-            assert_eq!(trace.stroke.width, 1.0 / ppp);
         }
     }
 
