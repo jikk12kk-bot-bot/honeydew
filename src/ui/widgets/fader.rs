@@ -61,6 +61,11 @@ pub fn below_cap(rect: Rect, m: &crate::metrics::Metrics) -> Rect {
     )
 }
 
+/// The cap of a fader in `rect` at value `v` (Honeydew change: the mixer keeps its readout clear of it).
+pub fn fader_cap(rect: Rect, v: f32, m: &crate::metrics::Metrics) -> Rect {
+    parts(rect, v, m.t(), m.u(1.0), 1.0 / m.ppp()).cap
+}
+
 /// The track of a fader in `rect`: its value runs up it from 0 at the bottom.
 pub fn fader_track(rect: Rect, m: &crate::metrics::Metrics) -> Rect {
     parts(rect, 0.0, m.t(), m.u(1.0), 1.0 / m.ppp()).track
