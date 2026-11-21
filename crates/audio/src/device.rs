@@ -332,18 +332,18 @@ enum CallbackCommand<R> {
 /// callback shorter than a sub-block is one, so at 128 frames they keep 683 ms. Levels only, so they cost little.
 const SLOTS: usize = 256;
 
-/// The analyses each meter keeps ([`MeterCell::analyses`]), written apart from its levels: every sub-block, or with
-/// [`set_analysis_throttle`] on at most once a [`SUB_BLOCK`] (about 94 a second at 48 kHz) and at least 1/16 of a
-/// callback apart, so the ring still holds four callbacks of a big buffer.
+/// The analyses each meter keeps ([`MeterCell::analyses`]), written apart from its levels: every sub-block, or under
+/// [`set_analysis_limit`] at most that many times a second and at least 1/16 of a callback apart, so the ring still
+/// holds four callbacks of a big buffer.
 const ANALYSES: usize = 64;
 
-/// Settings `Limit analyzer refresh`: the analyses publish at most once a [`SUB_BLOCK`] ([`ANALYSES`]). Off until the
-/// app says.
-static ANALYSIS_THROTTLE: AtomicBool = AtomicBool::new(false);
+/// Settings `Analyzer refresh limit:` (every module's display: the Analyzer's, the Tuner's, the Limiter's, ...): the
+/// analyses publish at most this many times a second ([`ANALYSES`]); 0: after every sub-block. 0 until the app says.
+static ANALYSIS_LIMIT_HZ: AtomicU32 = AtomicU32::new(0);
 
-/// Sets [`ANALYSIS_THROTTLE`]; the audio thread takes it at its next callback.
-pub fn set_analysis_throttle(on: bool) {
-    ANALYSIS_THROTTLE.store(on, Ordering::Relaxed);
+/// Sets [`ANALYSIS_LIMIT_HZ`] (0: no limit); the audio thread takes it at its next callback.
+pub fn set_analysis_limit(hz: u32) {
+    ANALYSIS_LIMIT_HZ.store(hz, Ordering::Relaxed);
 }
 
 /// The most latency the output clock takes, in the callback's sub-blocks (#145): the rest of the ring holds the
@@ -561,11 +561,11 @@ impl MeterBank {
         )
     }
 
-    /// A callback of `frames` frames starts: the analyses' gap for its sub-blocks ([`ANALYSES`]).
-    fn pace(&self, frames: usize) {
-        let gap = match ANALYSIS_THROTTLE.load(Ordering::Relaxed) {
-            true => SUB_BLOCK.max(frames / 16) as u64,
-            false => 0,
+    /// A callback of `frames` frames at `rate` Hz starts: the analyses' gap for its sub-blocks ([`ANALYSES`]).
+    fn pace(&self, frames: usize, rate: u32) {
+        let gap = match ANALYSIS_LIMIT_HZ.load(Ordering::Relaxed) {
+            0 => 0,
+            hz => u64::from(rate / hz).max(frames as u64 / 16),
         };
         self.5.gap.store(gap, Ordering::Relaxed);
     }
@@ -1410,7 +1410,7 @@ impl<R: AudioRenderer> CallbackState<R> {
             self.shared.origin.store(origin, Ordering::Release);
             self.shared.clocked.store(true, Ordering::Release);
         }
-        self.meters.pace(frames);
+        self.meters.pace(frames, sample_rate);
         let mut at = 0;
         while at < frames {
             let length = (frames - at).min(SUB_BLOCK) * channels;

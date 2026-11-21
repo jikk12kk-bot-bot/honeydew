@@ -81,7 +81,7 @@ impl<'de> Deserialize<'de> for Rgba {
     }
 }
 
-/// The 11 colour roles of a theme.
+/// The 13 colour roles of a theme.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThemeColors {
@@ -97,33 +97,59 @@ pub struct ThemeColors {
     pub black_key: Rgba,
     pub white_key_disabled: Rgba,
     pub black_key_disabled: Rgba,
+    /// The vertical grid: the beat and bar lines of the playlist and the editors (our own key). By default
+    /// `controlFill` [`GRID_INK`] of the way to `text`.
+    pub grid: Rgba,
+    /// The horizontal grid: the lines between the rows of the playlist, the piano roll and the drum grid (our own
+    /// key). By default `background`.
+    pub grid_horizontal: Rgba,
 }
 
-/// SETTINGS' `Grid color:` (`crate::settings::GRID_COLORS`): 0 for the theme's own ([`grid_ink`]), else
-/// `0x01RRGGBB`. The app sets it from the settings ([`set_grid_color`]); the painters read it.
-static GRID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-/// Sets the grid colour: `None` for the theme's own, else `0xRRGGBB`.
-pub fn set_grid_color(rgb: Option<u32>) {
-    let packed = rgb.map_or(0, |rgb| 0x0100_0000 | (rgb & 0xFF_FFFF));
-    GRID.store(packed, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// How far the theme's own grid colour is from `controlFill` toward `text`: the beat lines stand out on the rows
+/// How far the theme's default grid colour is from `controlFill` toward `text`: the beat lines stand out on the rows
 /// (they were `background`, barely darker than the rows, in the built-in themes).
 pub const GRID_INK: f32 = 0.32;
 
-/// The beat lines' colour over the rows of the playlist and the editors: SETTINGS' `Grid color:`, or by default
-/// `controlFill` [`GRID_INK`] of the way to `text`.
+/// The vertical grid's default in a theme of `control_fill` and `text`, in whole 1/255 steps as a theme file stores
+/// it, so a saved theme loads back the same.
+fn default_grid(control_fill: Rgba, text: Rgba) -> Rgba {
+    let mix = |x: f32, y: f32| ((x + (y - x) * GRID_INK) * 255.0).round() / 255.0;
+    Rgba::rgb(
+        mix(control_fill.r, text.r),
+        mix(control_fill.g, text.g),
+        mix(control_fill.b, text.b),
+    )
+}
+
+/// The beat lines' colour over the rows of the playlist and the editors: the theme's `grid`.
 pub fn grid_ink(c: &ThemeColors) -> Color32 {
-    let packed = GRID.load(std::sync::atomic::Ordering::Relaxed);
-    if packed != 0 {
-        let [_, r, g, b] = packed.to_be_bytes();
-        return Color32::from_rgb(r, g, b);
+    c.grid.to_color32()
+}
+
+/// The lines' colour between the rows of the playlist and the editors: the theme's `gridHorizontal`.
+pub fn grid_h_ink(c: &ThemeColors) -> Color32 {
+    c.grid_horizontal.to_color32()
+}
+
+/// The grid thickness options' range (a multiple of the default lines): 0 hides the lines.
+pub const GRID_THICKNESS: std::ops::RangeInclusive<f32> = 0.0..=4.0;
+
+/// A vertical grid line of `w` device pixels (4 at a bar, 2 at a beat, 1 finer) at the theme's `gridThickness`, in
+/// whole device pixels, at least 1 while the thickness is above 0; 0: no line.
+pub fn grid_width(w: f32, o: &ThemeOptions) -> f32 {
+    scaled_px(w, o.grid_thickness)
+}
+
+/// The horizontal grid's lines in device pixels (1 at the default) at the theme's `gridHorizontalThickness`; 0: none.
+pub fn grid_h_px(o: &ThemeOptions) -> f32 {
+    scaled_px(1.0, o.grid_horizontal_thickness)
+}
+
+fn scaled_px(w: f32, k: f32) -> f32 {
+    if k > 0.0 {
+        (w * k).round().max(1.0)
+    } else {
+        0.0
     }
-    let (a, b) = (c.control_fill, c.text);
-    let mix = |x: f32, y: f32| x + (y - x) * GRID_INK;
-    Rgba::rgb(mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b)).to_color32()
 }
 
 impl ThemeColors {
@@ -168,7 +194,7 @@ impl ThemeColors {
 /// dark text colour, so 0 (or less) would blow up.
 pub const MIN_NOTE_BRIGHTNESS: f32 = 0.01;
 
-/// The 4 float options of a theme.
+/// The 6 float options of a theme.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThemeOptions {
@@ -176,6 +202,10 @@ pub struct ThemeOptions {
     pub accent_lightness: f32,
     pub playlist_track_note_brightness: f32,
     pub playlist_track_background_transparency: f32,
+    /// The vertical grid lines' thickness, a multiple of the default ([`GRID_THICKNESS`]; our own key).
+    pub grid_thickness: f32,
+    /// The horizontal grid lines' thickness, a multiple of the default 1 px ([`GRID_THICKNESS`]; our own key).
+    pub grid_horizontal_thickness: f32,
 }
 
 /// A fully resolved theme.
@@ -214,6 +244,8 @@ struct RawColors {
     black_key: Option<Rgba>,
     white_key_disabled: Option<Rgba>,
     black_key_disabled: Option<Rgba>,
+    grid: Option<Rgba>,
+    grid_horizontal: Option<Rgba>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -223,6 +255,8 @@ struct RawOptions {
     accent_lightness: Option<f32>,
     playlist_track_note_brightness: Option<f32>,
     playlist_track_background_transparency: Option<f32>,
+    grid_thickness: Option<f32>,
+    grid_horizontal_thickness: Option<f32>,
 }
 
 /// A file may leave out anything: the id and name too (an imported file is named after itself, [`import`]).
@@ -244,12 +278,21 @@ impl RawTheme {
             self.options.unwrap_or_default(),
         );
         let text = c.text.unwrap_or(Rgba::hex(0xC7CEDA));
+        let background = c.background.unwrap_or(Rgba::hex(0x21272B));
+        let control_fill = c.control_fill.unwrap_or(Rgba::hex(0x31373B));
+        let thickness = |k: Option<f32>| {
+            let k = k.unwrap_or(1.0);
+            match k.is_finite() {
+                true => k.clamp(*GRID_THICKNESS.start(), *GRID_THICKNESS.end()),
+                false => 1.0,
+            }
+        };
         Theme {
             id: self.id,
             name: self.name,
             colors: ThemeColors {
-                background: c.background.unwrap_or(Rgba::hex(0x21272B)),
-                control_fill: c.control_fill.unwrap_or(Rgba::hex(0x31373B)),
+                background,
+                control_fill,
                 module_fill: c.module_fill.unwrap_or(Rgba::hex(0x394046)),
                 menu_fill: c.menu_fill.unwrap_or(Rgba::hex(0x434C51)),
                 text,
@@ -260,6 +303,8 @@ impl RawTheme {
                 black_key: c.black_key.unwrap_or(Rgba::hex(0x21272B)),
                 white_key_disabled: c.white_key_disabled.unwrap_or(Rgba::hex(0x9FA6B0)),
                 black_key_disabled: c.black_key_disabled.unwrap_or(Rgba::hex(0x717981)),
+                grid: c.grid.unwrap_or(default_grid(control_fill, text)),
+                grid_horizontal: c.grid_horizontal.unwrap_or(background),
             },
             options: ThemeOptions {
                 accent_saturation: o.accent_saturation.unwrap_or(0.9),
@@ -271,6 +316,8 @@ impl RawTheme {
                 playlist_track_background_transparency: o
                     .playlist_track_background_transparency
                     .unwrap_or(1.0),
+                grid_thickness: thickness(o.grid_thickness),
+                grid_horizontal_thickness: thickness(o.grid_horizontal_thickness),
             },
         }
     }
@@ -304,12 +351,16 @@ pub fn builtin_themes() -> Vec<Theme> {
                 black_key: key(1),
                 white_key_disabled: key(2),
                 black_key_disabled: key(3),
+                grid: None,
+                grid_horizontal: None,
             }),
             options: Some(RawOptions {
                 accent_saturation: opt(0),
                 accent_lightness: opt(1),
                 playlist_track_note_brightness: opt(2),
                 playlist_track_background_transparency: opt(3),
+                grid_thickness: None,
+                grid_horizontal_thickness: None,
             }),
         }
     };

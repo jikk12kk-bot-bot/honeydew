@@ -82,24 +82,15 @@ pub const SOUND_PRESETS: [(u8, u8, u8); 4] = [(3, 0, 0), (1, 1, 0), (0, 1, 5), (
 #[cfg(not(any(desktop, target_os = "android")))]
 pub const SOUND_MODES: [(u8, &str); 1] = [(3, "NATIVE")];
 
-/// `Grid color:` items, in menu order: `Default` (from the theme, [`crate::theme::grid_ink`]), then fixed colours
-/// as `0xRRGGBB`.
-pub const GRID_COLORS: [(&str, u32); 14] = [
-    ("Default", 0),
-    ("White", 0xFFFFFF),
-    ("Light gray", 0xB4BABE),
-    ("Gray", 0x7C8286),
-    ("Dark gray", 0x454B4F),
-    ("Black", 0x000000),
-    ("Red", 0xE0474C),
-    ("Orange", 0xF08A24),
-    ("Yellow", 0xF2D13A),
-    ("Green", 0x4CC26B),
-    ("Cyan", 0x3CC8E0),
-    ("Blue", 0x4A7CF0),
-    ("Purple", 0xA45CE8),
-    ("Pink", 0xF06AB4),
+/// The former `Grid color:` setting's colours (`gridColor`, an index; 0 was the theme's own), as `0xRRGGBB`: a stored
+/// one moves into the theme's `grid` once ([`Settings::load`]). The grid colours are the theme's now.
+const LEGACY_GRID_COLORS: [u32; 14] = [
+    0, 0xFFFFFF, 0xB4BABE, 0x7C8286, 0x454B4F, 0x000000, 0xE0474C, 0xF08A24, 0xF2D13A, 0x4CC26B,
+    0x3CC8E0, 0x4A7CF0, 0xA45CE8, 0xF06AB4,
 ];
+
+/// `Analyzer refresh limit:` items in Hz, in menu order: 0 is `Unlimited` (every sub-block, as fast as the engine goes).
+pub const ANALYZER_REFRESH: [u16; 11] = [0, 15, 24, 30, 45, 60, 75, 90, 120, 144, 240];
 
 /// `Audio driver:` items (Android), in menu order, the index stored: which of Android's audio APIs the output uses
 /// (`honeydew_audio::device::set_android_driver`).
@@ -239,9 +230,6 @@ pub struct Settings {
     /// buffer the phone plays. Off by default.
     #[serde(rename = "lowLatencyMode")]
     pub low_latency_mode: bool,
-    /// `Grid color:`, an index into [`GRID_COLORS`] (our own key): the beat lines of the playlist and the editors.
-    #[serde(rename = "gridColor")]
-    pub grid_color: u8,
     /// `Audio driver:` (Android; our own key), an index into [`AUDIO_DRIVERS`]. AAudio by default.
     #[serde(rename = "audioDriverAndr")]
     pub audio_driver: u8,
@@ -471,15 +459,16 @@ pub struct Settings {
     /// user added to the library, by path, in the order added ([`crate::ui::main_menu::library::library_folders`]).
     #[serde(rename = "libraryFolders")]
     pub library_folders: Vec<String>,
-    /// `Limit analyzer refresh` (our own key): the analyses reach the panels at most about 94 times a second
-    /// (`honeydew_audio::device::set_analysis_throttle`), not after every small buffer. On by default.
-    #[serde(rename = "analyzerThrottle")]
-    pub analyzer_throttle: bool,
-    /// `Pause hidden analyzers` (our own key): an Analyzer whose panel is closed skips its display's work
+    /// `Analyzer refresh limit:` (our own key), one of [`ANALYZER_REFRESH`] in Hz, 0: none. The modules' displays (the
+    /// Analyzer's, the Tuner's, the Limiter's, ...) take the engine's analysis at most this many times a second
+    /// (`honeydew_audio::device::set_analysis_limit`), not after every small buffer. 60 by default.
+    #[serde(rename = "analyzerRefreshHz")]
+    pub analyzer_refresh_hz: u16,
+    /// The Analyzer's global `Pause hidden` (our own key; on the Analyzer's SETTINGS page, not the SETTINGS tab): an Analyzer whose panel is closed skips its display's work
     /// (`honeydew_audio::analysis::set_analyzer_options`); its loudness meter runs on. On by default.
     #[serde(rename = "analyzerSkipHidden")]
     pub analyzer_skip_hidden: bool,
-    /// `Light pitch tracking` (our own key): the Analyzer's pitch track reads the pitch once an entry (50 ms), not
+    /// The Analyzer's global `Light pitch` (our own key; on the Analyzer's SETTINGS page, not the SETTINGS tab): the Analyzer's pitch track reads the pitch once an entry (50 ms), not
     /// every 512 samples. On by default.
     #[serde(rename = "analyzerLightPitch")]
     pub analyzer_light_pitch: bool,
@@ -530,7 +519,6 @@ impl Default for Settings {
             background_audio: false,
             sound_mode: DEFAULT_SOUND_MODE,
             low_latency_mode: false,
-            grid_color: 0,
             audio_driver: 0,
             latency_compensation: true,
             multitrack_recording: false,
@@ -591,7 +579,7 @@ impl Default for Settings {
             input_gain_db: 0.0,
             value_bubble: true,
             library_folders: Vec::new(),
-            analyzer_throttle: true,
+            analyzer_refresh_hz: 60,
             analyzer_skip_hidden: true,
             analyzer_light_pitch: true,
             folder_shortcuts: Vec::new(),
@@ -621,14 +609,6 @@ impl Settings {
         }
     }
 
-    /// `Grid color:` as `0xRRGGBB`, `None` for the theme's own ([`crate::theme::set_grid_color`]).
-    pub fn grid_rgb(&self) -> Option<u32> {
-        match GRID_COLORS.get(usize::from(self.grid_color)) {
-            Some(&(_, rgb)) if self.grid_color > 0 => Some(rgb),
-            _ => None,
-        }
-    }
-
     /// The settings stored in `storage`. Anything missing or unreadable is the default, field by field, and so is an
     /// out-of-range value: an unknown theme is Classic Gray, an unknown scale 100 %.
     pub fn load(storage: &dyn eframe::Storage) -> Self {
@@ -654,6 +634,11 @@ impl Settings {
             }
         }
         migrate_keys(&mut fields, cfg!(target_os = "android"));
+        // The former `Grid color:` setting: its colour becomes the theme's vertical grid, below.
+        let legacy_grid = (fields.remove("gridColor").and_then(|v| v.as_u64()))
+            .filter(|&i| i > 0)
+            .and_then(|i| LEGACY_GRID_COLORS.get(usize::try_from(i).ok()?))
+            .copied();
         // Older versions stored this setting as a boolean toggle. Preserve an enabled toggle as the
         // smallest target when loading those settings into the buffer-size slider.
         if let Some(enabled) = fields.get("lowlatency").and_then(Value::as_bool) {
@@ -673,6 +658,11 @@ impl Settings {
         if Theme::from_json(&s.custom_theme).is_err() {
             s.custom_theme.clear();
         }
+        if let Some(rgb) = legacy_grid {
+            let mut theme = s.theme();
+            theme.colors.grid = crate::theme::Rgba::hex(rgb);
+            s.custom_theme = theme.to_json();
+        }
         s.ui_scale = s
             .ui_scale
             .clamp(*UI_SCALE_RANGE.start(), *UI_SCALE_RANGE.end());
@@ -680,8 +670,8 @@ impl Settings {
         if !SOUND_MODES.iter().any(|&(id, _)| id == s.sound_mode) {
             s.sound_mode = d.sound_mode;
         }
-        if usize::from(s.grid_color) >= GRID_COLORS.len() {
-            s.grid_color = d.grid_color;
+        if !ANALYZER_REFRESH.contains(&s.analyzer_refresh_hz) {
+            s.analyzer_refresh_hz = d.analyzer_refresh_hz;
         }
         if usize::from(s.audio_driver) >= AUDIO_DRIVERS.len() {
             s.audio_driver = d.audio_driver;
@@ -1049,7 +1039,6 @@ mod tests {
                 .map(|&(id, _)| id)
                 .unwrap_or(d.sound_mode),
             low_latency_mode: !d.low_latency_mode,
-            grid_color: 3,
             audio_driver: 2,
             latency_compensation: !d.latency_compensation,
             multitrack_recording: !d.multitrack_recording,
@@ -1119,7 +1108,7 @@ mod tests {
             input_gain_db: 6.5,
             value_bubble: !d.value_bubble,
             library_folders: vec!["/storage/emulated/0/Music".into()],
-            analyzer_throttle: !d.analyzer_throttle,
+            analyzer_refresh_hz: 0,
             analyzer_skip_hidden: !d.analyzer_skip_hidden,
             analyzer_light_pitch: !d.analyzer_light_pitch,
             folder_shortcuts: vec!["Songs|My Samples/Drums".into()],

@@ -1,22 +1,11 @@
-Honeydew 0.0.9: the fixes of Honeydew 0.5.5, a piano roll that marks the scale's root, bigger buffers and lighter analyzers.
+Honeydew 0.0.10: the grid is part of the theme, and the analyzer options move.
 
-- Piano roll.
-  - The key column's root bar sits on the project scale's root (the home note, as the on-screen keyboard marks it), not always on C. The octave labels stay on C.
-  - Notes off the project scale are drawn in the channel colour, faded (about half see-through), instead of gray.
-  - Ghost notes of the channel's other clips, with a `Ghosts` switch; ghosts' velocity and pan in the graph lane; a long press on a ghost opens its clip.
-  - Note names on the notes and the channel's name; zoom in to 1/128 steps.
-- Settings.
-  - `Audio buffer size` goes up to 32768 frames: 12288, 16384, 24576 and 32768 are new.
-  - `Limit analyzer refresh`: the Analyzer's display updates about 94 times a second at most.
-  - `Pause hidden analyzers`: an Analyzer whose panel is closed skips its spectrum, scopes and pitch tracking (its loudness meter runs on).
-  - `Light pitch tracking`: the Analyzer reads the pitch once per 50 ms step, a cheaper pitch detector.
-  - `Show value while dragging` (a value bubble on knobs and sliders, #171), `Input gain` before monitoring and recording (#129), and Library folders with All files access (#144).
-- Fixes from Honeydew 0.5.5:
-  - Meters at long latencies (#145); the master peak in dB, red above 0 dBFS; meters fall at 60 dB/s.
-  - Multi-core mixing on Android; 60 fps while playing on phones; monitoring at big buffers.
-  - DW Sampler: root note 60 and .dwp/.sfz import (#176). Audio clips: Speed and SYNC (#173). The drum Sample tab shows the waveform (#175).
-  - The save dialog's length follows tempo automation. Streaming previews (#131, #153).
-  - ZIPs over 512 MiB, unzipped songs, Lemon and library samples in ZIPs (#168, #157).
-  - Android Back closes the top window first, then asks "Exit Honeydew?" (#147).
-  - Rack Copy/Paste and presets keep plugin modules (#149).
-  - Lemon update, Tesla `Convert to score`, an OK button by the type-in field, and Tesla never frees a sample during playback (#164, #166, #167).
+- Theme creator. The grid's look is now set in the theme, not in Settings:
+  - `Grid`: the colour of the vertical beat and bar lines in the playlist and the editors (piano roll, drum grid, automation, audio editor).
+  - `Horizontal grid` (new): the colour of the lines between rows in the playlist, the piano roll and the drum grid, and of the automation editor's value lines.
+  - `Grid` group, `Thickness` and `Horizontal thickness`: how thick the vertical and the horizontal lines are, from ×0 (hidden) to ×4, in steps of ×0.25.
+  - The preview at the top shows the grid as you edit it. Saved, exported and imported themes keep it.
+- Settings. `Grid color:` is gone from SETTINGS. A grid colour picked there before becomes the theme's `Grid` colour the first time this version opens.
+- Analyzer options.
+  - Settings: `Limit analyzer refresh` is now `Analyzer refresh limit:`, a value of its own: Unlimited (as fast as the engine goes), or 15, 24, 30, 45, 60 (the default), 75, 90, 120, 144 or 240 updates a second. It sets how often the module displays update at most (the Analyzer, the Tuner, the Limiter and every other module that draws its sound); fewer updates take less CPU from the audio. It changes only the pictures, never the sound.
+  - The Analyzer's SETTINGS page: `Pause hidden` and `Light pitch` (formerly in Settings) now sit here, on a third row. They are global: switching one in any Analyzer switches it for all of them, and the app remembers them; songs do not save them.

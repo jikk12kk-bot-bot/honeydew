@@ -9,7 +9,9 @@
 //! - a row per colour role, keyed by its theme JSON key: its name, `RRGGBB` and a swatch. A tap opens its picker under
 //!   it: a saturation (across) and value (up) field and a hue bar, both dragged, and a hex field; a tap closes it;
 //! - `Channel color modifiers` (`Saturation`, `Lightness`) and `Playlist tracks` (`Background transparency`,
-//!   `Note brightness`), each a 0–100 % slider over its theme option.
+//!   `Note brightness`), each a 0–100 % slider over its theme option; `Grid` (`Thickness`, `Horizontal thickness`),
+//!   each a ×0–×4 slider over the grid lines' thickness (×0 hides them). The grid's colours are the `Grid` and
+//!   `Horizontal grid` colour rows.
 //!
 //! Every change applies at once: the theme becomes the one in use (`Settings::custom_theme`), named after the field
 //! (`Custom` while it is empty). Until it is saved, SETTINGS' `Theme:` warns before a pick replaces it
@@ -28,8 +30,8 @@ use super::{MainMenuAction, light_button, scroll, text_field};
 use crate::metrics::FontSize;
 use crate::settings::Settings;
 use crate::theme::{
-    MIN_NOTE_BRIGHTNESS, Rgba, Theme, ThemeColors, ThemeOptions, USER_THEME_ID, builtin_themes,
-    channel_color, theme_by_id,
+    GRID_THICKNESS, MIN_NOTE_BRIGHTNESS, Rgba, Theme, ThemeColors, ThemeOptions, USER_THEME_ID,
+    builtin_themes, channel_color, theme_by_id,
 };
 use crate::ui::UiCtx;
 use crate::ui::popup::{self, PopupItem};
@@ -67,7 +69,7 @@ pub const NAME_FIRST: &str = "Enter theme name";
 const USER_THEMES: usize = 1000;
 
 /// The colour rows, in order: the label and the role.
-const ROLES: [&str; 11] = [
+const ROLES: [&str; 13] = [
     "Accent",
     "Background",
     "Text",
@@ -79,6 +81,8 @@ const ROLES: [&str; 11] = [
     "Black key",
     "White key disabled",
     "Black key disabled",
+    "Grid",
+    "Horizontal grid",
 ];
 
 fn role(c: &mut ThemeColors, i: usize) -> &mut Rgba {
@@ -93,12 +97,15 @@ fn role(c: &mut ThemeColors, i: usize) -> &mut Rgba {
         7 => &mut c.white_key,
         8 => &mut c.black_key,
         9 => &mut c.white_key_disabled,
-        _ => &mut c.black_key_disabled,
+        10 => &mut c.black_key_disabled,
+        11 => &mut c.grid,
+        _ => &mut c.grid_horizontal,
     }
 }
 
-/// The option groups: the header, then each slider's label and its option's default.
-const GROUPS: [(&str, [(&str, f32); 2]); 2] = [
+/// The option groups: the header, then each slider's label and its option's default (the grid's in slider units, a
+/// quarter of the thickness: [`THICKNESS_GROUP`]).
+const GROUPS: [(&str, [(&str, f32); 2]); 3] = [
     (
         "Channel color modifiers",
         [("Saturation", 0.9), ("Lightness", 0.63)],
@@ -107,14 +114,23 @@ const GROUPS: [(&str, [(&str, f32); 2]); 2] = [
         "Playlist tracks",
         [("Background transparency", 1.0), ("Note brightness", 0.65)],
     ),
+    (
+        "Grid",
+        [("Thickness", 0.25), ("Horizontal thickness", 0.25)],
+    ),
 ];
+
+/// The group of the grid thickness sliders: ×0–×4 ([`crate::theme::GRID_THICKNESS`]) over the slider's 0–1.
+const THICKNESS_GROUP: usize = 2;
 
 fn option(o: &mut ThemeOptions, group: usize, i: usize) -> &mut f32 {
     match (group, i) {
         (0, 0) => &mut o.accent_saturation,
         (0, _) => &mut o.accent_lightness,
-        (_, 0) => &mut o.playlist_track_background_transparency,
-        _ => &mut o.playlist_track_note_brightness,
+        (1, 0) => &mut o.playlist_track_background_transparency,
+        (1, _) => &mut o.playlist_track_note_brightness,
+        (_, 0) => &mut o.grid_thickness,
+        _ => &mut o.grid_horizontal_thickness,
     }
 }
 
@@ -355,23 +371,45 @@ impl ThemeCreator {
                 let row = band(OPTION_H);
                 let (line, body) = row.split_top_bottom_at_y(row.top() + m.u(1.0));
                 let value = option(options, g, i);
-                let percent = format!("{:.0}%", *value * 100.0);
+                // The grid's thickness shows and drags as ×0–×4 over the slider's 0–1, in steps of ×0.25.
+                let thickness = g == THICKNESS_GROUP;
+                let scale = if thickness {
+                    *GRID_THICKNESS.end()
+                } else {
+                    1.0
+                };
+                let shown = |v: f32| match thickness {
+                    true => format!("×{:.2}", v * scale),
+                    false => format!("{:.0}%", v * 100.0),
+                };
+                let mut slider = *value / scale;
                 label(ui, line, name, FontSize::Pt10);
                 let right = Align2::RIGHT_CENTER;
-                text_label(ui, cx, line, &percent, FontSize::Pt10, right, text);
+                text_label(ui, cx, line, &shown(slider), FontSize::Pt10, right, text);
                 let c = Control {
                     bipolar: false,
                     menu: ParamMenu::Unbound,
                     ..Control::new(id.with(("option", g, i)), body, "", text, default)
                 };
                 let before = *value;
-                // Honeydew change (#171): the percent, for the drag bubble.
-                h_slider(ui, cx, &c, value, |v| format!("{:.0}%", v * 100.0));
+                let start = slider;
+                // Honeydew change (#171): the value, for the drag bubble.
+                h_slider(ui, cx, &c, &mut slider, shown);
+                if slider == start {
+                    continue;
+                }
+                let mut new = slider * scale;
+                if thickness {
+                    new = (new * 4.0).round() / 4.0;
+                }
                 // The muted-clip tint divides by the note brightness.
                 if (g, i) == (1, 1) {
-                    *value = value.max(MIN_NOTE_BRIGHTNESS);
+                    new = new.max(MIN_NOTE_BRIGHTNESS);
                 }
-                edited |= *value != before;
+                if new != before {
+                    *value = new;
+                    edited = true;
+                }
             }
         }
         band(GAP);
@@ -503,6 +541,28 @@ fn preview(painter: &Painter, cx: &UiCtx, r: Rect, t: &Theme) {
     );
     painter.rect_filled(card, 0.0, ink(c.module_fill));
     let lane_h = body.height() / 3.0;
+    // The playlist's rows under the clips, in the theme's grid: 2 bars of beat lines, and a gap under each row.
+    let grid_px = 1.0 / m.ppp();
+    let h_px = crate::theme::grid_h_px(o) * grid_px;
+    for i in 0..3 {
+        let top = body.top() + i as f32 * lane_h;
+        let row = Rect::from_x_y_ranges(lanes.x_range(), top..=top + lane_h);
+        painter.rect_filled(row, 0.0, ink(c.control_fill));
+        for k in 0..=8 {
+            let w = crate::theme::grid_width(if k % 4 == 0 { 4.0 } else { 2.0 }, o);
+            if w <= 0.0 {
+                continue;
+            }
+            let x = m.round_px(lanes.left() + k as f32 * lanes.width() / 8.0);
+            let x = x - (w / 2.0).floor() * grid_px;
+            let line = Rect::from_x_y_ranges(x..=x + w * grid_px, row.y_range());
+            painter.rect_filled(line.intersect(lanes), 0.0, ink(c.grid));
+        }
+        if h_px > 0.0 {
+            let gap = row.with_min_y(row.bottom() - h_px);
+            painter.rect_filled(gap, 0.0, ink(c.grid_horizontal));
+        }
+    }
     for (i, (h, channel)) in [(0.1, "Kick"), (0.45, "Bass"), (0.8, "Keys")]
         .into_iter()
         .enumerate()

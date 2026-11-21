@@ -698,6 +698,10 @@ impl AudioEditor {
         let control = crate::theme::grid_ink(c);
         let size = self.snap.size;
         for (tick, w) in grid_lines(t0.max(0.0), t1, axis.beat_w, u, sig, MARK_GAP, size) {
+            let w = crate::theme::grid_width(w, &cx.theme.options);
+            if w <= 0.0 {
+                continue;
+            }
             let x = m.floor_px(axis.x(tick)) - (w / 2.0).floor() * px;
             let r = Rect::from_x_y_ranges(x..=x + w * px, f.grid.y_range());
             gp.rect_filled(r, 0.0, control);

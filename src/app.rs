@@ -476,11 +476,18 @@ impl HoneydewApp {
         if let Some(token) = settings::load_mcp_token() {
             settings.mcp_token = token;
         }
-        // Settings' `Sample rate:` and `Enable low latency mode`, before the output first opens; `Grid color:`.
+        // Settings' `Sample rate:` and `Enable low latency mode`, before the output first opens.
         crate::audio_link::set_rate(settings.sample_rate);
         crate::audio_link::set_low_latency_mode(settings.low_latency_mode);
         honeydew_audio::device::set_android_driver(settings.audio_driver);
-        crate::theme::set_grid_color(settings.grid_rgb());
+        // The Analyzer's global switches, as last launched ([`Self::update`] keeps them in the settings).
+        #[cfg(not(test))]
+        {
+            honeydew_audio::analysis::set_analyzer_options(
+                settings.analyzer_skip_hidden,
+                settings.analyzer_light_pitch,
+            );
+        }
         let mut app = Self {
             theme: settings.theme(),
             routing: storage.as_deref().map(Routing::load).unwrap_or_default(),
@@ -603,9 +610,6 @@ impl HoneydewApp {
             }
             if (driver || exclusive) && !buffer {
                 self.audio.reopen_output(&self.song);
-            }
-            if self.settings.grid_color != self.settings_saved.grid_color {
-                crate::theme::set_grid_color(self.settings.grid_rgb());
             }
             if self.settings.sample_rate != self.settings_saved.sample_rate {
                 self.warn_rate_capability();
@@ -2368,16 +2372,17 @@ impl HoneydewApp {
         let metrics = Metrics::new(ctx, self.settings.ui_scale);
         crate::ui::anim::set_mode(ctx, self.settings.animations, self.settings.inertia);
         crate::ui::widgets::set_value_bubble(ctx, self.settings.value_bubble);
-        // The analyzers' cost (Settings `Limit analyzer refresh`, `Pause hidden analyzers`, `Light pitch tracking`).
-        // Process-wide switches: the tests' apps leave them off, so the engine tests running beside them see every
-        // analysis.
+        // The analyzers' cost: Settings `Analyzer refresh limit:`, and the Analyzer's global switches (its SETTINGS
+        // page), which the settings keep across launches. Process-wide: the tests' apps leave them alone, so the
+        // engine tests running beside them see every analysis.
         #[cfg(not(test))]
         {
-            honeydew_audio::device::set_analysis_throttle(self.settings.analyzer_throttle);
-            honeydew_audio::analysis::set_analyzer_options(
-                self.settings.analyzer_skip_hidden,
-                self.settings.analyzer_light_pitch,
-            );
+            honeydew_audio::device::set_analysis_limit(u32::from(
+                self.settings.analyzer_refresh_hz,
+            ));
+            let (skip_hidden, light_pitch) = honeydew_audio::analysis::analyzer_options();
+            self.settings.analyzer_skip_hidden = skip_hidden;
+            self.settings.analyzer_light_pitch = light_pitch;
         }
         // As the frame starts; the settings tab edits `self.settings` meanwhile.
         let shown = self.settings.clone();
