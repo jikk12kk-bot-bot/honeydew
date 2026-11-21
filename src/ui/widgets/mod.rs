@@ -142,6 +142,9 @@ pub struct Control<'a> {
     /// the track's left end, its centre or its right end; drawn only where it fits under the label strip (or the
     /// rect's top). For sliders with no value strip: the mixers' and the drum strips'.
     pub value_above: Option<Align>,
+    /// Sliders (Honeydew change): a value strip that would leave the body under `BODY_MIN` narrows instead, so a
+    /// short module slider keeps both its track and its value ([`Control::strips`]).
+    pub fit_value: bool,
 }
 
 /// The parameter menu of a knob, slider, toggle or button: knobs and sliders start it with `Reset`, and a control
@@ -186,6 +189,7 @@ impl<'a> Control<'a> {
             fine_tune: false,
             ring_text: true,
             value_above: None,
+            fit_value: false,
         }
     }
 
@@ -200,9 +204,13 @@ impl<'a> Control<'a> {
             body = rest;
             strip
         });
-        // Honeydew change: where the full strip would leave the body under `BODY_MIN`, the value strip narrows to what
-        // is over it, down to `VALUE_MIN` (the 8 pt text's height), so a short slider keeps both its track and value.
-        let v = (body.height() - m.u(BODY_MIN)).clamp(m.u(VALUE_MIN), h);
+        // Honeydew change: with `fit_value`, where the full strip would leave the body under `BODY_MIN`, the value
+        // strip narrows to what is over it, down to `VALUE_MIN` (the 8 pt text's height).
+        let v = if self.fit_value {
+            (body.height() - m.u(BODY_MIN)).clamp(m.u(VALUE_MIN), h)
+        } else {
+            h
+        };
         let value = self.value_text.then(|| {
             let (rest, strip) = body.split_top_bottom_at_y((body.bottom() - v).max(body.top()));
             body = rest;

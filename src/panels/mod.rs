@@ -732,6 +732,7 @@ pub fn show(
                 _ => None,
             },
             value_text: leaf.value_text || strip,
+            fit_value: strip,
             disabled: !enabled,
             flat: (!leaf.lit.holds(module, state))
                 .then(|| cx.theme.colors.module_fill.to_color32()),
