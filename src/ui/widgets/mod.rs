@@ -81,6 +81,10 @@ pub use toggle::{Pill, pill_toggle, toggle};
 
 /// Height of the label strip at the top and of the value strip at the bottom, in U.
 pub(crate) const STRIP_H: f32 = 0.75;
+/// The least body (U) a value strip leaves a control (Honeydew change): room for a slider's thumb.
+const BODY_MIN: f32 = 0.75;
+/// The narrowest value strip (U): the 8 pt value text's height.
+const VALUE_MIN: f32 = 0.4;
 /// The share of its range a knob moves per inch dragged up.
 const KNOB_PER_INCH: f32 = 0.24;
 /// Drag factor k while the fine-tweak modifier is held.
@@ -196,8 +200,11 @@ impl<'a> Control<'a> {
             body = rest;
             strip
         });
+        // Honeydew change: where the full strip would leave the body under `BODY_MIN`, the value strip narrows to what
+        // is over it, down to `VALUE_MIN` (the 8 pt text's height), so a short slider keeps both its track and value.
+        let v = (body.height() - m.u(BODY_MIN)).clamp(m.u(VALUE_MIN), h);
         let value = self.value_text.then(|| {
-            let (rest, strip) = body.split_top_bottom_at_y((body.bottom() - h).max(body.top()));
+            let (rest, strip) = body.split_top_bottom_at_y((body.bottom() - v).max(body.top()));
             body = rest;
             strip
         });

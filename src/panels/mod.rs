@@ -36,12 +36,6 @@ use crate::ui::layout::{self, LayoutRecord, Node, NodeId};
 use crate::ui::widgets::{self, ArcSlider, Bar, Button, Control, ItemList, ParamMenu, Pill};
 use crate::ui::{UiCtx, primary_down_live};
 
-/// The least height (U) of a vertical module slider that gets a value strip it was not built with: its label and
-/// value strips (0.75 U each) and 1.5 U of body.
-const SLIDER_VALUE_MIN_H: f32 = 3.0;
-/// The same for a horizontal one: its strips and 0.75 U of body, enough for the thumb.
-const H_SLIDER_VALUE_MIN_H: f32 = 2.25;
-
 /// Registers the module files of `fx` or `inst`, declared beside it as plain `mod` items (rustfmt does not follow a
 /// `mod` declared by a macro): `IDS`, `panel(id)` and, for the tests, `reference(id)`.
 macro_rules! modules {
@@ -726,17 +720,10 @@ pub fn show(
         // A DW Sampler's program resets its Attack and Release to the values it set.
         let program = leaf.param.and_then(|p| module.program_reset(p));
         let reset = program.unwrap_or_else(|| reset_of(leaf, pspec, module.type_id));
-        // Honeydew change: every slider with a value shows it in a fixed place, as `Reference`'s `440 Hz`: in its value
-        // strip where its rect leaves the track room for one, else (a horizontal one) just above its thumb.
+        // Honeydew change: every slider with a value shows it underneath, in its value strip, as `Reference`'s
+        // `440 Hz`; a short one's strip narrows so its track keeps room ([`Control::strips`]).
         let has_text = leaf.value_fn.is_some() || pspec.is_some();
-        let min_h = match leaf.widget {
-            Widget::VSlider => Some(SLIDER_VALUE_MIN_H),
-            Widget::HSlider => Some(H_SLIDER_VALUE_MIN_H),
-            _ => None,
-        };
-        let strip = has_text && min_h.is_some_and(|h| rect.height() >= cx.m.u(h));
-        let above = (has_text && !leaf.value_text && !strip && leaf.widget == Widget::HSlider)
-            .then_some(eframe::egui::Align::Center);
+        let strip = has_text && matches!(leaf.widget, Widget::VSlider | Widget::HSlider);
         let c = Control {
             label_font: leaf.font.unwrap_or(label_font),
             steps: (!menu.is_empty()).then_some(menu.len()),
@@ -745,7 +732,6 @@ pub fn show(
                 _ => None,
             },
             value_text: leaf.value_text || strip,
-            value_above: above,
             disabled: !enabled,
             flat: (!leaf.lit.holds(module, state))
                 .then(|| cx.theme.colors.module_fill.to_color32()),
