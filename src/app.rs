@@ -2371,8 +2371,7 @@ impl HoneydewApp {
         // Once per frame; screens take it by reference.
         let metrics = Metrics::new(ctx, self.settings.ui_scale);
         crate::ui::anim::set_mode(ctx, self.settings.animations, self.settings.inertia);
-        crate::ui::widgets::set_value_bubble(ctx, self.settings.value_bubble);
-        // The analyzers' cost: Settings `Analyzer refresh limit:`, and the Analyzer's global switches (its SETTINGS
+        // The analyzers' cost: Settings `Analyzer refresh limit`, and the Analyzer's global switches (its GLOBAL
         // page), which the settings keep across launches. Process-wide: the tests' apps leave them alone, so the
         // engine tests running beside them see every analysis.
         #[cfg(not(test))]

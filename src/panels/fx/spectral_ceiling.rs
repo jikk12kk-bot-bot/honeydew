@@ -64,17 +64,30 @@ fn graph(
         let y = ((TOP_DB - db) / (TOP_DB - BOTTOM_DB)).clamp(0.0, 1.0);
         rect.top() + y * rect.height()
     };
-    // The grid: every 12 dB, and 100 Hz, 1 kHz, 10 kHz.
-    let grid = colors.module_fill.to_color32();
+    // The theme's grid ([`crate::theme::graph_grid`]): every 12 dB, and 100 Hz, 1 kHz, 10 kHz.
+    let (v_line, h_line) = crate::theme::graph_grid(cx.theme, m.ppp());
     let mut db = TOP_DB - GRID_DB;
-    while db > BOTTOM_DB {
+    while db > BOTTOM_DB && h_line.width > 0.0 {
         let y = m.floor_px(y_of(db));
-        painter.rect_filled(Rect::from_x_y_ranges(rect.x_range(), y..=y + px), 0.0, grid);
+        let rows = y..=y + h_line.width;
+        painter.rect_filled(
+            Rect::from_x_y_ranges(rect.x_range(), rows),
+            0.0,
+            h_line.color,
+        );
         db -= GRID_DB;
     }
-    for hz in [100.0, 1000.0, 10_000.0] {
+    for hz in [100.0, 1000.0, 10_000.0]
+        .into_iter()
+        .filter(|_| v_line.width > 0.0)
+    {
         let x = m.floor_px(x_of(hz));
-        painter.rect_filled(Rect::from_x_y_ranges(x..=x + px, rect.y_range()), 0.0, grid);
+        let columns = x..=x + v_line.width;
+        painter.rect_filled(
+            Rect::from_x_y_ranges(columns, rect.y_range()),
+            0.0,
+            v_line.color,
+        );
     }
     // Outside Low…High nothing is touched: shaded.
     let (low, high) = range(params);

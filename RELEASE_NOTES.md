@@ -1,11 +1,19 @@
-Honeydew 0.0.10: the grid is part of the theme, and the analyzer options move.
+# Honeydew 0.0.11: values you can read, and the grid everywhere
 
-- Theme creator. The grid's look is now set in the theme, not in Settings:
-  - `Grid`: the colour of the vertical beat and bar lines in the playlist and the editors (piano roll, drum grid, automation, audio editor).
-  - `Horizontal grid` (new): the colour of the lines between rows in the playlist, the piano roll and the drum grid, and of the automation editor's value lines.
-  - `Grid` group, `Thickness` and `Horizontal thickness`: how thick the vertical and the horizontal lines are, from ×0 (hidden) to ×4, in steps of ×0.25.
-  - The preview at the top shows the grid as you edit it. Saved, exported and imported themes keep it.
-- Settings. `Grid color:` is gone from SETTINGS. A grid colour picked there before becomes the theme's `Grid` colour the first time this version opens.
-- Analyzer options.
-  - Settings: `Limit analyzer refresh` is now `Analyzer refresh limit:`, a value of its own: Unlimited (as fast as the engine goes), or 15, 24, 30, 45, 60 (the default), 75, 90, 120, 144 or 240 updates a second. It sets how often the module displays update at most (the Analyzer, the Tuner, the Limiter and every other module that draws its sound); fewer updates take less CPU from the audio. It changes only the pictures, never the sound.
-  - The Analyzer's SETTINGS page: `Pause hidden` and `Light pitch` (formerly in Settings) now sit here, on a third row. They are global: switching one in any Analyzer switches it for all of them, and the app remembers them; songs do not save them.
+## Values
+- The floating value bubble is gone, and so is the `Show value while dragging` setting. The mixer no longer turns a channel's name into its level while you drag the fader.
+- Values are shown in fixed places instead, like the Analyzer's `440 Hz`:
+  - Mixer: the level in dB under each fader is larger (8 pt), and it stays visible when the strip gets short, for example after moving the keyboard up. The pan knob shows its value on its ring.
+  - Playlist mini mixer: the pan and level show above their sliders (and an automation lane's slider too).
+  - Drum strips: Level, Pan, Hold and the other sliders show their value above the thumb; the envelope knobs show theirs on the ring.
+  - A send's level in the rack shows above its slider.
+
+## Grid
+- The horizontal grid is as thick as the vertical grid's beat lines at the same thickness (both ×4 now look the same).
+- The piano roll's horizontal lines are no longer faded.
+- The drum step sequencer shows the theme's grid: step, beat and bar lines and the lines between the rows.
+- Module displays use the theme's grid colours and thickness: the Analyzer (every view, with semitone lines on PITCH), Spectral Ceiling, Limiter, Multiband, Autoduck, Tuner, Note Echo, and a grid on Equalizer, Dynamic EQ, Tremolo, Pitcher and Wow & Flutter.
+
+## Analyzer and settings
+- The Analyzer's `Pause hidden` and `Light pitch` switches move to their own `GLOBAL` tab, each with a description of what it does. The SETTINGS page is back to its two rows, so nothing overlaps.
+- Settings `Analyzer refresh limit` is a slider in steps of 1: `Off` (no limit), 1 … 240 per second. The default stays 60.

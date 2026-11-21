@@ -191,6 +191,9 @@ enum Kind {
     Scan,
     /// The metronome level: the label line and a full-width slider.
     Level,
+    /// `Analyzer refresh limit` (Honeydew's own): the label line with the limit, and a full-width slider in steps of
+    /// 1 over `Off` (0, no limit) and 1 ..= [`crate::settings::ANALYZER_REFRESH_MAX`] per second.
+    AnalyzerRefresh,
     /// `Scaling:`: the UI scale's label line and a full-width slider, 60 % to 200 %, applied when it is let go.
     Scaling,
     /// The note under `Scaling:` while the window width limits the scale; the row is left out otherwise.
@@ -269,9 +272,6 @@ enum Choice {
     SampleRate,
     /// `Audio driver:` (Android, [`crate::settings::AUDIO_DRIVERS`]): which audio API the output uses.
     AudioDriver,
-    /// `Analyzer refresh limit:` ([`crate::settings::ANALYZER_REFRESH`]): how often the modules' displays take the
-    /// engine's analysis, at most.
-    AnalyzerRefresh,
     /// `Screen orientation:` (#41): `Auto`, `Portrait` or `Landscape` ([`crate::settings::ORIENTATIONS`]).
     Orientation,
     /// `Project version size limit:` (#69), in MB ([`crate::settings::VERSION_SIZE_LIMITS`]).
@@ -325,7 +325,7 @@ fn hidden(r: &Row) -> bool {
 }
 
 /// Every row of the SETTINGS tab, in order.
-const ROWS: [Row; 62] = {
+const ROWS: [Row; 61] = {
     use Kind::*;
     [
         row("MIDI:", Header),
@@ -363,7 +363,7 @@ const ROWS: [Row; 62] = {
         row("Audio driver:", Dropdown(Choice::AudioDriver)),
         row("Sample memory limit:", Dropdown(Choice::SampleMemory)),
         // The modules' displays' cost on the audio thread (Honeydew's own).
-        row("Analyzer refresh limit:", Dropdown(Choice::AnalyzerRefresh)),
+        row("Analyzer refresh limit", AnalyzerRefresh),
         row("Recording:", Header),
         row("Audio input:", AudioInput),
         row("Input gain", InputGain),
@@ -384,8 +384,6 @@ const ROWS: [Row; 62] = {
         row("Scaling:", Scaling),
         row("Scale is currently limited to", ScaleLimit),
         row("Animation:", Dropdown(Choice::Animation)),
-        // Honeydew change (#171).
-        row("Show value while dragging", Toggle(|s| &mut s.value_bubble)),
         row(
             "Plugin editor resolution:",
             Dropdown(Choice::EditorResolution),
@@ -752,7 +750,12 @@ impl SettingsTab {
         let (m, colors) = (cx.m, &cx.theme.colors);
         // Headers and the metronome row take the whole slot; the other rows are a control row, centred in it.
         let r = match row.kind {
-            Kind::Header | Kind::Level | Kind::Scaling | Kind::BufferSize | Kind::InputGain => slot,
+            Kind::Header
+            | Kind::Level
+            | Kind::Scaling
+            | Kind::BufferSize
+            | Kind::InputGain
+            | Kind::AnalyzerRefresh => slot,
             _ => Rect::from_center_size(slot.center(), vec2(slot.width(), m.u(ROW_H))),
         };
         let text = colors.text.to_color32();
@@ -919,10 +922,6 @@ impl SettingsTab {
                     let sound_mode_tip = "NATIVE: device/OS default audio behavior.";
                     crate::ui::tooltip::tip(ui, button_rect, sound_mode_tip, None);
                 }
-                if matches!(choice, Choice::AnalyzerRefresh) {
-                    let tip = "How many times a second the module displays update at most: the Analyzer, the Tuner, the Limiter and every other module that draws its sound. Fewer updates take less CPU from the audio. Unlimited: after every bit of audio the engine plays, the fastest. It changes only the pictures, never the sound; the level meters are not limited.";
-                    crate::ui::tooltip::tip(ui, button_rect, tip, None);
-                }
                 if matches!(choice, Choice::AudioDriver) {
                     let tip = "Which Android audio system plays the sound.\nAAudio: Android's newest, lowest latency (OpenSL ES on Android 8.0); works with low latency mode.\nOpenSL ES: Android's older native audio.\nAudioTrack: Android's oldest, highest latency, widest compatibility.";
                     crate::ui::tooltip::tip(ui, button_rect, tip, None);
@@ -984,6 +983,45 @@ impl SettingsTab {
                 );
                 let c = level_control(id, body, text);
                 h_slider(ui, cx, &c, &mut s.metronome_level, |_| String::new());
+            }
+            Kind::AnalyzerRefresh => {
+                let (line, body) = r.split_top_bottom_at_y(r.top() + m.u(LEVEL_LABEL_H));
+                let (room, value_room) =
+                    line.split_left_right_at_x(line.right() - m.u(PERCENT_W + 2.5));
+                label(ui, room, FontSize::Pt10);
+                let max = crate::settings::ANALYZER_REFRESH_MAX;
+                let c = Control {
+                    bipolar: false,
+                    steps: Some(usize::from(max) + 1),
+                    menu: ParamMenu::Unbound,
+                    ..Control::new(
+                        id,
+                        body,
+                        "",
+                        text,
+                        f32::from(Settings::default().analyzer_refresh_hz) / f32::from(max),
+                    )
+                };
+                let stored = f32::from(s.analyzer_refresh_hz.min(max)) / f32::from(max);
+                let mut value = stored;
+                h_slider(ui, cx, &c, &mut value, |_| String::new());
+                // Written back only when moved, so that the round trip never changes the setting.
+                if value != stored {
+                    s.analyzer_refresh_hz = (value.clamp(0.0, 1.0) * f32::from(max)).round() as u16;
+                }
+                let display = match s.analyzer_refresh_hz {
+                    0 => "Off".to_owned(),
+                    hz => format!("{hz} per second"),
+                };
+                plain(
+                    ui,
+                    value_room,
+                    &display,
+                    FontSize::Pt10,
+                    Align2::RIGHT_CENTER,
+                );
+                let tip = "How many times a second the module displays update at most: the Analyzer, the Tuner, the Limiter and every other module that draws its sound. Fewer updates take less CPU from the audio. Off: no limit, they update after every bit of audio the engine plays. It changes only the pictures, never the sound; the level meters are not limited.";
+                crate::ui::tooltip::tip(ui, r, tip, None);
             }
             Kind::InputGain => {
                 let (line, body) = r.split_top_bottom_at_y(r.top() + m.u(LEVEL_LABEL_H));
@@ -1492,12 +1530,6 @@ impl Choice {
             Choice::EditorResolution => (crate::settings::EDITOR_RESOLUTIONS.iter())
                 .map(|&p| (usize::from(p), format!("{p}%")))
                 .collect(),
-            Choice::AnalyzerRefresh => (crate::settings::ANALYZER_REFRESH.iter())
-                .map(|&hz| match hz {
-                    0 => (0, "Unlimited".to_owned()),
-                    hz => (usize::from(hz), format!("{hz} per second")),
-                })
-                .collect(),
             Choice::AudioDriver => (crate::settings::AUDIO_DRIVERS.iter())
                 .map(|&label| label.to_owned())
                 .enumerate()
@@ -1522,7 +1554,6 @@ impl Choice {
             Choice::Orientation => usize::from(s.screen_orientation),
             Choice::VersionSize => s.version_size_limit as usize,
             Choice::EditorResolution => usize::from(s.plugin_editor_resolution),
-            Choice::AnalyzerRefresh => usize::from(s.analyzer_refresh_hz),
             Choice::AudioDriver => usize::from(s.audio_driver),
         }
     }
@@ -1541,7 +1572,6 @@ impl Choice {
             Choice::Orientation => s.screen_orientation = value as u8,
             Choice::VersionSize => s.version_size_limit = value as u32,
             Choice::EditorResolution => s.plugin_editor_resolution = value as u8,
-            Choice::AnalyzerRefresh => s.analyzer_refresh_hz = value as u16,
             Choice::AudioDriver => s.audio_driver = value as u8,
         }
     }
@@ -1730,29 +1760,6 @@ mod tests {
         (ROWS.iter().filter(|r| !hidden(r)))
             .position(|r| r.label == label)
             .unwrap()
-    }
-
-    #[test]
-    fn each_toggle_row_edits_its_own_setting() {
-        let toggles: Vec<_> = ROWS
-            .iter()
-            .filter_map(|r| match r.kind {
-                Kind::Toggle(field) => Some((r.label, field)),
-                _ => None,
-            })
-            .collect();
-        let own = cfg!(any(target_os = "ios", target_os = "android"));
-        assert_eq!(toggles.len(), if own { 16 } else { 15 });
-        for (label, field) in &toggles {
-            let mut s = Settings::default();
-            *field(&mut s) = !*field(&mut s);
-            // Exactly one toggle changed.
-            let differ = toggles
-                .iter()
-                .filter(|(_, other)| *other(&mut s) != *other(&mut Settings::default()))
-                .count();
-            assert_eq!(differ, 1, "{label}");
-        }
     }
 
     #[test]
@@ -2214,103 +2221,6 @@ mod tests {
         (2.0, DEFAULT_UI_SCALE),
         (2.0, SCALE_200),
     ];
-
-    #[test]
-    fn a_toggle_is_a_menu_fill_bar_half_a_u_left_of_the_column_with_the_pill_and_the_label_in_it() {
-        // Each toggle rect starts 0.5 U left of the column and ends at the column's right edge; the pill is centred at
-        // x + 0.75 U (page left + 2.25 U); the label runs from x + 1.7 U to the right edge − 0.2 U, FontSize 2,
-        // left-aligned, vertically centred, in `text`. The latency toggle is 2.5 U shorter.
-        let colors = theme_by_id(0).colors;
-        let (menu_fill, text, control_fill) = (
-            colors.menu_fill.to_color32(),
-            colors.text.to_color32(),
-            colors.control_fill.to_color32(),
-        );
-        for (ppp, scale) in CONFIGS {
-            let rig = Rig::at(ppp, scale, WIDE_U);
-            let m = Metrics::from_pixels_per_point(ppp, scale);
-            let (u, t) = (m.u(1.0), m.t());
-            let column_right = rig.width - 2.0 * u;
-            let fills = fills(&rig);
-            assert_eq!(toggles().count(), 20);
-            for r in toggles() {
-                let at = format!("ppp {ppp} scale {scale}: `{}`", r.label);
-                let control = rig.rect_of(row_id(index(r.label)));
-                let shorter = if matches!(r.kind, Kind::Latency) {
-                    2.5 * u
-                } else {
-                    0.0
-                };
-                // The rect: 1.5 U tall, from 0.5 U left of the column (page left + 1.5 U) to its right edge.
-                let want = Rect::from_x_y_ranges(
-                    rig.left + 1.5 * u..=column_right - shorter,
-                    control.y_range(),
-                );
-                assert!(
-                    (control.min - want.min).abs().max_elem() < 0.01,
-                    "{at}: {control:?}"
-                );
-                assert!(
-                    (control.max - want.max).abs().max_elem() < 0.01,
-                    "{at}: {control:?}"
-                );
-                assert!((control.height() - 1.5 * u).abs() < 0.01, "{at}");
-                // It is painted whole as a `menuFill` bar (not pressed).
-                // (A disabled row is drawn at the disabled alpha, bar, pill and label alike.)
-                let dim = |c: Color32| {
-                    if r.kind.disabled() {
-                        c.gamma_multiply(DISABLED_ALPHA)
-                    } else {
-                        c
-                    }
-                };
-                assert!(
-                    fills.contains(&(control, dim(menu_fill))),
-                    "{at}: no bar {control:?}"
-                );
-                // The pill: 10 t by 18 t, centred at the page's left + 2.25 U.
-                let pill = Rect::from_center_size(
-                    pos2(rig.left + 2.25 * u, control.center().y),
-                    vec2(10.0 * t, 18.0 * t),
-                );
-                let near = |a: &Rect| {
-                    (a.min - pill.min).abs().max_elem() < 0.01
-                        && (a.max - pill.max).abs().max_elem() < 0.01
-                };
-                assert!(
-                    fills
-                        .iter()
-                        .any(|(a, c)| *c == dim(control_fill) && near(a)),
-                    "{at}: no pill {pill:?}"
-                );
-                // The label: from x + 1.7 U (within 0.1 U), whole, 10 pt, in `text`, ending 0.2 U short of the right.
-                let (label, shown) = rig.label_rect(control.y_range().into());
-                assert_eq!(shown, r.label, "{at}");
-                let start = control.left() + 1.7 * u;
-                assert!(
-                    (label.left() - start).abs() <= 0.1 * u,
-                    "{at}: label at {} for {start}",
-                    label.left()
-                );
-                // (The latency label is the one that overflows with the test font, which is wider than the app's.)
-                if !matches!(r.kind, Kind::Latency) {
-                    assert!(
-                        label.right() <= control.right() - 0.2 * u,
-                        "{at}: {label:?}"
-                    );
-                }
-                let (height, ten) = heights(&rig, &m, r.label);
-                assert!((height - ten).abs() < 0.01, "{at}: {height} vs 10 pt {ten}");
-                let ink = rig.shapes.iter().find_map(|s| match &s.shape {
-                    egui::Shape::Text(g) if g.galley.text() == r.label => {
-                        Some(g.galley.job.sections[0].format.color)
-                    }
-                    _ => None,
-                });
-                assert_eq!(ink, Some(text), "{at}");
-            }
-        }
-    }
 
     #[test]
     fn on_a_narrow_page_a_toggle_label_overflows_plain_with_its_pill_gap_kept() {

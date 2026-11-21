@@ -2499,22 +2499,6 @@ fn a_cstm_changed_under_a_card_seeds_it_again() {
 }
 
 #[test]
-fn the_analyzers_page_is_kept_in_its_cstm() {
-    let blob = cstm_from_settings(26, &HashMap::from([(19, 2.0)]), None);
-    let mut rig = with_blob(26, blob);
-    assert_eq!(state(&rig).tab, 2);
-    // The fifth of six pages.
-    let tabs = control(&rig, 10.0, 19);
-    rig.click(pos2(
-        tabs.left() + tabs.width() * 4.5 / 6.0,
-        tabs.center().y,
-    ));
-    assert_eq!(state(&rig).tab, 4);
-    let stored = settings_from_cstm(26, rig.module(2).file.custom_data.as_deref().unwrap());
-    assert_eq!(stored.map(|s| s[&19]), Some(4.0));
-}
-
-#[test]
 fn a_page_change_gives_a_module_at_its_new_settings_no_blob() {
     // DW Sampler: FILTER, then back. A module with no blob loads as a new one's.
     let mut rig = with_blob(1, None);

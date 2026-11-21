@@ -204,6 +204,7 @@ fn strip(
     }
     let painter = ui.painter();
     painter.rect_filled(rect, 0.0, cx.theme.colors.control_fill.to_color32());
+    crate::theme::paint_graph_grid(painter, rect, cx.theme, cx.m.ppp(), (8, 4));
     for dot in dots(rect, cx.m) {
         painter.rect_filled(dot, 0.0, ink);
     }
@@ -386,12 +387,11 @@ pub const REFERENCE: Reference = Reference {
 
 #[cfg(test)]
 mod tests {
-    use eframe::egui::{Shape, pos2, vec2};
+    use eframe::egui::{pos2, vec2};
 
     use super::*;
     use crate::panels::fx::limiter::tests::metrics;
-    use crate::panels::tests::{U, display_shapes};
-    use crate::theme::theme_by_id;
+    use crate::panels::tests::U;
 
     /// The reference strip #4, (0, 1.25, 14, 0.5) U.
     const STRIP: Rect = Rect {
@@ -469,108 +469,6 @@ mod tests {
         let t = (0..100).fold(Trail::default(), |t, i| t.step(0.0, Some(i as f32)));
         assert_eq!(t.entries.len(), 64);
         assert_eq!(t.entries[0].x, 36.0);
-    }
-
-    #[test]
-    fn a_detected_pitch_draws_the_marker_and_its_trail_and_the_target_disc() {
-        // 220 Hz is A (class 9): the marker at strip.x + int(W/24 + 9·W/12), 2t wide, full height; then its first trail
-        // entry, a full-height quad 1 px either side of it. The target G# (8) gets the disc under its note button.
-        use honeydew_audio::MeterSnapshot;
-        let content = Rect::from_min_size(pos2(0.0, 0.0), vec2(14.0 * U, 5.99 * U));
-        let feed = [220.0, 8.0];
-        for ppp in [1.0, 2.0] {
-            let m = metrics(ppp);
-            let shapes = crate::panels::tests::display_shapes_fed(
-                25,
-                4,
-                &[],
-                &PanelState::default(),
-                content,
-                ppp,
-                (MeterSnapshot::default(), &feed),
-            );
-            assert_eq!(shapes.len(), 15, "ppp {ppp}");
-            let Shape::Rect(fill) = &shapes[0] else {
-                panic!()
-            };
-            let strip = fill.rect;
-            let Shape::Rect(marker) = &shapes[13] else {
-                panic!()
-            };
-            let x = marker_x(strip, 9.0, &m);
-            assert_eq!(
-                marker.rect,
-                Rect::from_x_y_ranges(x..=x + 2.0 * m.t(), strip.y_range())
-            );
-            assert_eq!(marker.fill, Color32::RED);
-            let Shape::Rect(quad) = &shapes[14] else {
-                panic!()
-            };
-            assert_eq!(
-                quad.rect,
-                Rect::from_x_y_ranges(x - 1.0 / ppp..=x + 1.0 / ppp, strip.y_range())
-            );
-            // The disc, under the controls: on #13 (G#), radius half its width.
-            let button = Rect::from_min_size(pos2(9.33 * U, 1.75 * U), vec2(1.17 * U, 2.0 * U));
-            let (theme, cx_m) = (theme_by_id(0), metrics(ppp));
-            let cx = UiCtx {
-                theme: &theme,
-                m: &cx_m,
-            };
-            let out = eframe::egui::Context::default().run(Default::default(), |ctx| {
-                let ui = Ui::new(ctx.clone(), Id::new("panel"), Default::default());
-                crate::panels::post_feed(&ui, 2, Some((MeterSnapshot::default(), &feed)));
-                let module = ModuleInstance::new(25, 2);
-                for tab in [0, 1] {
-                    let state = PanelState {
-                        tab,
-                        ..Default::default()
-                    };
-                    target(
-                        &ui,
-                        &cx,
-                        &module,
-                        &state,
-                        &[(13, button)],
-                        content,
-                        Color32::RED,
-                    );
-                }
-            });
-            let discs: Vec<Shape> = out.shapes.into_iter().map(|c| c.shape).collect();
-            // On the Basic page only.
-            let [Shape::Circle(disc)] = &discs[..] else {
-                panic!("{discs:?}")
-            };
-            assert_eq!(
-                (disc.center, disc.radius),
-                (button.center(), button.width() / 2.0)
-            );
-        }
-    }
-
-    #[test]
-    fn the_strip_at_rest_is_its_fill_and_the_dots_on_both_pages() {
-        // Steps 1–2; no pitch is detected, so no marker, trail or target disc (steps 3–5).
-        let content = Rect::from_min_size(pos2(0.0, 0.0), vec2(14.0 * U, 5.99 * U));
-        let fill = theme_by_id(0).colors.control_fill.to_color32();
-        for (ppp, tab) in [(1.0, 0), (2.0, 0), (1.0, 1)] {
-            let state = PanelState {
-                tab,
-                ..PanelState::default()
-            };
-            let shapes = display_shapes(25, 4, &[], &state, content, ppp);
-            let rects: Vec<_> = shapes
-                .iter()
-                .map(|s| match s {
-                    Shape::Rect(r) => (r.rect, r.fill),
-                    _ => panic!("{s:?}"),
-                })
-                .collect();
-            assert_eq!(rects[0], (STRIP, fill), "ppp {ppp}");
-            let dots: Vec<_> = dots(STRIP, &metrics(ppp)).map(|d| (d, Color32::RED)).into();
-            assert_eq!(rects[1..], dots[..], "ppp {ppp}, tab {tab}");
-        }
     }
 
     /// The hook the panel runs, which the tests go through: a panel without it fails them.

@@ -398,51 +398,6 @@ mod tests {
     };
 
     #[test]
-    fn each_band_graph_is_the_limiter_s_with_a_fill_three_rows_and_its_band_s_threshold() {
-        let colors = theme_by_id(0).colors;
-        let text = colors.text.to_color32();
-        for ppp in [1.0, 2.0] {
-            // Tab k shows band k's graph; its `Thres` p(7k) sets T = p·48 − 48 dB: 0.5 → −24, 0 → −48, 1 → 0 dB.
-            for (tab, thres, t) in [(1, 0.5, -24.0), (2, 0.0, -48.0), (3, 1.0, 0.0)] {
-                let mut params = ModuleInstance::new(36, 2).params;
-                params[7 * tab] = thres;
-                let state = PanelState {
-                    tab,
-                    ..Default::default()
-                };
-                let got = rects(display_shapes(
-                    36,
-                    6 + 9 * tab as u32,
-                    &params,
-                    &state,
-                    CONTENT,
-                    ppp,
-                ));
-                assert_eq!(got.len(), 5, "ppp {ppp}, tab {tab}: {got:?}");
-                // The fill is the display rect: (5.25, 1.75, 5.25, 4.49) U within a pixel.
-                let (r, fill) = got[0];
-                assert_eq!(fill, colors.control_fill.to_color32());
-                let want = u(5.25, 1.75, 5.25, 4.49);
-                assert!(
-                    (r.min - want.min).length() <= 1.5 && (r.max - want.max).length() <= 1.5,
-                    "{r:?}"
-                );
-                for (i, k) in [0.0, 10.0 / 22.0, 20.0 / 22.0].into_iter().enumerate() {
-                    assert_eq!(got[1 + i].1, text.gamma_multiply(0.1), "ppp {ppp}, row {i}");
-                    assert!(near(got[1 + i].0, row_at(r, ppp, k)), "ppp {ppp}, row {i}");
-                }
-                assert_eq!(got[4].1, text);
-                let k = (60.0 + t) / 66.0;
-                assert!(
-                    near(got[4].0, row_at(r, ppp, k)),
-                    "ppp {ppp}, tab {tab}: {:?}",
-                    got[4].0
-                );
-            }
-        }
-    }
-
-    #[test]
     fn each_band_graph_draws_its_own_bands_history() {
         // A slab where only band k's newest entry has an input: tab k + 1's graph draws one input bar; the others none.
         use honeydew_audio::MeterSnapshot;

@@ -1,4 +1,5 @@
-//! Analyzer (ID 26), UIHeight 10 U. Pages `SPECTRUM` (0) … `SETTINGS` (5), with the tab strip at the bottom. Its only
+//! Analyzer (ID 26), UIHeight 10 U. Pages `SPECTRUM` (0) … `SETTINGS` (5) and `GLOBAL` (6, Honeydew's own), with the
+//! tab strip at the bottom. Its only
 //! param is `Enable`: every control is a module setting.
 //!
 //! The views draw the engine's analysis of the module's input (`honeydew_audio::analysis::analyzer`) in graph frames:
@@ -23,8 +24,9 @@
 //!   dB/octave: White (0), Pink (+3), Default (+4.5, the default), Brown (+6), or `Custom`, which
 //!   reads the `dB/oct` knob beside it continuously from −12 to +12. The Spectrogram's columns and the marker read with
 //!   the same tilt. It takes the place of the two SETTINGS spacers: DC Block and Tilt (and the knob)
-//!   share the first row, Channel, Reactivity and Input Gain the second (2.87 U each). A third row (1 U, Honeydew's
-//!   own) holds the global `Pause hidden` and `Light pitch` switches, every Analyzer's at once ([`global_switches`]).
+//!   share the first row, Channel, Reactivity and Input Gain the second (3.37 U each).
+//! - The GLOBAL page (Honeydew's own) holds the `Pause hidden` and `Light pitch` switches, every Analyzer's at once,
+//!   each with what it does under it ([`global_switches`]).
 //! - The marker's value is the drawn curve's at its x (the scope's a column's last sample); without a curve point there
 //!   (no pitch, no feed) neither dot nor readout shows.
 //! - The scope reads the engine's min, max and last sample of each quarter millisecond: a column takes the buckets
@@ -103,7 +105,7 @@ pub fn panel() -> Option<Panel> {
                     .value_fn(tilt_text)
                     .show(Show::Setting(TILT, 4)),
             ])
-            .h(Size::U(ROW_H))
+            .h(Size::U(3.37))
             .show(Show::Tab(5)),
             hstack([
                 spinner(14, "Channel")
@@ -114,32 +116,28 @@ pub fn panel() -> Option<Panel> {
                     .default(1.0),
                 knob(17, "Input Gain").default(0.5).value_fn(gain),
             ])
-            .h(Size::U(ROW_H))
+            .h(Size::U(3.37))
             .show(Show::Tab(5)),
-            // Honeydew's own: every Analyzer's switches, not this module's settings.
-            display(GLOBALS)
-                .h(Size::U(GLOBALS_H))
-                .draw(global_switches)
-                .show(Show::Tab(5)),
         ])
         .show(Show::Tab(5)),
-        tabs(
-            19,
-            "SPECTRUM · SCOPE · LOUDNESS · STEREO · PITCH · SETTINGS",
-        )
-        .h(Size::U(1.25)),
+        // Honeydew's own: every Analyzer's switches, not this module's settings.
+        hstack([display(GLOBALS).draw(global_switches)]).show(Show::Tab(6)),
+        tabs(19, TAB_NAMES).h(Size::U(1.25)),
     ])))
 }
 
-/// The display of the global switches on the SETTINGS page ([`global_switches`]), and its height in U.
+/// The pages' tabs.
+const TAB_NAMES: &str = "SPECTRUM · SCOPE · LOUDNESS · STEREO · PITCH · SETTINGS · GLOBAL";
+/// The display of the GLOBAL page ([`global_switches`]).
 const GLOBALS: u32 = 21;
-const GLOBALS_H: f32 = 1.0;
-/// The SETTINGS page's two rows of controls, in U: what the 7.99 U page leaves above the tab strip and the switches.
-const ROW_H: f32 = 2.87;
+/// A switch's row on the GLOBAL page and the room its description takes under it, in U.
+const SWITCH_H: f32 = 1.0;
+const ABOUT_H: f32 = 2.1;
 
-/// The SETTINGS page's global switches, side by side as label-right pills: `Pause hidden` and `Light pitch`
-/// (`honeydew_audio::analysis::set_analyzer_options`). They are every Analyzer's at once, not this module's: no song
-/// saves them, the app's settings keep them across launches. They change only the displays, never the sound.
+/// The GLOBAL page's switches, one above the other as label-right pills, each with what it does under it in 8 pt:
+/// `Pause hidden` and `Light pitch` (`honeydew_audio::analysis::set_analyzer_options`). They are every Analyzer's at
+/// once, not this module's: no song saves them, the app's settings keep them across launches. They change only the
+/// displays, never the sound.
 fn global_switches(
     ui: &mut Ui,
     cx: &UiCtx,
@@ -161,11 +159,15 @@ fn global_switches(
             "For every Analyzer: the PITCH view reads the pitch once every 50 ms instead of about 5 times as often, to save CPU. The pitch line is a little coarser. The sound never changes.",
         ),
     ];
-    let w = r.width() / SWITCHES.len() as f32;
+    let (m, u) = (cx.m, cx.m.u(1.0));
+    let inner = r.shrink2(vec2(0.5 * u, 0.3 * u));
     let mut changed = false;
     for (i, ((label, tip), value)) in SWITCHES.iter().zip(&mut values).enumerate() {
-        let left = r.left() + i as f32 * w;
-        let rect = Rect::from_x_y_ranges(left..=left + w, r.y_range());
+        let top = inner.top() + i as f32 * (SWITCH_H + ABOUT_H) * u;
+        let rect = Rect::from_min_size(
+            pos2(inner.left(), top),
+            vec2(inner.width() / 2.0, SWITCH_H * u),
+        );
         let c = widgets::Control {
             menu: widgets::ParamMenu::Unbound,
             ..widgets::Control::new(id.with(i), rect, label, ink, 1.0)
@@ -178,6 +180,12 @@ fn global_switches(
         widgets::pill_toggle(ui, cx, &c, pill, value, |_| String::new());
         changed |= *value != before;
         crate::ui::tooltip::tip(ui, rect, tip, None);
+        let font = m.font_id(crate::metrics::FontSize::Pt8);
+        let about = ui
+            .painter()
+            .layout(tip.to_string(), font, ink, inner.width());
+        ui.painter()
+            .galley(pos2(inner.left(), rect.bottom() + 0.15 * u), about, ink);
     }
     if changed {
         analysis::set_analyzer_options(values[0] != 0.0, values[1] != 0.0);
@@ -344,14 +352,14 @@ impl Frame<'_> {
     }
 
     /// The axes, steps 1–5 in `r`: P filled `controlFill`, the horizontal grid and Y labels, the vertical grid and X
-    /// labels; 9 X ticks and 7 Y ticks. Returns P.
+    /// labels; 9 X ticks and 7 Y ticks. The grids are the theme's ([`crate::theme::graph_grid`]). Returns P.
     fn draw(&self, ui: &Ui, cx: &UiCtx, r: Rect, ink: Color32) -> Rect {
-        let (u, px) = (cx.m.u(1.0), 1.0 / cx.m.ppp());
+        let u = cx.m.u(1.0);
         let p = self.plot(r, u);
         let colors = &cx.theme.colors;
         ui.painter()
             .rect_filled(p, 0.0, colors.control_fill.to_color32());
-        let line = Stroke::new(px, colors.background.to_color32());
+        let (v_line, h_line) = crate::theme::graph_grid(cx.theme, cx.m.ppp());
         let y_ticks = self
             .y_labels
             .map(|(c, _)| ticks(&self.y, c, 7))
@@ -360,7 +368,7 @@ impl Frame<'_> {
         for (k, &(place, _)) in y_ticks.iter().enumerate() {
             let y = p.bottom() - place * p.height();
             if self.grid.0 {
-                ui.painter().hline(p.x_range(), y, line);
+                ui.painter().hline(p.x_range(), y, h_line);
             }
             if let Some(texts) = &y_texts {
                 let at = Rect::from_min_size(
@@ -386,7 +394,7 @@ impl Frame<'_> {
         for (k, &(place, _)) in x_ticks.iter().enumerate() {
             let x = p.left() + place * p.width();
             if self.grid.1 {
-                ui.painter().vline(x, p.y_range(), line);
+                ui.painter().vline(x, p.y_range(), v_line);
             }
             if let Some(texts) = &x_texts {
                 let at = Rect::from_min_size(pos2(x, p.bottom() + 0.2 * u), vec2(0.5 * u, 0.4 * u));
@@ -1569,7 +1577,8 @@ fn vectorscope(
     let painter = ui.painter();
     painter.rect_filled(p, 0.0, fill);
     let (c, r) = scope(p);
-    let hairline = Stroke::new(px, bg);
+    // The theme's grid: its vertical lines' stroke for the diagonals and arcs.
+    let hairline = crate::theme::graph_grid(cx.theme, cx.m.ppp()).0;
     for deg in [45.0, 135.0] {
         painter.line_segment([c, polar(c, 0.9 * r, deg)], hairline);
     }
@@ -1684,6 +1693,8 @@ fn pitch_track(
         1.0 / cx.m.ppp(),
         cx.theme.colors.background.to_color32().gamma_multiply(0.5),
     );
+    // The theme's horizontal grid between the semitones, as the piano roll's rows.
+    let h_line = crate::theme::graph_grid(cx.theme, cx.m.ppp()).1;
     let painter = ui.painter();
     let at = |n: f32| p.bottom() - y.pos(n) * p.height();
     for n in (y.lo.floor() as i32)..=(y.hi.ceil() as i32) {
@@ -1701,10 +1712,10 @@ fn pitch_track(
                     );
                 }
             }
-            4 | 11 if (p.top()..p.bottom()).contains(&at(n as f32 + 0.5)) => {
-                painter.hline(p.x_range(), at(n as f32 + 0.5), Stroke::new(px, band));
-            }
             _ => {}
+        }
+        if (p.top()..p.bottom()).contains(&at(n as f32 + 0.5)) {
+            painter.hline(p.x_range(), at(n as f32 + 0.5), h_line);
         }
     }
     let mut curve = Vec::new();
@@ -1753,18 +1764,7 @@ fn pitch_track(
 }
 
 #[cfg(test)]
-const TABS: Row = row(
-    19,
-    Widget::Tabs,
-    "SPECTRUM · SCOPE · LOUDNESS · STEREO · PITCH · SETTINGS",
-    [0.0, 6.74, 14.0, 1.25],
-)
-.h(Size::U(1.25));
-
-/// The global switches' display under the SETTINGS rows.
-#[cfg(test)]
-const GLOBALS_ROW: Row =
-    row(GLOBALS, Widget::Display, "", [0.0, 5.74, 14.0, 1.0]).h(Size::U(GLOBALS_H));
+const TABS: Row = row(19, Widget::Tabs, TAB_NAMES, [0.0, 6.74, 14.0, 1.25]).h(Size::U(1.25));
 
 /// A graph of the five views with a side column.
 #[cfg(test)]
@@ -1866,17 +1866,16 @@ pub const REFERENCE: Reference = Reference {
             tab: 5,
             settings: &[(TILT, 4.0)],
             rows: &[
-                row(16, Widget::Spinner, "DC Block", [0.0, 0.0, 4.66, 2.87]).items("On · Off"),
-                row(TILT, Widget::Spinner, "Tilt", [4.66, 0.0, 4.67, 2.87])
+                row(16, Widget::Spinner, "DC Block", [0.0, 0.0, 4.66, 3.37]).items("On · Off"),
+                row(TILT, Widget::Spinner, "Tilt", [4.66, 0.0, 4.67, 3.37])
                     .items("White · Pink · Default · Brown · Custom"),
-                row(TILT_STEP, Widget::Knob, "dB/oct", [9.33, 0.0, 4.67, 2.87])
+                row(TILT_STEP, Widget::Knob, "dB/oct", [9.33, 0.0, 4.67, 3.37])
                     .value("+4.5 dB/oct"),
-                row(14, Widget::Spinner, "Channel", [0.0, 2.87, 4.66, 2.87])
+                row(14, Widget::Spinner, "Channel", [0.0, 3.37, 4.66, 3.37])
                     .items("Left · Right · L + R"),
-                row(15, Widget::Spinner, "Reactivity", [4.66, 2.87, 4.67, 2.87])
+                row(15, Widget::Spinner, "Reactivity", [4.66, 3.37, 4.67, 3.37])
                     .items("Slow · Medium · Fast"),
-                row(17, Widget::Knob, "Input Gain", [9.33, 2.87, 4.67, 2.87]).value("×1.00"),
-                GLOBALS_ROW,
+                row(17, Widget::Knob, "Input Gain", [9.33, 3.37, 4.67, 3.37]).value("×1.00"),
                 TABS,
             ],
             ..Case::DEFAULT
@@ -1885,15 +1884,24 @@ pub const REFERENCE: Reference = Reference {
             name: "SETTINGS",
             tab: 5,
             rows: &[
-                row(16, Widget::Spinner, "DC Block", [0.0, 0.0, 7.0, 2.87]).items("On · Off"),
-                row(TILT, Widget::Spinner, "Tilt", [7.0, 0.0, 7.0, 2.87])
+                row(16, Widget::Spinner, "DC Block", [0.0, 0.0, 7.0, 3.37]).items("On · Off"),
+                row(TILT, Widget::Spinner, "Tilt", [7.0, 0.0, 7.0, 3.37])
                     .items("White · Pink · Default · Brown · Custom"),
-                row(14, Widget::Spinner, "Channel", [0.0, 2.87, 4.66, 2.87])
+                row(14, Widget::Spinner, "Channel", [0.0, 3.37, 4.66, 3.37])
                     .items("Left · Right · L + R"),
-                row(15, Widget::Spinner, "Reactivity", [4.66, 2.87, 4.67, 2.87])
+                row(15, Widget::Spinner, "Reactivity", [4.66, 3.37, 4.67, 3.37])
                     .items("Slow · Medium · Fast"),
-                row(17, Widget::Knob, "Input Gain", [9.33, 2.87, 4.67, 2.87]).value("×1.00"),
-                GLOBALS_ROW,
+                row(17, Widget::Knob, "Input Gain", [9.33, 3.37, 4.67, 3.37]).value("×1.00"),
+                TABS,
+            ],
+            ..Case::DEFAULT
+        },
+        // Honeydew's own: every Analyzer's switches.
+        Case {
+            name: "GLOBAL",
+            tab: 6,
+            rows: &[
+                row(GLOBALS, Widget::Display, "", [0.0, 0.0, 14.0, 6.74]),
                 TABS,
             ],
             ..Case::DEFAULT

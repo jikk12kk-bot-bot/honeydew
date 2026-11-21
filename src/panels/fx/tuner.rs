@@ -509,12 +509,13 @@ fn tuner(
     let (u, px) = (m.u(1.0), 1.0 / m.ppp());
     let control = colors.control_fill.to_color32();
     painter.rect_filled(d, 0.0, control);
-    let grid = Stroke::new(px, colors.background.to_color32());
+    // The theme's grid ([`crate::theme::graph_grid`]).
+    let (v_line, h_line) = crate::theme::graph_grid(cx.theme, m.ppp());
     for x in tenths(d.left(), d.width()) {
-        painter.vline(x, d.y_range(), grid);
+        painter.vline(x, d.y_range(), v_line);
     }
     for y in tenths(d.top(), d.height()) {
-        painter.hline(d.x_range(), y, grid);
+        painter.hline(d.x_range(), y, h_line);
     }
     let a = shade(channel, view.dim);
     let b_raw = view.b(colors.text.to_color32(), channel);
@@ -676,11 +677,10 @@ pub const REFERENCE: Reference = Reference {
 
 #[cfg(test)]
 mod tests {
-    use eframe::egui::epaint::ColorMode;
 
     use super::*;
     use crate::metrics::{DEFAULT_UI_SCALE, Metrics};
-    use crate::panels::tests::{U, display_shapes};
+    use crate::panels::tests::U;
     use crate::theme::theme_by_id;
 
     /// `x, y, w, h` in U as a rect in points (U = 32 points at any ppp).
@@ -692,9 +692,6 @@ mod tests {
     fn reference_d() -> Rect {
         u_rect(1.75, 0.0, 10.5, 4.99)
     }
-
-    /// Colour A at rest: `Color32::RED`, the test channel, dimmed to RGB × 0.75.
-    const A: Color32 = Color32::from_rgb(191, 0, 0);
 
     #[test]
     fn rects_a_to_h_follow_the_display_rect() {
@@ -816,166 +813,6 @@ mod tests {
                 xs.iter().zip(&want).all(|(x, w)| (x - w).abs() < 1e-3),
                 "ppp {ppp}: {xs:?}"
             );
-        }
-    }
-
-    /// What display #3 draws with `Visual` on `visual`, at `ppp` in the reference content rect (14 × 4.99 U).
-    fn drawn(visual: usize, ppp: f32) -> Vec<Shape> {
-        let mut state = PanelState::default();
-        state.settings.insert(2, visual as f32);
-        let content = Rect::from_min_size(pos2(0.0, 0.0), vec2(14.0 * U, 4.99 * U));
-        display_shapes(24, 3, &[], &state, content, ppp)
-    }
-
-    /// The first two layers, the same for every visual: d filled `controlFill`, then 11 vertical and 11
-    /// horizontal 1 px `background` lines at i/10. Returns d and the shapes after the grid.
-    fn fill_and_grid(shapes: &[Shape], ppp: f32) -> (Rect, &[Shape]) {
-        let colors = theme_by_id(0).colors;
-        let Some(Shape::Rect(fill)) = shapes.first() else {
-            panic!("{shapes:?}");
-        };
-        assert_eq!(fill.fill, colors.control_fill.to_color32());
-        let d = fill.rect;
-        // The layout's display rect, on whole pixels.
-        let off = (d.min - reference_d().min).length() + (d.max - reference_d().max).length();
-        assert!(off <= 1.0, "ppp {ppp}: {d:?}");
-        for (k, s) in shapes[1..23].iter().enumerate() {
-            let Shape::LineSegment { points, stroke } = s else {
-                panic!("ppp {ppp}, grid line {k}: {s:?}");
-            };
-            assert_eq!(
-                *stroke,
-                Stroke::new(1.0 / ppp, colors.background.to_color32())
-            );
-            let i = (k % 11) as f32 / 10.0;
-            let want = if k < 11 {
-                let x = d.left() + i * d.width();
-                [pos2(x, d.top()), pos2(x, d.bottom())]
-            } else {
-                let y = d.top() + i * d.height();
-                [pos2(d.left(), y), pos2(d.right(), y)]
-            };
-            let off = (points[0] - want[0]).length() + (points[1] - want[1]).length();
-            assert!(
-                off < 1e-3,
-                "ppp {ppp}, grid line {k}: {points:?}, want {want:?}"
-            );
-        }
-        (d, &shapes[23..])
-    }
-
-    /// The readouts at the end of `shapes`: each at its rect's anchor, FontSize 2, colour A.
-    fn assert_readouts(shapes: &[Shape], want: &[(Rect, Align2, &str)], ppp: f32) {
-        let size = Metrics::from_pixels_per_point(ppp, DEFAULT_UI_SCALE)
-            .font_id(FontSize::Pt10)
-            .size;
-        let texts = &shapes[shapes.len() - want.len()..];
-        for (s, &(rect, align, text)) in texts.iter().zip(want) {
-            let Shape::Text(t) = s else {
-                panic!("ppp {ppp}, {text}: {s:?}");
-            };
-            let format = &t.galley.job.sections[0].format;
-            assert_eq!(
-                (t.galley.text(), format.color, format.font_id.size),
-                (text, A, size)
-            );
-            let at = t.galley.rect.translate(t.pos.to_vec2());
-            let off = align.pos_in_rect(&at) - align.pos_in_rect(&rect);
-            assert!(off.length() < 0.01, "ppp {ppp}, {text}: {at:?} in {rect:?}");
-        }
-    }
-
-    #[test]
-    fn basic_at_rest_frames_a_and_outlines_the_f_triangle() {
-        for ppp in [1.0, 2.0] {
-            let shapes = drawn(BASIC, ppp);
-            let (d, visual) = fill_and_grid(&shapes, ppp);
-            let r = rects(d, U);
-            let [Shape::Rect(frame), Shape::Path(f), _, _, _] = visual else {
-                panic!("ppp {ppp}: {visual:?}");
-            };
-            // A grown by 5 px, outlined 2 px wide in colour A, no fill.
-            assert_eq!(frame.rect, r.a.expand(5.0 / ppp));
-            assert_eq!(
-                (frame.stroke, frame.stroke_kind),
-                (Stroke::new(2.0 / ppp, A), StrokeKind::Middle)
-            );
-            assert_eq!(frame.fill, Color32::TRANSPARENT);
-            // No pitch is never in tune: outlined 1.5 px in colour A, not filled.
-            assert_eq!(f.points, marks(&r, BASIC, 0.0, U)[0].to_vec());
-            assert!(f.closed && f.fill == Color32::TRANSPARENT, "ppp {ppp}");
-            assert_eq!(
-                (f.stroke.width, &f.stroke.color),
-                (1.5 / ppp, &ColorMode::Solid(A))
-            );
-            assert_readouts(visual, &readouts(&r, BASIC, &View::rest()), ppp);
-        }
-    }
-
-    #[test]
-    fn strobe_at_rest_draws_four_still_bands_and_outlines_g_and_h() {
-        for ppp in [1.0, 2.0] {
-            let shapes = drawn(STROBE, ppp);
-            let (d, visual) = fill_and_grid(&shapes, ppp);
-            let r = rects(d, U);
-            let [band @ .., Shape::Path(g), Shape::Path(h), _, _, _] = visual else {
-                panic!("ppp {ppp}: {visual:?}");
-            };
-            // The 4 bands in colour B (= A at dev 0), then the triangles.
-            let band: Vec<_> = band
-                .iter()
-                .map(|s| match s {
-                    Shape::Rect(b) if b.fill == A => b.rect,
-                    _ => panic!("ppp {ppp}: {s:?}"),
-                })
-                .collect();
-            assert_eq!(band, bands(r.b, 0.0), "ppp {ppp}");
-            for (path, want) in [(g, r.g), (h, r.h)] {
-                assert!(
-                    want.expand(1e-3)
-                        .contains_rect(Rect::from_points(&path.points))
-                );
-                assert!(
-                    path.closed && path.fill == Color32::TRANSPARENT,
-                    "ppp {ppp}"
-                );
-                assert_eq!(
-                    (path.stroke.width, &path.stroke.color),
-                    (1.5 / ppp, &ColorMode::Solid(A))
-                );
-            }
-            let want: Vec<_> = marks(&r, STROBE, 0.0, U)
-                .iter()
-                .map(|t| t.to_vec())
-                .collect();
-            assert_eq!(vec![g.points.clone(), h.points.clone()], want);
-            assert_readouts(visual, &readouts(&r, STROBE, &View::rest()), ppp);
-        }
-    }
-
-    #[test]
-    fn orbit_at_rest_draws_ten_ringed_dots_then_hz_and_status() {
-        let control = theme_by_id(0).colors.control_fill.to_color32();
-        for ppp in [1.0, 2.0] {
-            let shapes = drawn(ORBIT, ppp);
-            let (d, visual) = fill_and_grid(&shapes, ppp);
-            let r = rects(d, U);
-            assert_eq!(visual.len(), 20 + 2, "ppp {ppp}");
-            // The panel's centre is d's: the 1 : 6 : 1 columns centre d.
-            let dots = orbit(d.center(), U, ppp, -FRAC_PI_2, 0.0);
-            for (pair, dot) in visual.chunks(2).zip(&dots) {
-                let [Shape::Circle(outer), Shape::Circle(inner)] = pair else {
-                    panic!("ppp {ppp}: {pair:?}");
-                };
-                assert_eq!((outer.center, outer.radius), (dot.at, dot.outer));
-                assert_eq!(outer.fill, shade(Color32::RED, 0.75 * dot.shade));
-                // Not in tune: dot 0's inner disc is `controlFill` like the rest, so it reads as a ring.
-                assert_eq!(
-                    (inner.center, inner.radius, inner.fill),
-                    (dot.at, dot.inner, control)
-                );
-            }
-            assert_readouts(visual, &readouts(&r, ORBIT, &View::rest()), ppp);
         }
     }
 

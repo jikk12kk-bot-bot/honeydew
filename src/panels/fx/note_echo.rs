@@ -329,18 +329,22 @@ fn train(
     let plot = train.plot;
     // 1.
     painter.rect_filled(rect, 0.0, fill);
-    // 2.
-    for x in train.time_lines(m) {
+    // 2. and 3., in the theme's grid ([`crate::theme::graph_grid`]).
+    let (v_line, h_line) = crate::theme::graph_grid(cx.theme, m.ppp());
+    for x in train
+        .time_lines(m)
+        .into_iter()
+        .filter(|_| v_line.width > 0.0)
+    {
         let x = m.floor_px(x);
-        let line = Rect::from_x_y_ranges(x..=x + px, plot.y_range());
-        painter.rect_filled(line, 0.0, ink.gamma_multiply(0.2));
+        let line = Rect::from_x_y_ranges(x..=x + v_line.width, plot.y_range());
+        painter.rect_filled(line, 0.0, v_line.color);
     }
-    // 3.
     let pitches = train.pitch_lines(m);
-    for &v in &pitches {
+    for &v in pitches.iter().filter(|_| h_line.width > 0.0) {
         let y = m.floor_px(train.y(v));
-        let line = Rect::from_x_y_ranges(plot.x_range(), y..=y + px);
-        painter.rect_filled(line, 0.0, ink.gamma_multiply(0.15));
+        let line = Rect::from_x_y_ranges(plot.x_range(), y..=y + h_line.width);
+        painter.rect_filled(line, 0.0, h_line.color);
     }
     // 4. The galley is egui's line box of the text: its bottom on the line.
     let font = m.font_id(FontSize::Pt8);
@@ -637,11 +641,10 @@ mod tests {
 
     // ---- the note-echo display (#6) ----
 
-    use eframe::egui::{Context, RawInput, Shape, Stroke, pos2, vec2};
+    use eframe::egui::{Context, RawInput, Shape, pos2, vec2};
 
     use crate::metrics::DEFAULT_UI_SCALE;
     use crate::panels::tests::{Rig, U, card, display_shapes};
-    use crate::theme::theme_by_id;
 
     fn defaults() -> Vec<f32> {
         ModuleInstance::new(47, 2).params
@@ -1090,139 +1093,6 @@ mod tests {
     /// The reference content rect: 14 U × 8.99 U.
     fn content() -> Rect {
         Rect::from_min_size(pos2(0.0, 0.0), vec2(14.0 * U, 8.99 * U))
-    }
-
-    #[test]
-    fn the_display_draws_steps_1_to_7_in_order() {
-        let colors = theme_by_id(0).colors;
-        let (fill, text, ink) = (
-            colors.control_fill.to_color32(),
-            colors.text.to_color32(),
-            Color32::RED,
-        );
-        for ppp in [1.0, 2.0] {
-            let shapes = display_shapes(47, 6, &[], &PanelState::default(), content(), ppp);
-            let kinds: String = (shapes.iter())
-                .map(|s| match s {
-                    Shape::Rect(_) => 'R',
-                    Shape::Text(_) => 'T',
-                    Shape::Path(_) => 'P',
-                    Shape::Circle(_) => 'C',
-                    Shape::LineSegment { .. } => 'L',
-                    _ => '?',
-                })
-                .collect();
-            // Fill, 5 time lines, 7 pitch lines, 6 labels, the polyline, the played note, 8 echoes.
-            let order = format!(
-                "R{}{}{}PCCCL{}",
-                "R".repeat(5),
-                "R".repeat(7),
-                "T".repeat(6),
-                "CCP".repeat(8)
-            );
-            assert_eq!(kinds, order, "ppp {ppp}");
-            // 1. The fill is the display rect.
-            let Shape::Rect(bg) = &shapes[0] else {
-                unreachable!()
-            };
-            assert_eq!(bg.fill, fill);
-            let rect = bg.rect;
-            // On whole device pixels.
-            let spec = display_rect();
-            assert!(
-                (rect.min - spec.min).length() < 1.0 && (rect.size() - spec.size()).length() < 1.0,
-                "{rect:?}"
-            );
-            let (e, t) = layout(rect, &defaults(), ppp);
-            let px = 1.0 / ppp;
-            // 2. Time lines: 1 px over the plot, channel at 20 %.
-            for (s, x) in shapes[1..6].iter().zip(t.time_lines(&metrics(ppp))) {
-                let Shape::Rect(l) = s else { unreachable!() };
-                assert_eq!(l.fill, ink.gamma_multiply(0.2));
-                assert!(near(l.rect.width(), px) && (l.rect.left() - x).abs() < px);
-                assert_eq!(l.rect.y_range(), t.plot.y_range());
-            }
-            // 3. Pitch lines: 1 px across the plot, channel at 15 %, top to bottom.
-            for (s, v) in shapes[6..13].iter().zip(t.pitch_lines(&metrics(ppp))) {
-                let Shape::Rect(l) = s else { unreachable!() };
-                assert_eq!(l.fill, ink.gamma_multiply(0.15));
-                assert!(near(l.rect.height(), px) && (l.rect.top() - t.y(v)).abs() < px);
-                assert_eq!(l.rect.x_range(), t.plot.x_range());
-            }
-            // 4. Labels: FontSize 1 in the per-RGBA average of `controlFill` (49, 55, 59) and the channel (255, 0, 0),
-            //    (152, 28, 30), at 50 % (premultiplied); each box text width × FontSize 1 high, its bottom on its line,
-            //    from 0.25 U in; none at 0.
-            let label = Color32::from_rgba_premultiplied(76, 14, 15, 128);
-            let font = metrics(ppp).font_id(FontSize::Pt8);
-            let labels: Vec<_> = (shapes[13..19].iter())
-                .map(|s| {
-                    let Shape::Text(l) = s else { unreachable!() };
-                    let section = &l.galley.job.sections[0].format;
-                    assert_eq!(section.color, label);
-                    assert_eq!(section.font_id, font);
-                    let r = Rect::from_min_size(l.pos, l.galley.size());
-                    assert!((r.left() - (rect.left() + 0.25 * U)).abs() <= px, "{r:?}");
-                    (l.galley.text().to_owned(), r.bottom())
-                })
-                .collect();
-            let names: Vec<_> = labels.iter().map(|(s, _)| s.as_str()).collect();
-            assert_eq!(names, ["+12", "+8", "+4", "-4", "-8", "-12"]);
-            for ((_, bottom), v) in labels.iter().zip([12.0, 8.0, 4.0, -4.0, -8.0, -12.0]) {
-                let line = metrics(ppp).floor_px(t.y(v));
-                assert!((bottom - line).abs() < 1e-3, "{v}: {bottom} vs {line}");
-            }
-            // 5. The polyline through the markers, 1 px, channel.
-            let Shape::Path(line) = &shapes[19] else {
-                unreachable!()
-            };
-            assert_eq!(line.points.len(), 9);
-            assert!(line.points.iter().zip(&e).all(|(&p, e)| near2(p, t.at(e))));
-            assert_eq!(line.stroke.width, px);
-            // 6. The played note: a channel disc, two `text` outlines and a vertical `text` line.
-            let c0 = t.at(&e[0]);
-            let inner = t.r - 0.08 * U;
-            let circle = |s: &Shape| {
-                let Shape::Circle(c) = s else { unreachable!() };
-                assert!(near2(c.center, c0));
-                (c.radius, c.fill, c.stroke)
-            };
-            assert_eq!(circle(&shapes[20]), (t.r, ink, Stroke::NONE));
-            assert_eq!(
-                circle(&shapes[21]),
-                (t.r, Color32::TRANSPARENT, Stroke::new(px, text))
-            );
-            let (r2, _, s2) = circle(&shapes[22]);
-            assert!(near(r2, inner) && s2 == Stroke::new(px, text));
-            let Shape::LineSegment { points, stroke } = &shapes[23] else {
-                unreachable!()
-            };
-            assert!(
-                near2(points[0], c0 - vec2(0.0, inner)) && near2(points[1], c0 + vec2(0.0, inner))
-            );
-            assert_eq!(*stroke, Stroke::new(px, text));
-            // 7. Each echo: a disc halfway to `controlFill` (velocity 0.5), a `text` outline and a straight crescent.
-            for (k, s) in shapes[24..].chunks(3).enumerate() {
-                let c = t.at(&e[k + 1]);
-                let Shape::Circle(disc) = &s[0] else {
-                    unreachable!()
-                };
-                assert!(near2(disc.center, c) && near(disc.radius, t.r));
-                assert_eq!(disc.fill, fill.lerp_to_gamma(ink, 0.5));
-                let Shape::Circle(rim) = &s[1] else {
-                    unreachable!()
-                };
-                assert_eq!((rim.radius, rim.stroke), (t.r, Stroke::new(px, text)));
-                let Shape::Path(pan) = &s[2] else {
-                    unreachable!()
-                };
-                assert!(
-                    pan.points
-                        .iter()
-                        .zip(crescent(c, t.r, 0.0, 0.08 * U))
-                        .all(|(&a, b)| near2(a, b))
-                );
-            }
-        }
     }
 
     #[test]

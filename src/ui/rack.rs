@@ -1975,9 +1975,10 @@ impl RackPanel {
             let c = Control {
                 menu: menu(0x2000 + target),
                 fine_tune: crate::ui::fine_tune::channel_param(0x2000 + target),
+                value_above: Some(eframe::egui::Align::Center),
                 ..Control::new(id.with("level"), level, "", ink, SEND_UNITY)
             };
-            // Honeydew change (#171): the drag bubble reads it as the channel Level.
+            // Honeydew change: its value over the thumb, read as the channel Level.
             let level = |v| crate::params::CHANNEL_PARAMS[0].display_text(v);
             let changed = widgets::h_slider(ui, cx, &c, &mut send.level, level).changed();
             control(

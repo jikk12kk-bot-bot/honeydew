@@ -139,9 +139,50 @@ pub fn grid_width(w: f32, o: &ThemeOptions) -> f32 {
     scaled_px(w, o.grid_thickness)
 }
 
-/// The horizontal grid's lines in device pixels (1 at the default) at the theme's `gridHorizontalThickness`; 0: none.
+/// The horizontal grid's lines in device pixels at the theme's `gridHorizontalThickness`: 2 at the default, as a beat
+/// line, so both grids are equally thick at the same thickness; 0: none.
 pub fn grid_h_px(o: &ThemeOptions) -> f32 {
-    scaled_px(1.0, o.grid_horizontal_thickness)
+    scaled_px(2.0, o.grid_horizontal_thickness)
+}
+
+/// A visualizer's grid (Honeydew change): the module displays' grid lines in the theme's grid colours and thickness,
+/// 1 device pixel at the default. Returns (vertical, horizontal) strokes in points at `ppp`; a stroke 0 wide (the
+/// thickness at 0) draws nothing.
+pub fn graph_grid(theme: &Theme, ppp: f32) -> (eframe::egui::Stroke, eframe::egui::Stroke) {
+    let (c, o) = (&theme.colors, &theme.options);
+    (
+        eframe::egui::Stroke::new(scaled_px(1.0, o.grid_thickness) / ppp, grid_ink(c)),
+        eframe::egui::Stroke::new(
+            scaled_px(1.0, o.grid_horizontal_thickness) / ppp,
+            grid_h_ink(c),
+        ),
+    )
+}
+
+/// Honeydew change: an even grid over a visualizer's `rect` (points) in the theme's grid ([`graph_grid`]): `columns`
+/// columns and `rows` rows, the lines between them (not on the edges), each on whole device pixels at `ppp`.
+pub fn paint_graph_grid(
+    painter: &eframe::egui::Painter,
+    rect: eframe::egui::Rect,
+    theme: &Theme,
+    ppp: f32,
+    (columns, rows): (usize, usize),
+) {
+    let (v, h) = graph_grid(theme, ppp);
+    // A line w px wide on whole pixels: its centre on a pixel's centre when w is odd, on an edge when even.
+    let snap = |at: f32, w: f32| {
+        let odd = (w * ppp).round() as i32 % 2 == 1;
+        let at = (at * ppp).round();
+        (if odd { at + 0.5 } else { at }) / ppp
+    };
+    for i in (1..columns).filter(|_| v.width > 0.0) {
+        let x = rect.left() + rect.width() * i as f32 / columns as f32;
+        painter.vline(snap(x, v.width), rect.y_range(), v);
+    }
+    for i in (1..rows).filter(|_| h.width > 0.0) {
+        let y = rect.top() + rect.height() * i as f32 / rows as f32;
+        painter.hline(rect.x_range(), snap(y, h.width), h);
+    }
 }
 
 fn scaled_px(w: f32, k: f32) -> f32 {

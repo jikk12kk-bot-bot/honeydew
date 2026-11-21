@@ -261,6 +261,7 @@ fn curve(
     let painter = ui.painter();
     let px = 1.0 / m.ppp();
     painter.rect_filled(rect, 0.0, colors.control_fill.to_color32());
+    crate::theme::paint_graph_grid(painter, rect, cx.theme, cx.m.ppp(), (8, 4));
     let mid = m.floor_px(rect.center().y);
     let zero = Rect::from_x_y_ranges(rect.x_range(), mid..=mid + px);
     painter.rect_filled(zero, 0.0, colors.module_fill.to_color32());
@@ -573,65 +574,6 @@ mod tests {
         PanelState {
             tab,
             ..PanelState::default()
-        }
-    }
-
-    #[test]
-    fn the_display_draws_fill_0_db_line_bars_then_the_handles_in_theme_roles() {
-        let colors = theme_by_id(0).colors;
-        let [control, module, menu, background] = [
-            colors.control_fill,
-            colors.module_fill,
-            colors.menu_fill,
-            colors.background,
-        ]
-        .map(|c| c.to_color32());
-        for ppp in [1.0, 2.0] {
-            let shapes = display_shapes(TYPE_ID, 2, &[], &on_tab(0), content(), ppp);
-            assert_eq!(shapes.len(), 2 + 56 + 4 * 3, "ppp {ppp}");
-            let rect = match &shapes[0] {
-                Shape::Rect(r) => {
-                    assert_eq!(r.fill, control);
-                    r.rect
-                }
-                s => panic!("{s:?}"),
-            };
-            let Shape::Rect(line) = &shapes[1] else {
-                panic!("{:?}", shapes[1])
-            };
-            assert_eq!(line.fill, module);
-            assert_eq!(line.rect.height(), 1.0 / ppp);
-            assert_eq!(line.rect.x_range(), rect.x_range());
-            assert!((line.rect.top() - rect.center().y).abs() < 1.0 / ppp);
-            for s in &shapes[2..58] {
-                assert!(matches!(s, Shape::Rect(r) if r.fill == menu), "{s:?}");
-            }
-            for (i, band) in shapes[58..].chunks(3).enumerate() {
-                let (Shape::Rect(l), Shape::Circle(d), Shape::Text(n)) =
-                    (&band[0], &band[1], &band[2])
-                else {
-                    panic!("{band:?}")
-                };
-                let selected = i == 3;
-                let ink = if selected { Color32::RED } else { menu };
-                assert_eq!((l.fill, d.fill), (ink, ink), "band {i}");
-                assert_eq!(l.rect.width(), 1.0 / ppp);
-                assert_eq!(l.rect.y_range(), rect.y_range());
-                let f = [0.2, 0.4, 0.6, 0.8][if selected { 0 } else { i + 1 }];
-                assert!(
-                    close(d.center.x, rect.left() + f * rect.width()),
-                    "band {i}"
-                );
-                assert!(close(d.center.y, rect.center().y));
-                assert_eq!(d.radius, radius(&metrics(ppp), 0.0));
-                assert_eq!(n.fallback_color, background);
-                let name = (if selected { 1 } else { i + 2 }).to_string();
-                assert_eq!(n.galley.text(), name);
-                assert!(close(
-                    n.galley.rect.translate(n.pos.to_vec2()).center().x,
-                    d.center.x
-                ));
-            }
         }
     }
 

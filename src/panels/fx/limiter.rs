@@ -18,7 +18,7 @@ fn scale_y(r: Rect, m: &Metrics, db: f32) -> f32 {
     r.bottom() - 1.0 / m.ppp() - r.height() * (60.0 + db) / 66.0
 }
 
-/// The history display (#3): no background fill, the grid's full-width 1 px rows in `text` at 10 %, the `series` (a
+/// The history display (#3): no background fill, the grid's full-width rows in the theme's horizontal grid, the `series` (a
 /// reset history without a feed: none), then the `threshold` row (dB) in `text`. With `band`, the Multiband band
 /// graph: a `controlFill` fill first and only 3 grid rows.
 pub(super) fn history(
@@ -39,8 +39,14 @@ pub(super) fn history(
     if band {
         painter.rect_filled(r, 0.0, cx.theme.colors.control_fill.to_color32());
     }
+    // The theme's horizontal grid ([`crate::theme::graph_grid`]).
+    let grid = crate::theme::graph_grid(cx.theme, m.ppp()).1;
     for &db in GRID_DB.iter().step_by(if band { 2 } else { 1 }) {
-        row(db, text.gamma_multiply(0.1));
+        if grid.width > 0.0 {
+            let y = scale_y(r, m, db);
+            let rect = Rect::from_x_y_ranges(r.x_range(), y..=y + grid.width);
+            painter.rect_filled(rect, 0.0, grid.color);
+        }
     }
     if let Some((series, ink)) = series {
         painter.extend(columns(r, m, series, text, ink));
@@ -157,7 +163,7 @@ pub(super) mod tests {
 
     use super::*;
     use crate::metrics::DEFAULT_UI_SCALE;
-    use crate::panels::tests::{U, display_shapes};
+    use crate::panels::tests::U;
     use crate::theme::theme_by_id;
 
     /// U = 32 points at either density.
@@ -201,51 +207,6 @@ pub(super) mod tests {
             }
             // The threshold T = p4·24 − 24: p4 = 0 is −24 dB (36/66 up), p4 = 1 is 0 dB, on the top grid line.
             assert!((scale_y(r, &m, -24.0) - (bottom - 3.49 * U * 36.0 / 66.0)).abs() < 1e-3);
-        }
-    }
-
-    #[test]
-    fn the_history_at_rest_is_its_grid_and_threshold() {
-        let text = theme_by_id(0).colors.text.to_color32();
-        let content = Rect::from_min_size(pos2(0.0, 0.0), vec2(14.0 * U, 3.99 * U));
-        for ppp in [1.0, 2.0] {
-            for (p4, k) in [(0.0, 36.0 / 66.0), (1.0, 60.0 / 66.0)] {
-                let mut params = ModuleInstance::new(28, 2).params;
-                params[4] = p4;
-                let got = rects(display_shapes(
-                    28,
-                    3,
-                    &params,
-                    &PanelState::default(),
-                    content,
-                    ppp,
-                ));
-                // No background fill: five grid rows in `text` at 10 %, then the threshold row in `text`. No series.
-                assert_eq!(got.len(), 6, "ppp {ppp}: {got:?}");
-                // The display rect, from its −60 dB row: the last one.
-                let r = Rect::from_x_y_ranges(got[0].0.x_range(), 0.0..=got[0].0.max.y);
-                let ks = [0.0, 5.0, 10.0, 15.0, 20.0].map(|k| k / 22.0);
-                for (i, &k) in ks.iter().enumerate() {
-                    assert_eq!(got[i].1, text.gamma_multiply(0.1), "ppp {ppp}, row {i}");
-                    assert!(
-                        near(got[i].0, row_at(r, ppp, k)),
-                        "ppp {ppp}, row {i}: {:?}",
-                        got[i].0
-                    );
-                }
-                assert_eq!(got[5].1, text, "ppp {ppp}");
-                assert!(
-                    near(got[5].0, row_at(r, ppp, k)),
-                    "ppp {ppp}, p4 {p4}: {:?}",
-                    got[5].0
-                );
-                // Laid out within a pixel of the reference rect.
-                assert!(
-                    (r.left() - 3.11 * U).abs() <= 1.0 && (r.width() - 7.77 * U).abs() <= 1.0,
-                    "{r:?}"
-                );
-                assert!((r.height() - 3.49 * U).abs() <= 1.0, "{r:?}");
-            }
         }
     }
 

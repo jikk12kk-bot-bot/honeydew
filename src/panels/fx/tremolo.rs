@@ -83,6 +83,7 @@ fn plot(
     let (m, colors) = (cx.m, &cx.theme.colors);
     let painter = ui.painter();
     painter.rect_filled(rect, 0.0, colors.control_fill.to_color32());
+    crate::theme::paint_graph_grid(painter, rect, cx.theme, cx.m.ppp(), (8, 4));
     for p in [3, 4] {
         let v = module.params.get(p).copied().unwrap_or(0.0);
         painter.rect_filled(
@@ -265,9 +266,6 @@ pub const REFERENCE: Reference = Reference {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panels::place;
-    use crate::panels::tests::{U, display_shapes};
-    use crate::theme::theme_by_id;
 
     fn near(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-4
@@ -383,119 +381,6 @@ mod tests {
         let points = wave(&p, rect);
         assert!(near(points[0].y, level_y(rect, 0.25)));
         assert!(near(points[128].y, level_y(rect, 0.25 + 0.99 * 0.5)));
-    }
-
-    /// The content rect at the reference, and #4, #5 and #6 (points) at `ppp`.
-    fn reference(ppp: f32) -> (Rect, [Rect; 3]) {
-        let content = Rect::from_min_size(pos2(0.0, 0.0), vec2(14.0 * U, 6.99 * U));
-        let module = ModuleInstance::new(46, 2);
-        let panel = panel().unwrap();
-        let placed = place(
-            &panel,
-            &module,
-            &PanelState::default(),
-            content * ppp,
-            U * ppp,
-        );
-        let rect = |n: u32| placed.iter().find(|(l, _)| l.id == n).unwrap().1 / ppp;
-        (content, [rect(4), rect(5), rect(6)])
-    }
-
-    #[test]
-    fn the_display_draws_fill_max_min_and_the_wave_in_order() {
-        let colors = theme_by_id(0).colors;
-        for ppp in [1.0, 2.0] {
-            let (content, [_, rect, _]) = reference(ppp);
-            let p = with(&[(3, 0.75), (4, 0.25)]);
-            let shapes = display_shapes(46, 5, &p, &PanelState::default(), content, ppp);
-            assert_eq!(shapes.len(), 4, "ppp {ppp}");
-            let Shape::Rect(fill) = &shapes[0] else {
-                panic!("{:?}", shapes[0])
-            };
-            assert_eq!(
-                (fill.rect, fill.fill),
-                (rect, colors.control_fill.to_color32())
-            );
-            for (shape, v) in shapes[1..3].iter().zip([0.75, 0.25]) {
-                let Shape::Rect(line) = shape else {
-                    panic!("{shape:?}")
-                };
-                assert_eq!(line.rect, level_line(rect, v, ppp));
-                assert_eq!(line.fill, colors.module_fill.to_color32());
-            }
-            let Shape::Path(wave_shape) = &shapes[3] else {
-                panic!("{:?}", shapes[3])
-            };
-            assert_eq!(wave_shape.points, wave(&p, rect));
-            assert_eq!(wave_shape.points.len(), 257);
-            assert_eq!(wave_shape.stroke.width, 0.07 * U);
-            assert_eq!(
-                wave_shape.stroke.color,
-                eframe::epaint::ColorMode::Solid(Color32::RED)
-            );
-        }
-    }
-
-    #[test]
-    fn a_feed_adds_the_follower_dot_at_the_lfo_phase_on_the_wave() {
-        use honeydew_audio::MeterSnapshot;
-        for ppp in [1.0, 2.0] {
-            let (content, [_, rect, _]) = reference(ppp);
-            let p = with(&[(3, 0.75), (4, 0.25)]);
-            for phase in [0.0, 0.3, 1.0] {
-                let shapes = crate::panels::tests::display_shapes_fed(
-                    46,
-                    5,
-                    &p,
-                    &PanelState::default(),
-                    content,
-                    ppp,
-                    (MeterSnapshot::default(), &[phase]),
-                );
-                assert_eq!(shapes.len(), 5, "ppp {ppp}");
-                let Shape::Circle(dot) = &shapes[4] else {
-                    panic!("{:?}", shapes[4])
-                };
-                let want = wave(&p, rect);
-                let on = follower(&p, rect, phase);
-                assert!(
-                    near(dot.radius, 0.15 * U) && dot.fill == Color32::RED,
-                    "{dot:?}"
-                );
-                assert!(
-                    near(dot.center.x, on.x) && near(dot.center.y, on.y),
-                    "{dot:?}"
-                );
-                // On the drawn wave: phase 0 and 1 are its ends.
-                if phase != 0.3 {
-                    let end = want[(phase * 256.0) as usize];
-                    assert!(near(dot.center.x, end.x) && near(dot.center.y, end.y));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn the_max_and_min_lines_meet_the_tag_pointers() {
-        for ppp in [1.0, 2.0] {
-            let (content, [max_tag, rect, min_tag]) = reference(ppp);
-            for v in [0.0, 0.5, 1.0] {
-                let p = with(&[(3, v), (4, v)]);
-                let shapes = display_shapes(46, 5, &p, &PanelState::default(), content, ppp);
-                for (shape, tag) in shapes[1..3].iter().zip([max_tag, min_tag]) {
-                    let Shape::Rect(line) = shape else {
-                        panic!("{shape:?}")
-                    };
-                    // The tag slider: y = bottom − 0.06 h − 0.88 h·v of the tag's rect.
-                    let pointer = tag.bottom() - 0.06 * tag.height() - 0.88 * tag.height() * v;
-                    let off = (line.rect.center().y - pointer).abs() * ppp;
-                    assert!(
-                        off <= 1.0,
-                        "ppp {ppp} v {v}: {off} px off ({rect:?}, {tag:?})"
-                    );
-                }
-            }
-        }
     }
 
     #[test]

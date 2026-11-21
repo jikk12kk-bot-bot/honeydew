@@ -21,7 +21,9 @@
 //! cell); the sub-tracks triangle and the current sub-track's triangle show collapsed too (they are neither controls
 //! nor labels); the expanded meters are drawn under the level slider, the left peak on the lower bar.
 
-use eframe::egui::{Align2, Color32, Id, Pos2, Rect, Shape, Stroke, Ui, UiBuilder, pos2, vec2};
+use eframe::egui::{
+    Align, Align2, Color32, Id, Pos2, Rect, Shape, Stroke, Ui, UiBuilder, pos2, vec2,
+};
 use honeydew_audio::device::ModuleMeter;
 
 use crate::icons::{draw_icon, icon_edge};
@@ -649,17 +651,25 @@ fn strip(
                 }
                 clicked
             }
-            // Honeydew change (#171): their value texts, for the drag bubble.
+            // Honeydew change: their values over the thumbs, the pan's centred and the level's from the left.
             PAN => {
                 let pan = |v| CHANNEL_PARAMS[1].display_text(v);
-                widgets::h_slider(ui, cx, &control(0.5), &mut params[1], pan).changed()
+                let c = Control {
+                    value_above: Some(Align::Center),
+                    ..control(0.5)
+                };
+                widgets::h_slider(ui, cx, &c, &mut params[1], pan).changed()
             }
             _ => {
                 for bar in expanded_meters(r, peaks, m) {
                     ui.painter().rect_filled(bar, 0.0, ink);
                 }
                 let level = |v| CHANNEL_PARAMS[0].display_text(v);
-                widgets::h_slider(ui, cx, &control(widgets::UNITY), &mut params[0], level).changed()
+                let c = Control {
+                    value_above: Some(Align::Min),
+                    ..control(widgets::UNITY)
+                };
+                widgets::h_slider(ui, cx, &c, &mut params[0], level).changed()
             }
         };
         let target = AutomationTarget {
@@ -707,6 +717,7 @@ fn sub_slider(
     let id = Id::new("mini_mixer").with((row.channel, row.lane, SLIDER));
     let control = Control {
         menu: ParamMenu::bound(links::has(&linked, target.instance_id, target.param)),
+        value_above: Some(Align::Min),
         ..Control::new(id, r, "", ink, spec.reset)
     };
     // The slider's track and thumb rim are `controlFill`: lend it `menuFill` in that role.

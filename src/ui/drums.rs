@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use eframe::egui::{
-    Align2, Color32, Id, Painter, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2,
+    Align, Align2, Color32, Id, Painter, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2, vec2,
 };
 use honeydew_audio::sample_edit::speed_semitones;
 
@@ -754,8 +754,17 @@ fn control(
         }
         (Kind::HSlider, Some(p)) => {
             let value = &mut slot.params[p];
-            // Honeydew change (#171): its value text, for the drag bubble.
+            // Honeydew change: its value over the thumb, the level's from the left, the others' centred.
             let text = |v| pspec.map_or_else(String::new, |s| s.display_text(v));
+            let align = if spec.ctl == Ctl::Level {
+                Align::Min
+            } else {
+                Align::Center
+            };
+            let c = Control {
+                value_above: Some(align),
+                ..c
+            };
             widgets::h_slider(ui, cx, &c, value, text).changed()
         }
         (Kind::Knob(text), Some(p)) => {
@@ -763,13 +772,8 @@ fn control(
                 Some(ParamKind::Continuous { display }) => display.step_count(),
                 _ => None,
             };
-            // Honeydew change (#171): a knob with no text of its own shows its param's in the drag bubble only.
-            let ring_text = text.is_some();
-            let c = Control {
-                steps,
-                ring_text,
-                ..c
-            };
+            // A knob with no text of its own shows its param's on the ring.
+            let c = Control { steps, ..c };
             // `Start` drags at half the knob law.
             let s = if spec.ctl == Ctl::Start { 0.5 } else { 1.0 };
             let param = |v| pspec.map_or_else(String::new, |s| s.display_text(v));

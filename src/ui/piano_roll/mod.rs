@@ -2716,7 +2716,7 @@ pub(crate) struct Rows {
 }
 
 /// Grid background steps 1–6: `controlFill` over the 128 key rows (from beat 0 when scrolled before it), the light
-/// rows, every row's 1 px `background` α 0.3 top and bottom lines, the lit rows, the shared adaptive beat marks
+/// rows, the theme's horizontal grid on every row's edges, the lit rows, the shared adaptive beat marks
 /// ([`marks`](crate::ui::drum_grid::edit::marks): `background`, 4 px bar, 2 px beat, 1 px finer, at least 0.6 U apart, w px from ⌊w/2⌋ px left of the
 /// mark) and the root rows' 2 px `background` line at trunc(row bottom) − 2 px. Steps 7–9 are [`paint_notes`]'.
 fn paint_grid(
@@ -2744,16 +2744,18 @@ fn paint_grid(
     for key in shown.clone().filter(|&k| rows.light[usize::from(k)]) {
         painter.rect_filled(row(key), 0.0, light);
     }
-    // The theme's horizontal grid at α 0.3: a line along each row's top and bottom (1 px of `background` each by
-    // default).
+    // The theme's horizontal grid, at full strength: a line on each row's edges, centred on them (2 px of
+    // `background` by default), as thick as the vertical grid's beat lines at the same thickness.
     let (line, h_px) = (
-        crate::theme::grid_h_ink(c).gamma_multiply(0.3),
+        crate::theme::grid_h_ink(c),
         crate::theme::grid_h_px(&cx.theme.options) * px,
     );
     for key in shown.clone().filter(|_| h_px > 0.0) {
         let r = row(key);
-        painter.rect_filled(r.with_max_y(r.top() + h_px), 0.0, line);
-        painter.rect_filled(r.with_min_y(r.bottom() - h_px), 0.0, line);
+        for edge in [r.top(), r.bottom()] {
+            let y = m.round_px(edge) - (h_px / px / 2.0).floor() * px;
+            painter.rect_filled(Rect::from_x_y_ranges(xs, y..=y + h_px), 0.0, line);
+        }
     }
     let lit = color.to_color32().gamma_multiply(LIT_ALPHA);
     for key in shown.clone().filter(|&k| rows.lit[usize::from(k)]) {

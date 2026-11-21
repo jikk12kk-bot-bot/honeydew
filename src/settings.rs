@@ -89,8 +89,9 @@ const LEGACY_GRID_COLORS: [u32; 14] = [
     0x3CC8E0, 0x4A7CF0, 0xA45CE8, 0xF06AB4,
 ];
 
-/// `Analyzer refresh limit:` items in Hz, in menu order: 0 is `Unlimited` (every sub-block, as fast as the engine goes).
-pub const ANALYZER_REFRESH: [u16; 11] = [0, 15, 24, 30, 45, 60, 75, 90, 120, 144, 240];
+/// `Analyzer refresh limit`'s top, in Hz: the slider runs over 0 (`Off`: every sub-block, as fast as the engine goes)
+/// and 1 ..= this, in steps of 1.
+pub const ANALYZER_REFRESH_MAX: u16 = 240;
 
 /// `Audio driver:` items (Android), in menu order, the index stored: which of Android's audio APIs the output uses
 /// (`honeydew_audio::device::set_android_driver`).
@@ -451,15 +452,11 @@ pub struct Settings {
     /// lowered by it before monitoring, recording and `Calibrate` hear it. 0 by default.
     #[serde(rename = "recInputGainDb")]
     pub input_gain_db: f32,
-    /// `Show value while dragging` (our own key; Honeydew change, #171): a dragged knob or slider shows its value in a
-    /// bubble by the finger or pointer (`ui::widgets::set_value_bubble`). On by default.
-    #[serde(rename = "showValueWhileDragging")]
-    pub value_bubble: bool,
     /// SETTINGS `Library folders` (our own key; Honeydew change, #144, #155, #165; Android only): the folders the
     /// user added to the library, by path, in the order added ([`crate::ui::main_menu::library::library_folders`]).
     #[serde(rename = "libraryFolders")]
     pub library_folders: Vec<String>,
-    /// `Analyzer refresh limit:` (our own key), one of [`ANALYZER_REFRESH`] in Hz, 0: none. The modules' displays (the
+    /// `Analyzer refresh limit` (our own key), in Hz within 0 ..= [`ANALYZER_REFRESH_MAX`], 0 (`Off`): none. The modules' displays (the
     /// Analyzer's, the Tuner's, the Limiter's, ...) take the engine's analysis at most this many times a second
     /// (`honeydew_audio::device::set_analysis_limit`), not after every small buffer. 60 by default.
     #[serde(rename = "analyzerRefreshHz")]
@@ -577,7 +574,6 @@ impl Default for Settings {
             rack_tab_place: 0.5,
             write_tags: true,
             input_gain_db: 0.0,
-            value_bubble: true,
             library_folders: Vec::new(),
             analyzer_refresh_hz: 60,
             analyzer_skip_hidden: true,
@@ -670,7 +666,7 @@ impl Settings {
         if !SOUND_MODES.iter().any(|&(id, _)| id == s.sound_mode) {
             s.sound_mode = d.sound_mode;
         }
-        if !ANALYZER_REFRESH.contains(&s.analyzer_refresh_hz) {
+        if s.analyzer_refresh_hz > ANALYZER_REFRESH_MAX {
             s.analyzer_refresh_hz = d.analyzer_refresh_hz;
         }
         if usize::from(s.audio_driver) >= AUDIO_DRIVERS.len() {
@@ -1106,7 +1102,6 @@ mod tests {
             rack_tab_place: 0.25,
             write_tags: !d.write_tags,
             input_gain_db: 6.5,
-            value_bubble: !d.value_bubble,
             library_folders: vec!["/storage/emulated/0/Music".into()],
             analyzer_refresh_hz: 0,
             analyzer_skip_hidden: !d.analyzer_skip_hidden,
