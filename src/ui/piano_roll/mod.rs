@@ -2744,11 +2744,14 @@ fn paint_grid(
     for key in shown.clone().filter(|&k| rows.light[usize::from(k)]) {
         painter.rect_filled(row(key), 0.0, light);
     }
-    let line = bg.gamma_multiply(0.3);
-    for key in shown.clone() {
+    // The theme's horizontal grid: a line along each row's top.
+    let (line, h_px) = (
+        crate::theme::grid_h_ink(c),
+        crate::theme::grid_h_px(&cx.theme.options) * px,
+    );
+    for key in shown.clone().filter(|_| h_px > 0.0) {
         let r = row(key);
-        painter.rect_filled(r.with_max_y(r.top() + px), 0.0, line);
-        painter.rect_filled(r.with_min_y(r.bottom() - px), 0.0, line);
+        painter.rect_filled(r.with_max_y(r.top() + h_px), 0.0, line);
     }
     let lit = color.to_color32().gamma_multiply(LIT_ALPHA);
     for key in shown.clone().filter(|&k| rows.lit[usize::from(k)]) {
@@ -2779,6 +2782,10 @@ fn paint_marks(
     let px = 1.0 / m.ppp();
     let (t0, t1) = (g.tick(area.left()), g.tick(area.right()));
     for (tick, w) in grid_lines(t0, t1, g.beat_w, m.u(1.0), sig, MARK_GAP, size) {
+        let w = crate::theme::grid_width(w, &cx.theme.options);
+        if w <= 0.0 {
+            continue;
+        }
         let x = m.round_px(g.x(tick)) - (w / 2.0).floor() * px;
         vline_px(painter, x, area.y_range(), w, bg, m);
     }

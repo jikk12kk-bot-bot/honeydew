@@ -476,11 +476,10 @@ impl HoneydewApp {
         if let Some(token) = settings::load_mcp_token() {
             settings.mcp_token = token;
         }
-        // Settings' `Sample rate:` and `Enable low latency mode`, before the output first opens; `Grid color:`.
+        // Settings' `Sample rate:` and `Enable low latency mode`, before the output first opens.
         crate::audio_link::set_rate(settings.sample_rate);
         crate::audio_link::set_low_latency_mode(settings.low_latency_mode);
         honeydew_audio::device::set_android_driver(settings.audio_driver);
-        crate::theme::set_grid_color(settings.grid_rgb());
         let mut app = Self {
             theme: settings.theme(),
             routing: storage.as_deref().map(Routing::load).unwrap_or_default(),
@@ -603,9 +602,6 @@ impl HoneydewApp {
             }
             if (driver || exclusive) && !buffer {
                 self.audio.reopen_output(&self.song);
-            }
-            if self.settings.grid_color != self.settings_saved.grid_color {
-                crate::theme::set_grid_color(self.settings.grid_rgb());
             }
             if self.settings.sample_rate != self.settings_saved.sample_rate {
                 self.warn_rate_capability();

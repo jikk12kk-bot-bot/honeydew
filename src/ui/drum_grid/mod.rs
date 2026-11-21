@@ -1000,13 +1000,21 @@ impl DrumGridView {
         let px = 1.0 / l.ppp;
         let grid = l.grid();
         let axis = place.axis;
-        // A `controlFill` band per row, 1 px in from its top and bottom, from beat 0 or the grid's left edge.
+        // A `controlFill` band per row from beat 0 or the grid's left edge, under the theme's horizontal grid line
+        // (1 px of `background` by default) along its top.
         let left = l.snap(axis.x(0.0)).max(grid.left());
         let fill = colors.control_fill.to_color32();
+        let (h_ink, h_px) = (
+            crate::theme::grid_h_ink(colors),
+            crate::theme::grid_h_px(&cx.theme.options) * px,
+        );
         for row in l.visible_rows() {
             let span = l.span(l.row_top(), l.pitch, row);
-            let band = Rect::from_x_y_ranges(left..=grid.right(), span.min + px..=span.max);
+            let band = Rect::from_x_y_ranges(left..=grid.right(), span.min..=span.max);
             painter.rect_filled(band, 0.0, fill);
+            if h_px > 0.0 {
+                painter.rect_filled(band.with_max_y(span.min + h_px), 0.0, h_ink);
+            }
         }
         // `background` lines over the rows: w px from ⌊w/2⌋ px left of each mark.
         let ys = Rangef::new(l.row_top(), l.row_top() + place.rows as f32 * l.pitch);
@@ -1014,6 +1022,10 @@ impl DrumGridView {
         let size = self.snap.size;
         let ink = crate::theme::grid_ink(colors);
         for (tick, w) in edit::grid_lines(t0, t1, axis.beat_w, l.u, sig, edit::MARK_GAP, size) {
+            let w = crate::theme::grid_width(w, &cx.theme.options);
+            if w <= 0.0 {
+                continue;
+            }
             let x = l.snap(axis.x(tick)) - (w / 2.0).floor() * px;
             painter.rect_filled(Rect::from_x_y_ranges(x..=x + w * px, ys), 0.0, ink);
         }

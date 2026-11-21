@@ -267,8 +267,6 @@ enum Choice {
     SampleMemory,
     /// `Sample rate:`: the rate playback and renders use ([`crate::song::SAMPLE_RATES`]), in Hz.
     SampleRate,
-    /// `Grid color:` ([`crate::settings::GRID_COLORS`]): the beat lines of the playlist and the editors.
-    GridColor,
     /// `Audio driver:` (Android, [`crate::settings::AUDIO_DRIVERS`]): which audio API the output uses.
     AudioDriver,
     /// `Screen orientation:` (#41): `Auto`, `Portrait` or `Landscape` ([`crate::settings::ORIENTATIONS`]).
@@ -324,7 +322,7 @@ fn hidden(r: &Row) -> bool {
 }
 
 /// Every row of the SETTINGS tab, in order.
-const ROWS: [Row; 65] = {
+const ROWS: [Row; 64] = {
     use Kind::*;
     [
         row("MIDI:", Header),
@@ -391,7 +389,6 @@ const ROWS: [Row; 65] = {
         row("User interface:", Header),
         row("Theme:", Dropdown(Choice::Theme)),
         row("Theme creator", ThemeCreator),
-        row("Grid color:", Dropdown(Choice::GridColor)),
         row("Scaling:", Scaling),
         row("Scale is currently limited to", ScaleLimit),
         row("Animation:", Dropdown(Choice::Animation)),
@@ -932,10 +929,6 @@ impl SettingsTab {
                 }
                 if matches!(choice, Choice::AudioDriver) {
                     let tip = "Which Android audio system plays the sound.\nAAudio: Android's newest, lowest latency (OpenSL ES on Android 8.0); works with low latency mode.\nOpenSL ES: Android's older native audio.\nAudioTrack: Android's oldest, highest latency, widest compatibility.";
-                    crate::ui::tooltip::tip(ui, button_rect, tip, None);
-                }
-                if matches!(choice, Choice::GridColor) {
-                    let tip = "The color of the beat and bar lines in the playlist and the editors. Default: a color from the theme.";
                     crate::ui::tooltip::tip(ui, button_rect, tip, None);
                 }
                 if matches!(choice, Choice::SampleRate) {
@@ -1507,10 +1500,6 @@ impl Choice {
                 .map(|&label| label.to_owned())
                 .enumerate()
                 .collect(),
-            Choice::GridColor => (crate::settings::GRID_COLORS.iter())
-                .map(|&(label, _)| label.to_owned())
-                .enumerate()
-                .collect(),
         }
     }
 
@@ -1531,7 +1520,6 @@ impl Choice {
             Choice::Orientation => usize::from(s.screen_orientation),
             Choice::VersionSize => s.version_size_limit as usize,
             Choice::EditorResolution => usize::from(s.plugin_editor_resolution),
-            Choice::GridColor => usize::from(s.grid_color),
             Choice::AudioDriver => usize::from(s.audio_driver),
         }
     }
@@ -1550,7 +1538,6 @@ impl Choice {
             Choice::Orientation => s.screen_orientation = value as u8,
             Choice::VersionSize => s.version_size_limit = value as u32,
             Choice::EditorResolution => s.plugin_editor_resolution = value as u8,
-            Choice::GridColor => s.grid_color = value as u8,
             Choice::AudioDriver => s.audio_driver = value as u8,
         }
     }

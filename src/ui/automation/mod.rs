@@ -1060,9 +1060,14 @@ impl AutomationEditor {
             vline_px(&gp, x, grid.y_range(), w, color, m);
         };
         // 3.
-        for i in 0..5 {
-            let y = value.top() - 0.5 * px + value.height() * i as f32 / 4.0;
-            hline(&gp, grid.x_range(), y, 1.0, bg, m);
+        // The theme's horizontal grid.
+        let (h_ink, h_px) = (
+            crate::theme::grid_h_ink(c),
+            crate::theme::grid_h_px(&cx.theme.options),
+        );
+        for i in (0..5).filter(|_| h_px > 0.0) {
+            let y = value.top() - 0.5 * h_px * px + value.height() * i as f32 / 4.0;
+            hline(&gp, grid.x_range(), y, h_px, h_ink, m);
         }
         // The value grid with value snap on: a line through the centre of each value it lands on, when at least
         // 0.25 U apart (rows never are at the editor's sizes).
@@ -1080,7 +1085,10 @@ impl AutomationEditor {
         let (t0, t1) = (ax.tick(grid.left()), ax.tick(grid.right()));
         let ink = crate::theme::grid_ink(c);
         for (tick, w) in grid_lines(t0, t1, ax.beat_w, m.u(1.0), sig, MARK_GAP, self.snap.size) {
-            vline(ax.x(tick), w, ink);
+            let w = crate::theme::grid_width(w, &cx.theme.options);
+            if w > 0.0 {
+                vline(ax.x(tick), w, ink);
+            }
         }
         // 5.
         let end = ax.x(loop_ticks).max(grid.left());

@@ -82,23 +82,10 @@ pub const SOUND_PRESETS: [(u8, u8, u8); 4] = [(3, 0, 0), (1, 1, 0), (0, 1, 5), (
 #[cfg(not(any(desktop, target_os = "android")))]
 pub const SOUND_MODES: [(u8, &str); 1] = [(3, "NATIVE")];
 
-/// `Grid color:` items, in menu order: `Default` (from the theme, [`crate::theme::grid_ink`]), then fixed colours
-/// as `0xRRGGBB`.
-pub const GRID_COLORS: [(&str, u32); 14] = [
-    ("Default", 0),
-    ("White", 0xFFFFFF),
-    ("Light gray", 0xB4BABE),
-    ("Gray", 0x7C8286),
-    ("Dark gray", 0x454B4F),
-    ("Black", 0x000000),
-    ("Red", 0xE0474C),
-    ("Orange", 0xF08A24),
-    ("Yellow", 0xF2D13A),
-    ("Green", 0x4CC26B),
-    ("Cyan", 0x3CC8E0),
-    ("Blue", 0x4A7CF0),
-    ("Purple", 0xA45CE8),
-    ("Pink", 0xF06AB4),
+/// The former `Grid color:` setting's colours (`gridColor`, an index; 0 was the theme's own), as `0xRRGGBB`: a stored
+/// one moves into the theme's `grid` once ([`Settings::load`]). The grid colours are the theme's now.
+const LEGACY_GRID_COLORS: [u32; 14] = [
+    0, 0xFFFFFF, 0xB4BABE, 0x7C8286, 0x454B4F, 0x000000, 0xE0474C, 0xF08A24, 0xF2D13A, 0x4CC26B, 0x3CC8E0, 0x4A7CF0, 0xA45CE8, 0xF06AB4,
 ];
 
 /// `Audio driver:` items (Android), in menu order, the index stored: which of Android's audio APIs the output uses
@@ -239,9 +226,6 @@ pub struct Settings {
     /// buffer the phone plays. Off by default.
     #[serde(rename = "lowLatencyMode")]
     pub low_latency_mode: bool,
-    /// `Grid color:`, an index into [`GRID_COLORS`] (our own key): the beat lines of the playlist and the editors.
-    #[serde(rename = "gridColor")]
-    pub grid_color: u8,
     /// `Audio driver:` (Android; our own key), an index into [`AUDIO_DRIVERS`]. AAudio by default.
     #[serde(rename = "audioDriverAndr")]
     pub audio_driver: u8,
@@ -530,7 +514,6 @@ impl Default for Settings {
             background_audio: false,
             sound_mode: DEFAULT_SOUND_MODE,
             low_latency_mode: false,
-            grid_color: 0,
             audio_driver: 0,
             latency_compensation: true,
             multitrack_recording: false,
@@ -621,14 +604,6 @@ impl Settings {
         }
     }
 
-    /// `Grid color:` as `0xRRGGBB`, `None` for the theme's own ([`crate::theme::set_grid_color`]).
-    pub fn grid_rgb(&self) -> Option<u32> {
-        match GRID_COLORS.get(usize::from(self.grid_color)) {
-            Some(&(_, rgb)) if self.grid_color > 0 => Some(rgb),
-            _ => None,
-        }
-    }
-
     /// The settings stored in `storage`. Anything missing or unreadable is the default, field by field, and so is an
     /// out-of-range value: an unknown theme is Classic Gray, an unknown scale 100 %.
     pub fn load(storage: &dyn eframe::Storage) -> Self {
@@ -654,6 +629,11 @@ impl Settings {
             }
         }
         migrate_keys(&mut fields, cfg!(target_os = "android"));
+        // The former `Grid color:` setting: its colour becomes the theme's vertical grid, below.
+        let legacy_grid = (fields.remove("gridColor").and_then(|v| v.as_u64()))
+            .filter(|&i| i > 0)
+            .and_then(|i| LEGACY_GRID_COLORS.get(usize::try_from(i).ok()?))
+            .copied();
         // Older versions stored this setting as a boolean toggle. Preserve an enabled toggle as the
         // smallest target when loading those settings into the buffer-size slider.
         if let Some(enabled) = fields.get("lowlatency").and_then(Value::as_bool) {
@@ -673,15 +653,17 @@ impl Settings {
         if Theme::from_json(&s.custom_theme).is_err() {
             s.custom_theme.clear();
         }
+        if let Some(rgb) = legacy_grid {
+            let mut theme = s.theme();
+            theme.colors.grid = crate::theme::Rgba::hex(rgb);
+            s.custom_theme = theme.to_json();
+        }
         s.ui_scale = s
             .ui_scale
             .clamp(*UI_SCALE_RANGE.start(), *UI_SCALE_RANGE.end());
         s.low_latency = s.low_latency.min((BUFFER_SIZES.len() - 1) as u8);
         if !SOUND_MODES.iter().any(|&(id, _)| id == s.sound_mode) {
             s.sound_mode = d.sound_mode;
-        }
-        if usize::from(s.grid_color) >= GRID_COLORS.len() {
-            s.grid_color = d.grid_color;
         }
         if usize::from(s.audio_driver) >= AUDIO_DRIVERS.len() {
             s.audio_driver = d.audio_driver;
@@ -1049,7 +1031,6 @@ mod tests {
                 .map(|&(id, _)| id)
                 .unwrap_or(d.sound_mode),
             low_latency_mode: !d.low_latency_mode,
-            grid_color: 3,
             audio_driver: 2,
             latency_compensation: !d.latency_compensation,
             multitrack_recording: !d.multitrack_recording,

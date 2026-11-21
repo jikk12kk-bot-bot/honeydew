@@ -2672,17 +2672,27 @@ fn paint_track_rows(
     let (t0, t1) = (axis.tick(grid.left()), axis.tick(grid.right()));
     let lines: Vec<(f32, f32)> = grid_lines(t0, t1, axis.beat_w, m.u(1.0), sig, MARK_GAP, size)
         .into_iter()
+        .map(|(tick, w)| (tick, crate::theme::grid_width(w, &theme.options)))
+        .filter(|&(_, w)| w > 0.0)
         .map(|(tick, w)| (m.round_px(axis.x(tick)) - (w / 2.0).floor() * px, w * px))
         .collect();
     let grid_painter = painter.with_clip_rect(painter.clip_rect().intersect(grid));
+    // The theme's horizontal grid: a gap under each row, 1 px of `background` by default.
+    let (h_ink, h_px) = (
+        crate::theme::grid_h_ink(c),
+        crate::theme::grid_h_px(&theme.options) * px,
+    );
     for &(ref track, top) in tracks {
-        // A 1-px `background` gap under each row.
-        let lane = Rect::from_x_y_ranges(grid.x_range(), top..=top + row_h - px);
+        let lane = Rect::from_x_y_ranges(grid.x_range(), top..=top + row_h - h_px);
         let fill = match current == Some((track.channel, track.lane)) {
             true => c.module_fill,
             false => c.control_fill,
         };
         let from = lane.left().max(axis.x(0.0));
+        if h_px > 0.0 {
+            let gap = Rect::from_x_y_ranges(grid.x_range(), top + row_h - h_px..=top + row_h);
+            painter.rect_filled(gap.with_min_x(from), 0.0, h_ink);
+        }
         painter.rect_filled(lane.with_min_x(from), 0.0, fill.to_color32());
         for &(x, w) in &lines {
             let line = Rect::from_x_y_ranges(x..=x + w, lane.y_range());
