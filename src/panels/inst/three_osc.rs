@@ -893,7 +893,6 @@ pub const REFERENCE: Reference = Reference {
 mod tests {
 
     use super::*;
-    use crate::panels::place;
     use crate::panels::tests::{U, display_shapes};
 
     /// The hairline of the pure-geometry tests; their rect is [`rect`].
@@ -1239,17 +1238,6 @@ mod tests {
             line.iter().all(|q| q.y == 119.0) && line.len() <= 6,
             "{line:?}"
         );
-    }
-
-    /// The content rect at the reference (U = 32 points at any `ppp`) and display `#n`'s rect in it.
-    fn reference(n: u32, state: &PanelState, ppp: f32) -> (Rect, Rect) {
-        let content = Rect::from_min_size(pos2(0.0, 0.0), vec2(16.96 * U, 7.99 * U));
-        let (panel, module) = (panel().unwrap(), ModuleInstance::new(TYPE_ID, 2));
-        let placed = place(&panel, &module, state, content * ppp, U * ppp);
-        (
-            content,
-            placed.iter().find(|(l, _)| l.id == n).unwrap().1 / ppp,
-        )
     }
 
     /// Tab `tab` with the sub-page list `list` (if any) on `item`.
