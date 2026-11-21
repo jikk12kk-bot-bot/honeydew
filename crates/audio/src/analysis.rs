@@ -17,10 +17,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// Bumped each time the app draws an Analyzer's panel ([`analyzer_drawn`]): while it stands still, no panel shows one.
 static ANALYZER_DRAWN: AtomicU32 = AtomicU32::new(0);
-/// Settings `Pause hidden analyzers`: an Analyzer whose panel no one draws skips its display's work (the spectrum,
+/// The Analyzer's `Pause hidden` (a global switch): an Analyzer whose panel no one draws skips its display's work (the spectrum,
 /// the oscilloscope, the vectorscope and the pitch track); its loudness meter runs on.
 static SKIP_HIDDEN: AtomicBool = AtomicBool::new(false);
-/// Settings `Light pitch tracking`: the Analyzer reads the pitch once an entry of its track (50 ms), not every
+/// The Analyzer's `Light pitch` (a global switch): the Analyzer reads the pitch once an entry of its track (50 ms), not every
 /// [`Detector::HOP`] samples.
 static LIGHT_PITCH: AtomicBool = AtomicBool::new(false);
 
@@ -29,11 +29,19 @@ pub fn analyzer_drawn() {
     ANALYZER_DRAWN.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Settings `Pause hidden analyzers` and `Light pitch tracking` ([`SKIP_HIDDEN`], [`LIGHT_PITCH`]); the audio thread
-/// takes them within a few hundred samples.
+/// The Analyzer's global `Pause hidden` and `Light pitch` switches ([`SKIP_HIDDEN`], [`LIGHT_PITCH`]); the audio
+/// thread takes them within a few hundred samples.
 pub fn set_analyzer_options(skip_hidden: bool, light_pitch: bool) {
     SKIP_HIDDEN.store(skip_hidden, Ordering::Relaxed);
     LIGHT_PITCH.store(light_pitch, Ordering::Relaxed);
+}
+
+/// (`Pause hidden`, `Light pitch`) as last set ([`set_analyzer_options`]).
+pub fn analyzer_options() -> (bool, bool) {
+    (
+        SKIP_HIDDEN.load(Ordering::Relaxed),
+        LIGHT_PITCH.load(Ordering::Relaxed),
+    )
 }
 
 /// A history display's columns: 6.4 s at one entry per 50 ms.

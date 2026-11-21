@@ -269,6 +269,9 @@ enum Choice {
     SampleRate,
     /// `Audio driver:` (Android, [`crate::settings::AUDIO_DRIVERS`]): which audio API the output uses.
     AudioDriver,
+    /// `Analyzer refresh limit:` ([`crate::settings::ANALYZER_REFRESH`]): how often the modules' displays take the
+    /// engine's analysis, at most.
+    AnalyzerRefresh,
     /// `Screen orientation:` (#41): `Auto`, `Portrait` or `Landscape` ([`crate::settings::ORIENTATIONS`]).
     Orientation,
     /// `Project version size limit:` (#69), in MB ([`crate::settings::VERSION_SIZE_LIMITS`]).
@@ -322,7 +325,7 @@ fn hidden(r: &Row) -> bool {
 }
 
 /// Every row of the SETTINGS tab, in order.
-const ROWS: [Row; 64] = {
+const ROWS: [Row; 62] = {
     use Kind::*;
     [
         row("MIDI:", Header),
@@ -359,18 +362,10 @@ const ROWS: [Row; 64] = {
         ),
         row("Audio driver:", Dropdown(Choice::AudioDriver)),
         row("Sample memory limit:", Dropdown(Choice::SampleMemory)),
-        // The Analyzer's cost on the audio thread (Honeydew's own).
+        // The modules' displays' cost on the audio thread (Honeydew's own).
         row(
-            "Limit analyzer refresh",
-            Toggle(|s| &mut s.analyzer_throttle),
-        ),
-        row(
-            "Pause hidden analyzers",
-            Toggle(|s| &mut s.analyzer_skip_hidden),
-        ),
-        row(
-            "Light pitch tracking",
-            Toggle(|s| &mut s.analyzer_light_pitch),
+            "Analyzer refresh limit:",
+            Dropdown(Choice::AnalyzerRefresh),
         ),
         row("Recording:", Header),
         row("Audio input:", AudioInput),
@@ -926,6 +921,10 @@ impl SettingsTab {
                     #[cfg(not(any(desktop, target_os = "android")))]
                     let sound_mode_tip = "NATIVE: device/OS default audio behavior.";
                     crate::ui::tooltip::tip(ui, button_rect, sound_mode_tip, None);
+                }
+                if matches!(choice, Choice::AnalyzerRefresh) {
+                    let tip = "How many times a second the module displays update at most: the Analyzer, the Tuner, the Limiter and every other module that draws its sound. Fewer updates take less CPU from the audio. Off: after every audio buffer. It changes only the pictures, never the sound; the level meters are not limited.";
+                    crate::ui::tooltip::tip(ui, button_rect, tip, None);
                 }
                 if matches!(choice, Choice::AudioDriver) {
                     let tip = "Which Android audio system plays the sound.\nAAudio: Android's newest, lowest latency (OpenSL ES on Android 8.0); works with low latency mode.\nOpenSL ES: Android's older native audio.\nAudioTrack: Android's oldest, highest latency, widest compatibility.";
@@ -1496,6 +1495,12 @@ impl Choice {
             Choice::EditorResolution => (crate::settings::EDITOR_RESOLUTIONS.iter())
                 .map(|&p| (usize::from(p), format!("{p}%")))
                 .collect(),
+            Choice::AnalyzerRefresh => (crate::settings::ANALYZER_REFRESH.iter())
+                .map(|&hz| match hz {
+                    0 => (0, "Off".to_owned()),
+                    hz => (usize::from(hz), format!("{hz} per second")),
+                })
+                .collect(),
             Choice::AudioDriver => (crate::settings::AUDIO_DRIVERS.iter())
                 .map(|&label| label.to_owned())
                 .enumerate()
@@ -1520,6 +1525,7 @@ impl Choice {
             Choice::Orientation => usize::from(s.screen_orientation),
             Choice::VersionSize => s.version_size_limit as usize,
             Choice::EditorResolution => usize::from(s.plugin_editor_resolution),
+            Choice::AnalyzerRefresh => usize::from(s.analyzer_refresh_hz),
             Choice::AudioDriver => usize::from(s.audio_driver),
         }
     }
@@ -1538,6 +1544,7 @@ impl Choice {
             Choice::Orientation => s.screen_orientation = value as u8,
             Choice::VersionSize => s.version_size_limit = value as u32,
             Choice::EditorResolution => s.plugin_editor_resolution = value as u8,
+            Choice::AnalyzerRefresh => s.analyzer_refresh_hz = value as u16,
             Choice::AudioDriver => s.audio_driver = value as u8,
         }
     }
@@ -1738,7 +1745,7 @@ mod tests {
             })
             .collect();
         let own = cfg!(any(target_os = "ios", target_os = "android"));
-        assert_eq!(toggles.len(), if own { 19 } else { 18 });
+        assert_eq!(toggles.len(), if own { 16 } else { 15 });
         for (label, field) in &toggles {
             let mut s = Settings::default();
             *field(&mut s) = !*field(&mut s);
@@ -2228,7 +2235,7 @@ mod tests {
             let (u, t) = (m.u(1.0), m.t());
             let column_right = rig.width - 2.0 * u;
             let fills = fills(&rig);
-            assert_eq!(toggles().count(), 23);
+            assert_eq!(toggles().count(), 20);
             for r in toggles() {
                 let at = format!("ppp {ppp} scale {scale}: `{}`", r.label);
                 let control = rig.rect_of(row_id(index(r.label)));

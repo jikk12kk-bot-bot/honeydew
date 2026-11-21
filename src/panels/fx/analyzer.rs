@@ -23,7 +23,8 @@
 //!   dB/octave: White (0), Pink (+3), Default (+4.5, the default), Brown (+6), or `Custom`, which
 //!   reads the `dB/oct` knob beside it continuously from −12 to +12. The Spectrogram's columns and the marker read with
 //!   the same tilt. It takes the place of the two SETTINGS spacers: DC Block and Tilt (and the knob)
-//!   share the first row, Channel, Reactivity and Input Gain the second.
+//!   share the first row, Channel, Reactivity and Input Gain the second. A third row (Honeydew's own) holds the
+//!   global `Pause hidden` and `Light pitch` switches, every Analyzer's at once ([`global_switches`]).
 //! - The marker's value is the drawn curve's at its x (the scope's a column's last sample); without a curve point there
 //!   (no pitch, no feed) neither dot nor readout shows.
 //! - The scope reads the engine's min, max and last sample of each quarter millisecond: a column takes the buckets
@@ -115,6 +116,8 @@ pub fn panel() -> Option<Panel> {
             ])
             .h(Size::U(3.37))
             .show(Show::Tab(5)),
+            // Honeydew's own: every Analyzer's switches, not this module's settings.
+            display(GLOBALS).draw(global_switches).show(Show::Tab(5)),
         ])
         .show(Show::Tab(5)),
         tabs(
@@ -123,6 +126,57 @@ pub fn panel() -> Option<Panel> {
         )
         .h(Size::U(1.25)),
     ])))
+}
+
+/// The display of the global switches on the SETTINGS page ([`global_switches`]).
+const GLOBALS: u32 = 21;
+
+/// The SETTINGS page's global switches, side by side as label-right pills: `Pause hidden` and `Light pitch`
+/// (`honeydew_audio::analysis::set_analyzer_options`). They are every Analyzer's at once, not this module's: no song
+/// saves them, the app's settings keep them across launches. They change only the displays, never the sound.
+fn global_switches(
+    ui: &mut Ui,
+    cx: &UiCtx,
+    id: Id,
+    r: Rect,
+    _module: &mut ModuleInstance,
+    _state: &mut PanelState,
+    ink: Color32,
+) -> Vec<usize> {
+    let (skip_hidden, light_pitch) = analysis::analyzer_options();
+    let mut values = [skip_hidden, light_pitch].map(f32::from);
+    const SWITCHES: [(&str, &str); 2] = [
+        (
+            "Pause hidden",
+            "For every Analyzer: while its panel is closed or on another page, it stops working out the spectrum, scope, stereo and pitch views, to save CPU. The loudness meter keeps running. The sound never changes.",
+        ),
+        (
+            "Light pitch",
+            "For every Analyzer: the PITCH view reads the pitch once every 50 ms instead of about 5 times as often, to save CPU. The pitch line is a little coarser. The sound never changes.",
+        ),
+    ];
+    let w = r.width() / SWITCHES.len() as f32;
+    let mut changed = false;
+    for (i, ((label, tip), value)) in SWITCHES.iter().zip(&mut values).enumerate() {
+        let left = r.left() + i as f32 * w;
+        let rect = Rect::from_x_y_ranges(left..=left + w, r.y_range());
+        let c = widgets::Control {
+            menu: widgets::ParamMenu::Unbound,
+            ..widgets::Control::new(id.with(i), rect, *label, ink, 1.0)
+        };
+        let pill = widgets::Pill {
+            label_right: true,
+            ..Default::default()
+        };
+        let before = *value;
+        widgets::pill_toggle(ui, cx, &c, pill, value, |_| String::new());
+        changed |= *value != before;
+        crate::ui::tooltip::tip(ui, rect, *tip, None);
+    }
+    if changed {
+        analysis::set_analyzer_options(values[0] != 0.0, values[1] != 0.0);
+    }
+    Vec::new()
 }
 
 // The value texts, in each control's units.
@@ -612,7 +666,7 @@ impl Graphs {
     /// The analysis `view` draws: the rack's latest, or while frozen what it held.
     fn data(&mut self, view: View, ui: &Ui, module: &ModuleInstance) -> Option<AnalyzerView> {
         let graph = &mut self.graphs[view as usize];
-        // Its display's work runs while a panel draws (Settings `Pause hidden analyzers`).
+        // Its display's work runs while a panel draws (the global `Pause hidden`, [`global_switches`]).
         honeydew_audio::analysis::analyzer_drawn();
         if !graph.frozen {
             graph.held = live_analysis(ui, module.instance_id);
