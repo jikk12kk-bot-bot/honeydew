@@ -107,7 +107,9 @@ pub const AUDIO_DRIVERS: [&str; 3] = ["AAudio", "OpenSL ES", "AudioTrack"];
 
 /// Buffer-size slider positions. Zero keeps the audio device's native/default buffer;
 /// positive values are targets that the backend clamps to the device's supported range.
-pub const BUFFER_SIZES: [u32; 11] = [0, 64, 128, 256, 512, 1024, 2048, 4096, 6144, 8192, 10240];
+pub const BUFFER_SIZES: [u32; 15] = [
+    0, 64, 128, 256, 512, 1024, 2048, 4096, 6144, 8192, 10240, 12288, 16384, 24576, 32768,
+];
 pub const MCP_DEFAULT_PORT: u16 = 57831;
 
 #[cfg(desktop)]
@@ -210,8 +212,9 @@ pub struct Settings {
     /// is not connected: the choice reconnects when the device returns.
     #[serde(rename = "MidiDevice")]
     pub midi_device: String,
-    /// `Multi core processing`: parallel independent desktop channel racks.
-    #[serde(rename = "multithreaded")]
+    /// `Multi core processing`: parallel independent channel racks, on the desktop and (a Honeydew change, #145, #156)
+    /// Android. Our own key: the older `multithreaded` moves here once, off on Android ([`migrate_keys`]).
+    #[serde(rename = "multiCore")]
     pub multi_core: bool,
     #[serde(rename = "mcpEnabled")]
     pub mcp_enabled: bool,
@@ -456,6 +459,30 @@ pub struct Settings {
     /// tag fields into the file ([`crate::project_files::export::tags`]). On by default.
     #[serde(rename = "writeTagsOnExport")]
     pub write_tags: bool,
+    /// `Input gain` (our own key; Honeydew change, #129), in dB within [`INPUT_GAIN_DB`]: the audio input is raised or
+    /// lowered by it before monitoring, recording and `Calibrate` hear it. 0 by default.
+    #[serde(rename = "recInputGainDb")]
+    pub input_gain_db: f32,
+    /// `Show value while dragging` (our own key; Honeydew change, #171): a dragged knob or slider shows its value in a
+    /// bubble by the finger or pointer (`ui::widgets::set_value_bubble`). On by default.
+    #[serde(rename = "showValueWhileDragging")]
+    pub value_bubble: bool,
+    /// SETTINGS `Library folders` (our own key; Honeydew change, #144, #155, #165; Android only): the folders the
+    /// user added to the library, by path, in the order added ([`crate::ui::main_menu::library::library_folders`]).
+    #[serde(rename = "libraryFolders")]
+    pub library_folders: Vec<String>,
+    /// `Limit analyzer refresh` (our own key): the analyses reach the panels at most about 94 times a second
+    /// (`honeydew_audio::device::set_analysis_throttle`), not after every small buffer. On by default.
+    #[serde(rename = "analyzerThrottle")]
+    pub analyzer_throttle: bool,
+    /// `Pause hidden analyzers` (our own key): an Analyzer whose panel is closed skips its display's work
+    /// (`honeydew_audio::analysis::set_analyzer_options`); its loudness meter runs on. On by default.
+    #[serde(rename = "analyzerSkipHidden")]
+    pub analyzer_skip_hidden: bool,
+    /// `Light pitch tracking` (our own key): the Analyzer's pitch track reads the pitch once an entry (50 ms), not
+    /// every 512 samples. On by default.
+    #[serde(rename = "analyzerLightPitch")]
+    pub analyzer_light_pitch: bool,
     /// The folder shortcuts the user added in the browsers (our own key), each as `<scope>|<folder>`: the browsers that
     /// list it, then its path in the user folder ([`crate::ui::shortcuts::scoped`]). None by default.
     #[serde(rename = "folderShortcuts", skip_serializing_if = "Vec::is_empty")]
@@ -475,6 +502,9 @@ pub struct Settings {
 
 /// `Plugin editor resolution:`'s items, in percent.
 pub const EDITOR_RESOLUTIONS: [u8; 5] = [100, 85, 70, 50, 35];
+
+/// `Input gain`'s range in dB.
+pub const INPUT_GAIN_DB: std::ops::RangeInclusive<f32> = -12.0..=24.0;
 
 /// `Project version size limit:`'s items, in MB.
 pub const VERSION_SIZE_LIMITS: [u32; 7] = [64, 128, 256, 512, 1024, 2048, 4096];
@@ -558,6 +588,12 @@ impl Default for Settings {
             picker_keys: true,
             rack_tab_place: 0.5,
             write_tags: true,
+            input_gain_db: 0.0,
+            value_bubble: true,
+            library_folders: Vec::new(),
+            analyzer_throttle: true,
+            analyzer_skip_hidden: true,
+            analyzer_light_pitch: true,
             folder_shortcuts: Vec::new(),
             hidden_shortcuts: Vec::new(),
             displayer: DisplayerSettings::default(),
@@ -617,7 +653,7 @@ impl Settings {
                 fields.remove("uiscalefactor");
             }
         }
-        migrate_keys(&mut fields);
+        migrate_keys(&mut fields, cfg!(target_os = "android"));
         // Older versions stored this setting as a boolean toggle. Preserve an enabled toggle as the
         // smallest target when loading those settings into the buffer-size slider.
         if let Some(enabled) = fields.get("lowlatency").and_then(Value::as_bool) {
@@ -704,6 +740,9 @@ impl Settings {
         if !VERSION_SIZE_LIMITS.contains(&s.version_size_limit) {
             s.version_size_limit = d.version_size_limit;
         }
+        if !INPUT_GAIN_DB.contains(&s.input_gain_db) {
+            s.input_gain_db = d.input_gain_db;
+        }
         if !EDITOR_RESOLUTIONS.contains(&s.plugin_editor_resolution) {
             s.plugin_editor_resolution = d.plugin_editor_resolution;
         }
@@ -766,7 +805,7 @@ pub const DEMO_SONGS_VERSION: i32 = 2;
 /// Moves the values of the preference keys that newer ones replaced to those, where they hold nothing yet: the panel
 /// heights move to the `…Cells` keys (ours were in U already), and `demoSongsRestored` becomes the current demo-song
 /// set. The former keys are read no more and go with the next save.
-fn migrate_keys(fields: &mut Map<String, Value>) {
+fn migrate_keys(fields: &mut Map<String, Value>, android: bool) {
     for (old, new) in [
         ("preferredKbdSize", "preferredKbdSizeCells"),
         ("recentKbdSize", "recentKbdSizeCells"),
@@ -789,6 +828,14 @@ fn migrate_keys(fields: &mut Map<String, Value>) {
     {
         let compensates = toggle != Value::Bool(true);
         fields.insert("recLatencyCompensation".into(), compensates.into());
+    }
+    // Honeydew change (#145, #156): `multithreaded` did nothing on Android before 0.5.5; there an On saved then loads
+    // off once, so nobody lands in the experimental multi-core racks unknowingly. The desktop keeps its choice.
+    if let Some(on) = fields.remove("multithreaded")
+        && !fields.contains_key("multiCore")
+    {
+        let kept = on == Value::Bool(true) && !android;
+        fields.insert("multiCore".into(), kept.into());
     }
 }
 
@@ -1069,6 +1116,12 @@ mod tests {
             picker_keys: !d.picker_keys,
             rack_tab_place: 0.25,
             write_tags: !d.write_tags,
+            input_gain_db: 6.5,
+            value_bubble: !d.value_bubble,
+            library_folders: vec!["/storage/emulated/0/Music".into()],
+            analyzer_throttle: !d.analyzer_throttle,
+            analyzer_skip_hidden: !d.analyzer_skip_hidden,
+            analyzer_light_pitch: !d.analyzer_light_pitch,
             folder_shortcuts: vec!["Songs|My Samples/Drums".into()],
             hidden_shortcuts: vec!["SuperSaw|My Presets/SuperSaw".into()],
             displayer: crate::displayer::DisplayerSettings {
@@ -1198,7 +1251,7 @@ mod tests {
     #[test]
     fn out_of_range_values_load_as_defaults() {
         let s = Settings::load(&stored(
-            r#"{"theme": 9, "uiscale": 9, "soundModeAndr": 4, "mtmlevel": 1.5, "ghostnotes": false}"#,
+            r#"{"theme": 9, "uiscale": 9, "soundModeAndr": 4, "mtmlevel": 1.5, "recInputGainDb": 30, "ghostnotes": false}"#,
         ));
         assert_eq!(
             s,

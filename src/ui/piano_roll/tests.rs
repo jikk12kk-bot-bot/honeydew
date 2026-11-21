@@ -393,9 +393,12 @@ fn ghost_song() -> Song {
     song.add_channel(ChannelKind::Drums);
     let edited = song.channels[1].lanes[0].add_clip(1024, 4.0);
     edited.events = vec![n(0, 32.0, 60)];
-    // The same channel's other clip: never a ghost.
+    // The same channel's other clip, and its other track's: ghosts too (#152).
     let own = song.channels[1].lanes[0].add_clip(1100, 4.0);
     own.events = vec![n(0, 32.0, 61)];
+    let mut track = Lane::new(LaneKind::Notes);
+    track.add_clip(1024, 4.0).events = vec![n(50, 32.0, 62)];
+    song.channels[1].lanes.push(track);
     // Channel 2: one note inside the window, one before and one after it.
     let other = song.channels[2].lanes[0].add_clip(1000, 8.0);
     other.events = vec![n(0, 16.0, 40), n(124, 16.0, 41), n(600, 16.0, 42)];
@@ -446,7 +449,7 @@ fn ghost_notes_walk_only_the_view_whatever_the_loop_lengths() {
     std::thread::spawn(move || {
         let _ = tx.send(ghost_notes(
             &song,
-            1,
+            (1, 0),
             Some(&clip),
             4,
             128_000.0..130_048.0,
@@ -462,37 +465,21 @@ fn ghost_notes_walk_only_the_view_whatever_the_loop_lengths() {
 }
 
 #[test]
-fn ghost_notes_are_other_channels_notes_inside_the_clip_window() {
-    let song = ghost_song();
-    let clip = &song.channels[1].lanes[0].clips[0];
-    let ghosts = ghost_notes(&song, 1, Some(clip), 4, ALL, 0.0);
-    // Channel 2's note at song tick 1124 is content tick 100 of the edited clip.
-    assert_eq!(
-        ghosts,
-        [Ghost {
-            pos: 100.0,
-            len: 16.0,
-            key: 41,
-            hue: song.channels[2].hue
-        }]
-    );
-}
-
-#[test]
 fn ghost_notes_follow_the_clip_offset() {
     let mut song = ghost_song();
     song.channels[1].lanes[0].clips[0].offset_beats = 1.0;
     let clip = &song.channels[1].lanes[0].clips[0];
-    let ghosts = ghost_notes(&song, 1, Some(clip), 4, ALL, 0.0);
+    let ghosts = ghost_notes(&song, (1, 0), Some(clip), 4, ALL, 0.0);
     // The clip starts playing at content tick 128: song 1124 is content 228.
-    assert_eq!(ghosts.iter().map(|g| g.pos).collect::<Vec<_>>(), [228.0]);
+    let at: Vec<f64> = ghosts.iter().map(|g| g.pos).collect();
+    assert_eq!(at, [204.0, 178.0, 228.0]);
 }
 
 #[test]
 fn without_a_clip_ghosts_come_from_the_first_bar() {
     let mut song = ghost_song();
     song.channels[2].lanes[0].clips[0].start_tick = 0;
-    let ghosts = ghost_notes(&song, 1, None, 4, ALL, 0.0);
+    let ghosts = ghost_notes(&song, (1, 0), None, 4, ALL, 0.0);
     let keys: Vec<u8> = ghosts.iter().map(|g| g.key).collect();
     assert_eq!(keys, [40, 41]);
 }
@@ -4157,11 +4144,11 @@ mod grid {
             paint_notes(
                 p,
                 g,
-                &events,
-                &[false],
+                (&events, &[false]),
                 &[],
                 Some(past),
                 (RED, (0, 0xFFF)),
+                None,
                 cx,
             );
         });
@@ -4173,27 +4160,29 @@ mod grid {
     }
 
     #[test]
-    fn a_note_off_the_project_scale_is_gray() {
-        // C major (0xAD5): C4 in the channel colour, C#4 in its gray.
+    fn a_note_off_the_project_scale_is_faded() {
+        // C major (0xAD5): C4 in the channel colour, C#4 in it faded.
         let events = [n(0, 128.0, 60), n(0, 128.0, 61)];
         let (rects, ..) = painted(1.0, &|p, _, g, cx| {
             paint_notes(
                 p,
                 g,
-                &events,
-                &[false, false],
+                (&events, &[false, false]),
                 &[],
                 None,
                 (RED, (0, 0xAD5)),
+                None,
                 cx,
             );
         });
-        let gray = crate::ui::piano_roll::gray(RED).to_color32();
+        let faded = RED
+            .to_color32()
+            .gamma_multiply(crate::ui::piano_roll::OFF_SCALE_ALPHA);
         assert_eq!(
             rects.iter().map(|r| r.1).collect::<Vec<_>>(),
-            [RED.to_color32(), gray]
+            [RED.to_color32(), faded]
         );
-        assert_ne!(gray, RED.to_color32());
+        assert_ne!(faded, RED.to_color32());
     }
 
     #[test]

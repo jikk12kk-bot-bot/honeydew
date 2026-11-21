@@ -190,7 +190,8 @@ impl Opened {
         let mut underruns = 0;
         while !stop.load(Ordering::Acquire) {
             // When this chunk is heard: once the buffer ahead of it has played.
-            let heard = clock().map(|now| now + latency_ns);
+            let latency = std::time::Duration::from_nanos(latency_ns.max(0) as u64);
+            let heard = clock().map(|now| (now, latency));
             state.callback(chunk, 2, rate, heard, &mut scratch, |at, rendered| {
                 for (o, &s) in out[at * 2..].iter_mut().zip(rendered) {
                     *o = if s.is_finite() {

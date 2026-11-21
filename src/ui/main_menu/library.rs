@@ -578,6 +578,93 @@ fn known_documents() -> Option<PathBuf> {
     }
 }
 
+/// Honeydew change (#144, #155, #165): the library folders, folders anywhere on the phone that the user added
+/// (SETTINGS `Library folders`, Android, with All files access), as [`library_roots`] keeps them. SONGS lists them at
+/// the user folder's top after its own folders, as places, and every picker's `My Files` after its own rows. They are
+/// read-only ([`NativeLibrary`] changes nothing in them), and a song names a file in one by its own path
+/// ([`crate::project_files::ProjectFiles::shorthand`]), which reads only while the folder is added. The desktop adds
+/// none.
+#[cfg(not(test))]
+mod held {
+    use std::path::PathBuf;
+    use std::sync::RwLock;
+
+    static FOLDERS: RwLock<Vec<PathBuf>> = RwLock::new(Vec::new());
+
+    pub fn get() -> Vec<PathBuf> {
+        FOLDERS.read().map(|f| f.clone()).unwrap_or_default()
+    }
+
+    pub fn set(folders: Vec<PathBuf>) {
+        if let Ok(mut held) = FOLDERS.write() {
+            *held = folders;
+        }
+    }
+}
+
+/// Each test's own library folders: tests run side by side.
+#[cfg(test)]
+mod held {
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+
+    thread_local!(static FOLDERS: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) });
+
+    pub fn get() -> Vec<PathBuf> {
+        FOLDERS.with_borrow(Clone::clone)
+    }
+
+    pub fn set(folders: Vec<PathBuf>) {
+        FOLDERS.set(folders);
+    }
+}
+
+/// The library folders ([`held`]), in the order added.
+pub fn library_folders() -> Vec<PathBuf> {
+    held::get()
+}
+
+/// Makes the folders `added` (`Settings::library_folders`) the library folders, beside the user folder `user`
+/// ([`library_roots`]).
+pub fn set_library_folders(user: Option<&Path>, added: &[String]) {
+    held::set(library_roots(user, added));
+}
+
+/// The library folders of the paths `added`, beside the user folder `user`: each absolute one, with no `..`, that is
+/// not the user folder, in it or holding it, once, in the order added.
+pub fn library_roots(user: Option<&Path>, added: &[String]) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for path in added.iter().map(PathBuf::from) {
+        let clean = path.is_absolute() && !path.components().any(|c| c == Component::ParentDir);
+        let clash = |user: &Path| path.starts_with(user) || user.starts_with(&path);
+        if clean && !user.is_some_and(clash) && !roots.contains(&path) {
+            roots.push(path);
+        }
+    }
+    roots
+}
+
+/// The library folder `path` is in, or is.
+pub fn library_root_of(path: &Path) -> Option<PathBuf> {
+    library_folders()
+        .into_iter()
+        .find(|root| path.starts_with(root))
+}
+
+/// The library folders as folder rows, named as their folders are.
+pub fn library_rows() -> Vec<SongEntry> {
+    let row = |path: PathBuf| SongEntry {
+        name: (path.file_name()).map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+        path,
+        is_folder: true,
+        recency: 0,
+    };
+    library_folders().into_iter().map(row).collect()
+}
+
 /// The installed sound library's folder in [`app_data_dir`] (`content::install`): it stays there, as the app's.
 pub const SOUND_LIBRARY_FOLDER: &str = "content";
 
@@ -976,15 +1063,14 @@ impl NativeLibrary {
     }
 
     /// `path` may be written: it is not in the Original Content folder, nor reaches it through a link or in another
-    /// case ([`crate::project_files::in_content_folder`]).
+    /// case ([`crate::project_files::in_content_folder`]), nor in a library folder ([`library_folders`]).
     fn writable(&self, path: &Path) -> io::Result<()> {
+        let denied = |what| Err(io::Error::new(io::ErrorKind::PermissionDenied, what));
         match self.content() {
             Some(content) if crate::project_files::in_content_folder(&content, path) => {
-                Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "original content is read-only",
-                ))
+                denied("original content is read-only")
             }
+            _ if library_root_of(path).is_some() => denied("library folders are read-only"),
             _ => Ok(()),
         }
     }
@@ -1079,6 +1165,10 @@ impl SongLibrary for NativeLibrary {
                 recency: 0,
             });
         }
+        // The library folders, after the user folder's own.
+        if top {
+            songs.extend(library_rows());
+        }
         Ok(songs)
     }
 
@@ -1141,6 +1231,7 @@ impl SongLibrary for NativeLibrary {
                 (pf::MY_FOLDERS.into_iter()).chain([pf::UNZIPPED_FOLDER, pf::CONTENT_FOLDER]);
             places.extend(fixed.map(|f| user.join(f)));
         }
+        places.extend(library_folders());
         places
     }
 

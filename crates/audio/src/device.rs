@@ -1,4 +1,6 @@
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering, fence};
+use std::sync::atomic::{
+    AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence,
+};
 use std::sync::{Arc, Mutex, PoisonError};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -227,6 +229,9 @@ pub trait AudioRenderer: Send + 'static {
     /// Plays `sample` once from frame `from`, past the master, replacing any preview playing; `None` stops it (the
     /// pickers' sample preview). The default plays nothing.
     fn preview(&mut self, _sample: Option<(Arc<SampleData>, usize)>) {}
+    /// The preview playing, if any, goes on in `data`, the same sample decoded further, from where it is; `more`: a
+    /// longer part still comes, so its end waits rather than ends (issues #131, #153). The default does nothing.
+    fn preview_more(&mut self, _data: Arc<SampleData>, _more: bool) {}
     /// The keys sounding at `channel`'s input (bit k = MIDI k): a note-on that reaches the channel before its note
     /// effects sets its key, the note-off clears it. The default: none.
     fn sounding(&self, _channel: usize) -> u128 {
@@ -305,6 +310,8 @@ pub enum AudioCommand<R> {
     },
     /// [`AudioRenderer::preview`].
     Preview(Option<(Arc<SampleData>, usize)>),
+    /// [`AudioRenderer::preview_more`].
+    PreviewMore(Arc<SampleData>, bool),
     /// [`AudioRenderer::set_tempo`].
     SetTempo(f32),
     /// [`AudioRenderer::set_live_param`].
@@ -320,9 +327,28 @@ enum CallbackCommand<R> {
     Replace(Box<R>, Arc<MeterBank>),
 }
 
-/// The visual frames each meter keeps (and the transport, [`OutputSnapshot::heard_tick`]): 680 ms at 48 kHz, for the
-/// output's latency (a Bluetooth headset's 200 ms or more, #92) and a callback beside it.
-const SLOTS: usize = 64;
+/// The visual frames each meter keeps (and the transport, [`OutputSnapshot::heard_tick`]): 2.7 s at 48 kHz, for the
+/// output's latency (a Bluetooth headset's 200 ms or more, #92; a 32768-frame buffer's) and a callback beside it. A
+/// callback shorter than a sub-block is one, so at 128 frames they keep 683 ms. Levels only, so they cost little.
+const SLOTS: usize = 256;
+
+/// The analyses each meter keeps ([`MeterCell::analyses`]), written apart from its levels: every sub-block, or with
+/// [`set_analysis_throttle`] on at most once a [`SUB_BLOCK`] (about 94 a second at 48 kHz) and at least 1/16 of a
+/// callback apart, so the ring still holds four callbacks of a big buffer.
+const ANALYSES: usize = 64;
+
+/// Settings `Limit analyzer refresh`: the analyses publish at most once a [`SUB_BLOCK`] ([`ANALYSES`]). Off until the
+/// app says.
+static ANALYSIS_THROTTLE: AtomicBool = AtomicBool::new(false);
+
+/// Sets [`ANALYSIS_THROTTLE`]; the audio thread takes it at its next callback.
+pub fn set_analysis_throttle(on: bool) {
+    ANALYSIS_THROTTLE.store(on, Ordering::Relaxed);
+}
+
+/// The most latency the output clock takes, in the callback's sub-blocks (#145): the rest of the ring holds the
+/// callback being heard and the next few.
+const LATENCY_SLOTS: usize = SLOTS * 3 / 4;
 
 /// How fast the output clock may run ahead of the latest callback's: 1000 ppm, a device clock running fast.
 const DRIFT: f64 = 1e-3;
@@ -421,8 +447,9 @@ impl Visual {
 }
 
 /// The level meters' release (#41), in dB a second, whatever the sample rate, the buffer size and the UI's frame rate.
-/// Honeydew change (#135): twice the earlier 20.9 dB/s at 48 kHz (19.2 at 44.1 kHz), so a meter shows the level sooner.
-const RELEASE_DB_PER_S: f32 = 40.0;
+/// Honeydew change (#135): three times the earlier 20.9 dB/s at 48 kHz (19.2 at 44.1 kHz), so a meter shows the level
+/// sooner. 40 dB/s in 0.5.4, 60 since 0.5.5.
+pub const RELEASE_DB_PER_S: f32 = 60.0;
 
 /// A released level under −96 dB, the floor of the deepest meter scale (the Compressor's), is silence: a meter comes
 /// to rest.
@@ -444,6 +471,23 @@ fn released(m: MeterSnapshot, frames: u64, rate: u32) -> MeterSnapshot {
     }
 }
 
+/// `fell`, `raw` released ([`released`]), with each peak that was over full scale still over it, so that a read sees
+/// every over however far it has fallen since its sub-block (the master's clip light, #143).
+fn over_kept(raw: MeterSnapshot, fell: MeterSnapshot) -> MeterSnapshot {
+    let keep = |raw: f32, fell: f32| {
+        if raw.abs() > 1.0 {
+            fell.max(1f32.next_up())
+        } else {
+            fell
+        }
+    };
+    MeterSnapshot {
+        peak_left: keep(raw.peak_left, fell.peak_left),
+        peak_right: keep(raw.peak_right, fell.peak_right),
+        ..fell
+    }
+}
+
 /// Each value's larger magnitude.
 fn louder(a: MeterSnapshot, b: MeterSnapshot) -> MeterSnapshot {
     let max = |a: f32, b: f32| a.abs().max(b.abs());
@@ -457,8 +501,12 @@ fn louder(a: MeterSnapshot, b: MeterSnapshot) -> MeterSnapshot {
 
 struct MeterCell {
     key: ModuleKey,
-    /// The last [`SLOTS`] sub-blocks' visuals: the callback writes its n-th sub-block's in slot n % [`SLOTS`].
+    /// The last [`SLOTS`] sub-blocks' visuals: the callback writes its n-th sub-block's in slot n % [`SLOTS`]. Their
+    /// levels only: the analysis goes to `analyses`.
     frames: Box<[Visual]>,
+    /// The last [`ANALYSES`] analyses published, each under the stream frame its sub-block ended at
+    /// ([`AnalysisClock`]).
+    analyses: Box<[Visual]>,
     /// The analysis that reads before the first render: the renderer's own at rest.
     rest: Box<[f32]>,
 }
@@ -473,7 +521,17 @@ struct MeterBank(
     AtomicBool,
     Box<[(Modulated, AtomicU32)]>,
     Mutex<Vec<(u64, MeterSnapshot)>>,
+    AnalysisClock,
 );
+
+/// When the audio thread last published the analyses ([`MeterCell::analyses`]): the next slot, the stream frame it
+/// ended at, and the frames to leave between two (0: none, every sub-block). Its alone, so atomics only for `Sync`.
+#[derive(Default)]
+struct AnalysisClock {
+    next: AtomicUsize,
+    last: AtomicU64,
+    gap: AtomicU64,
+}
 
 impl MeterBank {
     fn new<R: AudioRenderer>(renderer: &R) -> Self {
@@ -487,7 +545,8 @@ impl MeterBank {
                     let rest: Box<[f32]> = renderer.analysis(index).into();
                     MeterCell {
                         key: renderer.meter_key(index),
-                        frames: (0..SLOTS).map(|_| Visual::new(rest.len())).collect(),
+                        frames: (0..SLOTS).map(|_| Visual::new(0)).collect(),
+                        analyses: (0..ANALYSES).map(|_| Visual::new(rest.len())).collect(),
                         rest,
                     }
                 })
@@ -498,7 +557,17 @@ impl MeterBank {
                 .map(|&m| (m, AtomicU32::new(f32::NAN.to_bits())))
                 .collect(),
             Mutex::new(vec![(0, MeterSnapshot::default()); renderer.meter_count()]),
+            AnalysisClock::default(),
         )
+    }
+
+    /// A callback of `frames` frames starts: the analyses' gap for its sub-blocks ([`ANALYSES`]).
+    fn pace(&self, frames: usize) {
+        let gap = match ANALYSIS_THROTTLE.load(Ordering::Relaxed) {
+            true => SUB_BLOCK.max(frames / 16) as u64,
+            false => 0,
+        };
+        self.5.gap.store(gap, Ordering::Relaxed);
     }
 
     /// Each meter starting at `old`'s last read under its key (an edit's replace reads no 0 until the new
@@ -527,10 +596,28 @@ impl MeterBank {
     }
 
     /// The audio thread's write of a sub-block's visuals, ending at stream frame `end`, into `slot`.
+    /// The analyses go too, unless the last went less than the gap ago ([`Self::pace`]).
     fn publish<R: AudioRenderer>(&self, renderer: &R, slot: usize, end: u64) {
         for (index, cell) in self.0.iter().enumerate() {
-            cell.frames[slot].write(end, 0, renderer.meter(index), renderer.analysis(index));
+            cell.frames[slot].write(end, 0, renderer.meter(index), &[]);
         }
+        let clock = &self.5;
+        let (last, gap) = (
+            clock.last.load(Ordering::Relaxed),
+            clock.gap.load(Ordering::Relaxed),
+        );
+        if last > 0 && end < last + gap {
+            return;
+        }
+        let at = clock.next.load(Ordering::Relaxed);
+        for (index, cell) in self.0.iter().enumerate() {
+            if !cell.rest.is_empty() {
+                let rest = MeterSnapshot::default();
+                cell.analyses[at % ANALYSES].write(end, 0, rest, renderer.analysis(index));
+            }
+        }
+        clock.next.store(at.wrapping_add(1), Ordering::Relaxed);
+        clock.last.store(end, Ordering::Relaxed);
     }
 
     /// The audio thread's write of each channel's sounding keys, and of each modulated param's value. The halves are
@@ -566,24 +653,23 @@ impl MeterBank {
     /// The meters as the app shows them at stream frame `upto` (the output clock, [`AudioOutput::snapshot_at`];
     /// `u64::MAX`: as last published), as of the last sub-block that ended by then: every meter's levels the loudest
     /// peak so far, each fallen at the release ([`released`]) since its sub-block ended (item 18: a peak between two
-    /// reads is not lost), and its gain reduction the largest since the last read, or the last read's with none; and
-    /// each analysis as that sub-block left it. The stream runs at `rate` Hz.
+    /// reads is not lost) but an over still over full scale ([`over_kept`]), and its gain reduction the largest since
+    /// the last read, or the last read's with none; and each analysis as that sub-block left it. The stream runs at
+    /// `rate` Hz.
     fn take(&self, upto: u64, rate: u32) -> Vec<ModuleMeter> {
         let mut reader = self.reader();
         (self.0.iter().zip(reader.iter_mut()))
             .map(|(cell, (seen, last))| {
                 let read: [_; SLOTS] =
                     std::array::from_fn(|slot| cell.frames[slot].read(Visual::meter));
-                // The oldest frame and the newest by then, as (end, slot).
+                // The newest frame by then, as (end, slot).
                 let ends =
                     || (read.iter().enumerate()).filter_map(|(s, r)| Some((r.as_ref()?.0, s)));
-                let oldest = ends().min();
                 let newest = ends().filter(|&(end, _)| end <= upto).max();
                 let now = newest.map_or(*seen, |(end, _)| end.max(*seen));
                 let fresh = (read.iter().flatten()).filter(|(end, _)| *seen < *end && *end <= upto);
-                if let Some(peaks) =
-                    (fresh.map(|&(end, m)| released(m, now - end, rate))).reduce(louder)
-                {
+                let fell = fresh.map(|&(end, m)| over_kept(m, released(m, now - end, rate)));
+                if let Some(peaks) = fell.reduce(louder) {
                     let held = MeterSnapshot {
                         gain_reduction_db: 0.0,
                         ..released(*last, now - *seen, rate)
@@ -591,11 +677,24 @@ impl MeterBank {
                     *last = louder(peaks, held);
                 }
                 *seen = now;
-                // ponytail: a callback longer than the ring beside the latency shows its oldest frame until the clock
-                // reaches it; widen the ring if buffers over the latency's room in `SLOTS` ever matter.
-                let analysis = (newest.or(oldest))
-                    .and_then(|(_, slot)| cell.frames[slot].read(Visual::analysis))
-                    .map_or_else(|| cell.rest.to_vec(), |(_, analysis)| analysis);
+                // The analysis the newest by then left, else the oldest kept. ponytail: a callback longer than the
+                // ring beside the latency shows its oldest until the clock reaches it; widen [`ANALYSES`] if buffers
+                // over its room ever matter.
+                let analysis = match cell.rest.is_empty() {
+                    true => Vec::new(),
+                    false => {
+                        let analyses: [_; ANALYSES] =
+                            std::array::from_fn(|slot| cell.analyses[slot].read(|_| ()));
+                        let ends = || {
+                            (analyses.iter().enumerate())
+                                .filter_map(|(s, r)| Some((r.as_ref()?.0, s)))
+                        };
+                        let newest = ends().filter(|&(end, _)| end <= upto).max();
+                        (newest.or_else(|| ends().min()))
+                            .and_then(|(_, slot)| cell.analyses[slot].read(Visual::analysis))
+                            .map_or_else(|| cell.rest.to_vec(), |(_, analysis)| analysis)
+                    }
+                };
                 ModuleMeter {
                     key: cell.key,
                     value: *last,
@@ -1258,6 +1357,7 @@ impl<R: AudioRenderer> OfflineCallback<R> {
     /// Allocates nothing.
     pub fn run(&mut self, output: &mut [f32], now: Option<i64>) {
         let (frames, rate) = (output.len() / 2, self.sample_rate);
+        let now = now.map(|now| (now, std::time::Duration::ZERO));
         (self.state).callback(frames, 2, rate, now, &mut self.scratch, |at, rendered| {
             output[2 * at..2 * at + rendered.len()].copy_from_slice(rendered)
         });
@@ -1270,8 +1370,8 @@ impl<R: AudioRenderer> OfflineCallback<R> {
 const LOAD_AVERAGE_S: f32 = 0.5;
 
 impl<R: AudioRenderer> CallbackState<R> {
-    /// One device callback of `frames` frames, whose first frame is heard at `now` (ns on [`clock`]: the callback's
-    /// start and the latency the host reports; `None` without a clock): rendered into `scratch` a sub-block at a time
+    /// One device callback of `frames` frames, started at `now.0` (ns on [`clock`]), whose first frame is heard the
+    /// latency the host reports (`now.1`) later (`None` without a clock): rendered into `scratch` a sub-block at a time
     /// ([`SUB_BLOCK`] frames of `channels`; `scratch` holds one), each handed to `out` with its first frame. Every
     /// sub-block publishes its visuals; `now` sets the output clock they play back on. The CPU load is the callback's
     /// time over its buffer's, averaged ([`LOAD_AVERAGE_S`]).
@@ -1285,13 +1385,22 @@ impl<R: AudioRenderer> CallbackState<R> {
         frames: usize,
         channels: usize,
         sample_rate: u32,
-        now: Option<i64>,
+        now: Option<(i64, std::time::Duration)>,
         scratch: &mut [f32],
         mut out: impl FnMut(usize, &[f32]),
     ) {
         #[cfg(not(target_arch = "wasm32"))]
         let start = Instant::now();
-        if let Some(now) = now {
+        // #145: a latency longer than [`LATENCY_SLOTS`] sub-blocks of this callback's (an outlier Android's AAudio
+        // reported) would put the visuals' read point behind every frame the ring keeps, and the clock only moves
+        // later: it counts as none.
+        let most = LATENCY_SLOTS * frames / frames.div_ceil(SUB_BLOCK).max(1);
+        let most = most as f64 * 1e9 / f64::from(sample_rate);
+        let heard = |(now, latency): (i64, std::time::Duration)| {
+            let latency = latency.as_nanos() as f64;
+            now + if latency <= most { latency as i64 } else { 0 }
+        };
+        if let Some(now) = now.map(heard) {
             let ahead = self.frames as f64 * 1e9 / f64::from(sample_rate);
             let mut origin = now - ahead as i64;
             if let Some((last, at)) = self.clock {
@@ -1301,6 +1410,7 @@ impl<R: AudioRenderer> CallbackState<R> {
             self.shared.origin.store(origin, Ordering::Release);
             self.shared.clocked.store(true, Ordering::Release);
         }
+        self.meters.pace(frames);
         let mut at = 0;
         while at < frames {
             let length = (frames - at).min(SUB_BLOCK) * channels;
@@ -1417,6 +1527,7 @@ impl<R: AudioRenderer> CallbackState<R> {
                         self.renderer.set_live_lane(channel, notes)
                     }
                     AudioCommand::Preview(sample) => self.renderer.preview(sample),
+                    AudioCommand::PreviewMore(data, more) => self.renderer.preview_more(data, more),
                     AudioCommand::SetTempo(bpm) => self.renderer.set_tempo(bpm),
                     AudioCommand::LiveParam {
                         channel,
@@ -1471,13 +1582,11 @@ where
                     });
                 }
             };
-            // When its first frame is heard: the latency the host reports, up to a second (#92: a Bluetooth headset's
-            // is in it; AAudio's both times are on CLOCK_MONOTONIC since cpal 0.18).
+            // The latency the host reports (AAudio's both times are on CLOCK_MONOTONIC since cpal 0.18).
             let stamp = info.timestamp();
-            let latency =
-                Some(stamp.playback.duration_since(stamp.callback)).filter(|l| l.as_secs() < 1);
-            let heard = clock().map(|now| now + latency.map_or(0, |l| l.as_nanos() as i64));
-            state.callback(frames, channels, sample_rate, heard, &mut scratch, out);
+            let latency = stamp.playback.duration_since(stamp.callback);
+            let now = clock().map(|now| (now, latency));
+            state.callback(frames, channels, sample_rate, now, &mut scratch, out);
         },
         error,
         None,
@@ -1628,7 +1737,13 @@ mod tests {
     impl CallbackState<TestRenderer> {
         /// A stereo device callback of `output` at `now`, as the stream's.
         fn run(&mut self, output: &mut [f32], now: Option<i64>) {
+            self.run_late(output, now, 0);
+        }
+
+        /// [`Self::run`] with a latency of `ms`.
+        fn run_late(&mut self, output: &mut [f32], now: Option<i64>, ms: u64) {
             let mut scratch = vec![0.0; 2 * SUB_BLOCK];
+            let now = now.map(|now| (now, std::time::Duration::from_millis(ms)));
             self.callback(output.len() / 2, 2, 48_000, now, &mut scratch, |at, r| {
                 output[2 * at..2 * at + r.len()].copy_from_slice(r)
             });
@@ -1904,9 +2019,9 @@ mod tests {
         let read = meters.take(u64::MAX, 48_000);
         assert_eq!(read.len(), 1);
         assert_eq!(read[0].key.instance_id, 2);
-        // The spike, a frame older than the read, has fallen a frame's release: 40 dB/s at 48 kHz.
+        // The spike, a frame older than the read, has fallen a frame's release: 60 dB/s at 48 kHz.
         let held = read[0].value;
-        let fallen = |frames: f32| 0.9 * 10f32.powf(-2.0 * frames / 48_000.0);
+        let fallen = |frames: f32| 0.9 * 10f32.powf(-3.0 * frames / 48_000.0);
         let near = |a: f32, b: f32| (a - b).abs() < 1e-6;
         assert!(near(held.peak_left, fallen(1.0)) && near(held.peak_right, fallen(1.0)));
         assert!((held.gain_reduction_db - 10.8).abs() < 1e-5, "{held:?}");
@@ -1935,7 +2050,7 @@ mod tests {
                 .is_ok()
         );
         state.render(&mut output, 2);
-        let fallen = |frames: f32| 0.8 * 10f32.powf(-2.0 * frames / 48_000.0);
+        let fallen = |frames: f32| 0.8 * 10f32.powf(-3.0 * frames / 48_000.0);
         let first = meters.take(u64::MAX, 48_000)[0].value.input_peak;
         assert!((first - fallen(1.0)).abs() < 1e-6, "{first}");
         assert_eq!(meters.take(u64::MAX, 48_000)[0].value.input_peak, first);
@@ -1967,7 +2082,7 @@ mod tests {
         state.render(&mut [0.0; 2], 2);
         let next = output.snapshot().module_meters[0].value.peak_left;
         assert!(
-            (next - 0.5 * 10f32.powf(-2.0 / 48_000.0)).abs() < 1e-6,
+            (next - 0.5 * 10f32.powf(-3.0 / 48_000.0)).abs() < 1e-6,
             "{next}"
         );
     }
@@ -2003,9 +2118,9 @@ mod tests {
     }
 
     /// The level meters fall at one release whatever the sample rate, the buffer size and the UI's frame rate (#41):
-    /// 40 dB/s from each peak's sub-block on (Honeydew change, #135: the earlier ×0.95 per 1024 frames was about 20).
-    /// A full-scale burst over the first 2048 frames reads −20.1 dB at frame 26112, half a second after it ends at
-    /// 48 kHz, and −21.8 dB at 44.1 kHz, 0.55 s after.
+    /// 60 dB/s from each peak's sub-block on (Honeydew change, #135: the earlier ×0.95 per 1024 frames was about 20).
+    /// A full-scale burst over the first 2048 frames reads −30.1 dB at frame 26112, half a second after it ends at
+    /// 48 kHz, and −32.7 dB at 44.1 kHz, 0.55 s after.
     #[test]
     fn a_peak_falls_at_the_meter_release_whatever_the_rate_buffer_and_frame_rate() {
         let (burst, at) = (2048, 26_112);
@@ -2015,7 +2130,7 @@ mod tests {
             .chain([(44_100, 256, 60), (44_100, 2048, 24)])
         {
             let ns = |frames: u64| (frames as f64 / f64::from(rate) * 1e9) as i64;
-            let expected = -40.0 * (at - burst) as f32 / rate as f32;
+            let expected = -60.0 * (at - burst) as f32 / rate as f32;
             let (mut output, mut device) = AudioOutput::offline(renderer(), rate);
             device.state.renderer.gain = 1.0;
             let mut buffer = vec![0.0; 2 * block as usize];
@@ -2061,7 +2176,7 @@ mod tests {
             );
         }
         // Each publish is whole: the version is even again and moved by 2.
-        assert_eq!(meters.0[0].frames[0].version.load(Ordering::Acquire), 2);
+        assert_eq!(meters.0[0].analyses[0].version.load(Ordering::Acquire), 2);
         // A renderer with more values than the slots it was sized for writes what fits.
         state.renderer.analysis = vec![1.0, 2.0, 3.0, 4.0];
         state.render(&mut output, 2);
@@ -2095,7 +2210,7 @@ mod tests {
             let bank = bank.clone();
             std::thread::spawn(move || {
                 for n in 0..2_000 {
-                    let frame = &bank.0[0].frames[n % SLOTS];
+                    let frame = &bank.0[0].analyses[n % ANALYSES];
                     frame.write(n as u64 + 1, 0, MeterSnapshot::default(), &[n as f32; 512]);
                     std::thread::sleep(std::time::Duration::from_micros(20));
                 }

@@ -1,9 +1,22 @@
-Honeydew 0.0.8: choose Android's audio driver and buffer yourself.
+Honeydew 0.0.9: the fixes of Honeydew 0.5.5, a piano roll that marks the scale's root, bigger buffers and lighter analyzers.
 
-- Settings (Android). The audio is now set by two controls of its own, and `Sound mode:` fills them in as a preset:
-  - `Audio driver:` picks which Android audio system plays the sound: `AAudio` (Android's newest and lowest-latency, through Oboe; OpenSL ES on Android 8.0), `OpenSL ES` (Android's older native audio) or `AudioTrack` (Android's oldest: the highest latency, the widest compatibility).
-  - `Audio buffer size` now goes up to 10240 frames: Auto, 64, 128, 256, 512, 1024, 2048, 4096, 6144, 8192, 10240. Auto is the driver's smallest buffer, which grows by itself when the sound crackles; a set size stays as set.
-  - `Sound mode:` presets, as FL Studio Mobile's: `NATIVE` = AAudio, Auto; `FAST` = OpenSL ES, Auto; `SAFE` = OpenSL ES, 1024 frames; `ULTRASAFE` = AudioTrack, 4096 frames. Changing the driver or the buffer yourself shows `CUSTOM`.
-  - `Enable low latency mode` (an exclusive stream on Android's fastest path) shows only while the driver is AAudio, the one it applies to.
-  If a driver cannot open on a phone, the app falls back to the next one (AudioTrack to Oboe, Oboe to AAudio).
-- Settings (desktop). `Audio buffer size` goes up to 10240 frames too.
+- Piano roll.
+  - The key column's root bar sits on the project scale's root (the home note, as the on-screen keyboard marks it), not always on C. The octave labels stay on C.
+  - Notes off the project scale are drawn in the channel colour, faded (about half see-through), instead of gray.
+  - Ghost notes of the channel's other clips, with a `Ghosts` switch; ghosts' velocity and pan in the graph lane; a long press on a ghost opens its clip.
+  - Note names on the notes and the channel's name; zoom in to 1/128 steps.
+- Settings.
+  - `Audio buffer size` goes up to 32768 frames: 12288, 16384, 24576 and 32768 are new.
+  - `Limit analyzer refresh`: the Analyzer's display updates about 94 times a second at most.
+  - `Pause hidden analyzers`: an Analyzer whose panel is closed skips its spectrum, scopes and pitch tracking (its loudness meter runs on).
+  - `Light pitch tracking`: the Analyzer reads the pitch once per 50 ms step, a cheaper pitch detector.
+  - `Show value while dragging` (a value bubble on knobs and sliders, #171), `Input gain` before monitoring and recording (#129), and Library folders with All files access (#144).
+- Fixes from Honeydew 0.5.5:
+  - Meters at long latencies (#145); the master peak in dB, red above 0 dBFS; meters fall at 60 dB/s.
+  - Multi-core mixing on Android; 60 fps while playing on phones; monitoring at big buffers.
+  - DW Sampler: root note 60 and .dwp/.sfz import (#176). Audio clips: Speed and SYNC (#173). The drum Sample tab shows the waveform (#175).
+  - The save dialog's length follows tempo automation. Streaming previews (#131, #153).
+  - ZIPs over 512 MiB, unzipped songs, Lemon and library samples in ZIPs (#168, #157).
+  - Android Back closes the top window first, then asks "Exit Honeydew?" (#147).
+  - Rack Copy/Paste and presets keep plugin modules (#149).
+  - Lemon update, Tesla `Convert to score`, an OK button by the type-in field, and Tesla never frees a sample during playback (#164, #166, #167).

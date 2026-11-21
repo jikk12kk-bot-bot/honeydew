@@ -599,10 +599,10 @@ pub fn apply(rack: &mut Rack, instance_id: i32, action: CardAction) -> Outcome {
     }
 }
 
-/// `Clear Rack`: removes every module but the instruments.
+/// `Clear Rack`: removes every module but the instruments, plugin instruments too (#149).
 pub fn clear(rack: &mut Rack) -> Outcome {
     let before = rack.modules.len();
-    rack.modules.retain(|m| instrument(m.type_id).is_some());
+    rack.modules.retain(|m| is_instrument_type(m.type_id));
     if rack.modules.len() < before {
         Outcome::ChainChanged
     } else {
@@ -1977,8 +1977,9 @@ impl RackPanel {
                 fine_tune: crate::ui::fine_tune::channel_param(0x2000 + target),
                 ..Control::new(id.with("level"), level, "", ink, SEND_UNITY)
             };
-            let changed =
-                widgets::h_slider(ui, cx, &c, &mut send.level, |_| String::new()).changed();
+            // Honeydew change (#171): the drag bubble reads it as the channel Level.
+            let level = |v| crate::params::CHANNEL_PARAMS[0].display_text(v);
+            let changed = widgets::h_slider(ui, cx, &c, &mut send.level, level).changed();
             control(
                 0x2000 + target,
                 &mut send.level,
