@@ -14,8 +14,9 @@
 //! A strip control's press or parameter menu pick is the app's recent control ([`MixerState::touch`]); its menu's
 //! `Unlink from MIDI CC` follows the channel's `CCLK`.
 //!
-//! The level in dB (#133, a Honeydew addition), in 8 pt at every fader height: under a tall fader, half way between
-//! its track's bottom and the knob ([`readout_at`]), else in a strip under a shorter fader ([`fader_and_readout`]).
+//! The level in dB (#133, a Honeydew addition), in 12 pt where the strip is wide enough for it ([`readout_galley`]),
+//! half way between the fader's track bottom and the knob ([`readout_at`]); a short fader leaves a strip for it
+//! ([`fader_and_readout`]).
 //! The name slot always shows the name, the master's too.
 //!
 //! The master's live peak (#143, a Honeydew addition, [`Peak`]): its name slot turns the record red once the peak goes
@@ -41,8 +42,8 @@ use crate::ui::widgets::{self, Button, Control, ParamMenu, Pill};
 
 /// Strip width in U, which is also the scroll unit (the wheel's step).
 pub const STRIP_W: f32 = 4.0;
-/// The least room under a fader's cap (U) that shows its level in dB: the 8 pt readout's size.
-const DB_ROOM: f32 = 0.5;
+/// The least room under a fader's cap (U) that shows its level in dB: about the 12 pt readout's height.
+const DB_ROOM: f32 = 0.75;
 /// How long the master's peak readout holds a peak (s) before it falls.
 const PEAK_HOLD: f64 = 1.0;
 
@@ -158,19 +159,30 @@ fn fader_and_readout(r: Rect, m: &Metrics) -> (Rect, Rect) {
     r.split_top_bottom_at_y(split)
 }
 
-/// Where the dB readout's centre goes for a fader in `fader` at level `v` with its readout room `room`
-/// ([`fader_and_readout`]): under a tall fader, half way between the track's bottom end and the slot's bottom (the
-/// knob's top), unless the cap reaches down there, then just under the cap's lowest place; else `room`'s centre.
-fn readout_at(fader: Rect, room: Rect, v: f32, m: &Metrics) -> Pos2 {
-    if room.bottom() != fader.bottom() {
-        return room.center();
-    }
-    let y = m.round_px((widgets::fader_track(fader, m).bottom() + room.bottom()) / 2.0);
-    if widgets::fader_cap(fader, v, m).bottom() <= y - m.u(DB_ROOM) / 2.0 {
-        pos2(room.center().x, y)
-    } else {
-        room.center()
-    }
+/// Where the centre of a dB readout `h` tall goes for a fader in `fader` at level `v` with its readout room `room`
+/// ([`fader_and_readout`]): half way between the track's bottom end and the slot's bottom (the knob's top), moved
+/// down below the cap where it reaches there, and never past the slot's bottom.
+fn readout_at(fader: Rect, room: Rect, v: f32, h: f32, m: &Metrics) -> Pos2 {
+    let mid = (widgets::fader_track(fader, m).bottom() + room.bottom()) / 2.0;
+    let below_cap = widgets::fader_cap(fader, v, m).bottom() + h / 2.0;
+    let y = mid.max(below_cap).min(room.bottom() - h / 2.0);
+    pos2(room.center().x, m.round_px(y))
+}
+
+/// The readout's font: the largest of 12, 10 and 8 pt that keeps `text` inside the strip, with its galley.
+fn readout_galley(
+    painter: &eframe::egui::Painter,
+    text: &str,
+    color: eframe::egui::Color32,
+    m: &Metrics,
+) -> std::sync::Arc<eframe::egui::Galley> {
+    let room = m.u(STRIP_W - 0.4);
+    let lay = |size| painter.layout_no_wrap(text.to_owned(), m.font_id(size), color);
+    [FontSize::Pt12, FontSize::Pt10]
+        .into_iter()
+        .map(lay)
+        .find(|g| g.size().x <= room)
+        .unwrap_or_else(|| lay(FontSize::Pt8))
 }
 
 /// The rects (device pixels) of the parts a strip in `rect_px` shows, in drawing order, spacers left out.
@@ -310,10 +322,11 @@ pub fn show(
                         ui.painter().rect_filled(bar, 0.0, color);
                     }
                     let text = CHANNEL_PARAMS[0].display_text(params[0]);
-                    let font = m.font_id(FontSize::Pt8);
-                    let at = readout_at(fader, room, params[0], m);
-                    ui.painter()
-                        .text(at, Align2::CENTER_CENTER, text, font, color);
+                    let galley = readout_galley(ui.painter(), &text, color, m);
+                    let at = readout_at(fader, room, params[0], galley.size().y, m);
+                    let rect = Align2::CENTER_CENTER.anchor_size(at, galley.size());
+                    let min = pos2(m.round_px(rect.left()), m.round_px(rect.top()));
+                    ui.painter().galley(min, galley, color);
                     changed
                 }
                 // The pan on the ring.
