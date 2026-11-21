@@ -530,4 +530,3 @@ fn shift_ctrl_t_mid_drag_closes_the_tempo_dialog_and_ends_the_drag_as_one_edit()
     rig.frame(z(Modifiers::SHIFT));
     assert_eq!(rig.app.song.tempo_bpm, 120.25);
 }
-
