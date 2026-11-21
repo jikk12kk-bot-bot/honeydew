@@ -171,5 +171,4 @@ mod tests {
             assert!((trace_y(p, v) - y).abs() < 1e-3, "{v}");
         }
     }
-
 }
