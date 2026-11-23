@@ -115,7 +115,7 @@ diff -ruN a/vendor/lemon-studio/lemon-drum-sampler/src/dsp.rs b/vendor/lemon-stu
 diff -ruN a/vendor/lemon-studio/lemon-drum-sampler/src/lib.rs b/vendor/lemon-studio/lemon-drum-sampler/src/lib.rs
 --- a/vendor/lemon-studio/lemon-drum-sampler/src/lib.rs
 +++ b/vendor/lemon-studio/lemon-drum-sampler/src/lib.rs
-@@ -204,7 +204,6 @@
+@@ -206,7 +206,6 @@
              return ProcessStatus::Normal;
          }
          let mut at = 0;
@@ -123,7 +123,7 @@ diff -ruN a/vendor/lemon-studio/lemon-drum-sampler/src/lib.rs b/vendor/lemon-stu
          while let Some(ev) = ctx.next_event() {
              let t = (ev.timing() as usize).min(len);
              if t > at {
-@@ -217,16 +216,15 @@
+@@ -219,16 +218,15 @@
                  NoteEvent::Choke { .. } | NoteEvent::MidiCC { cc: 120 | 123, .. } => self.engine.all_off(),
                  _ => {}
              }
@@ -229,7 +229,7 @@ diff -ruN a/vendor/lemon-studio/lemon-parametric-eq-2/src/analyzer.rs b/vendor/l
 diff -ruN a/vendor/lemon-studio/lemon-parametric-eq-2/src/editor.rs b/vendor/lemon-studio/lemon-parametric-eq-2/src/editor.rs
 --- a/vendor/lemon-studio/lemon-parametric-eq-2/src/editor.rs
 +++ b/vendor/lemon-studio/lemon-parametric-eq-2/src/editor.rs
-@@ -1133,7 +1133,7 @@
+@@ -1155,7 +1155,7 @@
      use os_ui::Canvas;
  
      use super::{Act, Btn, Logic, Mods};
@@ -238,7 +238,7 @@ diff -ruN a/vendor/lemon-studio/lemon-parametric-eq-2/src/editor.rs b/vendor/lem
      use crate::params::{self, EqParams, Opt};
      use crate::view::{self, Look, ViewState};
      use crate::Shared;
-@@ -1151,6 +1151,8 @@
+@@ -1173,6 +1173,8 @@
          palette: Palette,
          analyzer: Analyzer,
          scope_seen: u64,
@@ -247,7 +247,7 @@ diff -ruN a/vendor/lemon-studio/lemon-parametric-eq-2/src/editor.rs b/vendor/lem
          last_sig: u64,
          last_extra: u64,
          last_view: ViewState,
-@@ -1200,6 +1202,7 @@
+@@ -1222,6 +1224,7 @@
                  palette: os_plugkit::palette(),
                  analyzer: Analyzer::default(),
                  scope_seen: 0,
@@ -255,7 +255,7 @@ diff -ruN a/vendor/lemon-studio/lemon-parametric-eq-2/src/editor.rs b/vendor/lem
                  last_sig: 0,
                  last_extra: u64::MAX,
                  last_view: ViewState::default(),
-@@ -1294,10 +1297,19 @@
+@@ -1316,10 +1319,19 @@
              let mut dirty = self.logic.vals.expire();
              if let Some(look) = self.analyzer_look() {
                  let n = Analyzer::size_for(&look);
@@ -282,7 +282,7 @@ diff -ruN a/vendor/lemon-studio/lemon-parametric-eq-2/src/editor.rs b/vendor/lem
 diff -ruN a/vendor/lemon-studio/lemon-sampler/src/editor.rs b/vendor/lemon-studio/lemon-sampler/src/editor.rs
 --- a/vendor/lemon-studio/lemon-sampler/src/editor.rs
 +++ b/vendor/lemon-studio/lemon-sampler/src/editor.rs
-@@ -2775,7 +2775,8 @@
+@@ -2802,7 +2802,8 @@
                          let s = self.shared.whole();
                          if let (Some(s), Some(path)) = (s, file_dialog(&self.win, true)) {
                              let path = if path.to_ascii_lowercase().ends_with(".wav") { path } else { format!("{path}.wav") };
@@ -295,7 +295,7 @@ diff -ruN a/vendor/lemon-studio/lemon-sampler/src/editor.rs b/vendor/lemon-studi
 diff -ruN a/vendor/lemon-studio/lemon-sampler/src/lib.rs b/vendor/lemon-studio/lemon-sampler/src/lib.rs
 --- a/vendor/lemon-studio/lemon-sampler/src/lib.rs
 +++ b/vendor/lemon-studio/lemon-sampler/src/lib.rs
-@@ -544,7 +544,8 @@
+@@ -600,7 +600,8 @@
              return;
          }
          let (s, p) = (self.clone(), params.clone());
@@ -349,29 +349,25 @@ diff -ruN a/vendor/lemon-studio/lemon-slicer/src/dsp.rs b/vendor/lemon-studio/le
 diff -ruN a/vendor/lemon-studio/lemon-slicer/src/editor.rs b/vendor/lemon-studio/lemon-slicer/src/editor.rs
 --- a/vendor/lemon-studio/lemon-slicer/src/editor.rs
 +++ b/vendor/lemon-studio/lemon-slicer/src/editor.rs
-@@ -441,7 +441,8 @@
-                     m.add(MenuItem::item("Type in value..."), Cmd::TypeIn(id.clone()));
+@@ -461,6 +461,7 @@
+                     m.add(MenuItem::item("Enter value..."), Cmd::TypeIn(id.clone()));
                  }
                  m.sep(Cmd::None);
--                m.add(MenuItem::item("Create automation clip").enabled(self.hosted), Cmd::Automate(id.clone()));
 +                // Honeydew (vendored change): embedded in Honeydew, the app makes the clip.
-+                m.add(MenuItem::item("Create automation clip").enabled(self.hosted || cfg!(feature = "embed")), Cmd::Automate(id.clone()));
+                 m.add(MenuItem::item("Create automation clip").enabled(self.hosted || cfg!(feature = "embed")), Cmd::Automate(id.clone()));
              }
              MenuReq::Slicing => {
-                 let has_cues = self.state().path().to_lowercase().ends_with(".wav");
 diff -ruN a/vendor/lemon-studio/lemon-small-fx/src/editor.rs b/vendor/lemon-studio/lemon-small-fx/src/editor.rs
 --- a/vendor/lemon-studio/lemon-small-fx/src/editor.rs
 +++ b/vendor/lemon-studio/lemon-small-fx/src/editor.rs
-@@ -349,7 +349,8 @@
+@@ -368,6 +368,7 @@
                  m.add(MenuItem::item("Enter value..."), Cmd::TypeIn(id.clone()));
                  // Automation belongs to the host: offered when Lemon Studio hosts the editor (host link).
                  m.sep(Cmd::None);
--                m.add(MenuItem::item("Create automation clip").enabled(self.hosted), Cmd::Automate(id.clone()));
 +                // Honeydew (vendored change): embedded in Honeydew, the app makes the clip.
-+                m.add(MenuItem::item("Create automation clip").enabled(self.hosted || cfg!(feature = "embed")), Cmd::Automate(id.clone()));
+                 m.add(MenuItem::item("Create automation clip").enabled(self.hosted || cfg!(feature = "embed")), Cmd::Automate(id.clone()));
                  m.sep(Cmd::None);
                  m.add(MenuItem::item(&format!("About {}...", self.spec.name)), Cmd::About);
-                 m
 diff -ruN a/vendor/lemon-studio/os-dsp/src/lib.rs b/vendor/lemon-studio/os-dsp/src/lib.rs
 --- a/vendor/lemon-studio/os-dsp/src/lib.rs
 +++ b/vendor/lemon-studio/os-dsp/src/lib.rs
@@ -513,7 +509,7 @@ diff -ruN a/vendor/lemon-studio/os-engine/src/sample.rs b/vendor/lemon-studio/os
 diff -ruN a/vendor/lemon-studio/os-hostlink/src/lib.rs b/vendor/lemon-studio/os-hostlink/src/lib.rs
 --- a/vendor/lemon-studio/os-hostlink/src/lib.rs
 +++ b/vendor/lemon-studio/os-hostlink/src/lib.rs
-@@ -341,7 +341,10 @@
+@@ -346,7 +346,10 @@
  #[cfg(windows)]
  pub use win::{message, to_host, Link};
  
@@ -525,8 +521,8 @@ diff -ruN a/vendor/lemon-studio/os-hostlink/src/lib.rs b/vendor/lemon-studio/os-
  mod local {
      use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
      use std::sync::{Arc, Mutex, OnceLock, Weak};
-@@ -441,6 +444,35 @@
-         /// Plugin -> host (`Changed`, `Note`, `Automate`): queued for the host's next tick, which is woken. 1 when a host
+@@ -446,6 +449,35 @@
+         /// Plugin -> host (`Changed`, `Note`, `Automate`, `Edited`): queued for the host's next tick, which is woken. 1 when a host
          /// is there, 0 otherwise (as unanswered messages on Windows).
          pub fn to_host(&self, cmd: Cmd, arg: isize) -> isize {
 +            // Honeydew (vendored change): with `embed`, Honeydew answers `Automate` from an editor that keeps its own
@@ -561,7 +557,7 @@ diff -ruN a/vendor/lemon-studio/os-hostlink/src/lib.rs b/vendor/lemon-studio/os-
              if !self.hosted() {
                  return 0;
              }
-@@ -456,6 +488,36 @@
+@@ -461,6 +493,36 @@
  
      static REGISTRY: Mutex<Vec<(u64, Weak<Peer>)>> = Mutex::new(Vec::new());
      static QUEUE: Mutex<Vec<(u64, Cmd, isize)>> = Mutex::new(Vec::new());
@@ -598,7 +594,7 @@ diff -ruN a/vendor/lemon-studio/os-hostlink/src/lib.rs b/vendor/lemon-studio/os-
      static HOST_WAKER: OnceLock<fn()> = OnceLock::new();
  
      /// Host: how plugins wake its UI loop when they send something.
-@@ -538,6 +600,10 @@
+@@ -543,6 +605,10 @@
  
  #[cfg(not(windows))]
  pub use local::{set_host_waker, take_host_messages, Link, Peer};
@@ -1229,23 +1225,23 @@ diff -ruN a/vendor/lemon-studio/os-plugkit/src/embed.rs b/vendor/lemon-studio/os
 diff -ruN a/vendor/lemon-studio/os-plugkit/src/lib.rs b/vendor/lemon-studio/os-plugkit/src/lib.rs
 --- a/vendor/lemon-studio/os-plugkit/src/lib.rs
 +++ b/vendor/lemon-studio/os-plugkit/src/lib.rs
-@@ -20,14 +20,73 @@
+@@ -23,14 +23,73 @@
  pub mod x11;
- #[cfg(target_os = "macos")]
+ #[cfg(all(feature = "gui", target_os = "macos"))]
  pub mod mac;
--#[cfg(any(target_os = "linux", target_os = "macos"))]
-+#[cfg(any(target_os = "linux", target_os = "macos", feature = "embed"))]
+-#[cfg(all(feature = "gui", any(target_os = "linux", target_os = "macos")))]
++#[cfg(any(all(feature = "gui", any(target_os = "linux", target_os = "macos")), feature = "embed"))]
  pub mod input;
 +// Honeydew (vendored addition): the editors drawn into Honeydew's own window, on every platform.
 +#[cfg(feature = "embed")]
 +pub mod embed;
  
  /// The editor window of this platform where it runs the plugins' shared editor loop: `x11` on Linux, `mac` on macOS.
--#[cfg(target_os = "linux")]
-+#[cfg(all(target_os = "linux", not(feature = "embed")))]
+-#[cfg(all(feature = "gui", target_os = "linux"))]
++#[cfg(all(feature = "gui", target_os = "linux", not(feature = "embed")))]
  pub use x11 as gui;
--#[cfg(target_os = "macos")]
-+#[cfg(all(target_os = "macos", not(feature = "embed")))]
+-#[cfg(all(feature = "gui", target_os = "macos"))]
++#[cfg(all(feature = "gui", target_os = "macos", not(feature = "embed")))]
  pub use mac as gui;
 +/// Honeydew (vendored change): with `embed`, Honeydew's window.
 +#[cfg(feature = "embed")]
@@ -1342,7 +1338,7 @@ diff -ruN a/vendor/lemon-studio/tesla/src/editor.rs b/vendor/lemon-studio/tesla/
      let _ = std::fs::create_dir_all(&dir);
      let stem = file_stem(title);
      let mut p = dir.join(format!("{stem}.wav"));
-@@ -2539,7 +2541,8 @@
+@@ -2577,7 +2579,8 @@
          if !path.to_ascii_lowercase().ends_with(".wav") {
              path.push_str(".wav");
          }
@@ -1352,7 +1348,7 @@ diff -ruN a/vendor/lemon-studio/tesla/src/editor.rs b/vendor/lemon-studio/tesla/
              Ok(()) => {
                  self.doc(|d| d.path = path.clone());
                  self.hint = format!("Saved {}", Path::new(&path).file_name().map_or(path.clone().into(), |f| f.to_string_lossy()));
-@@ -3454,7 +3457,9 @@
+@@ -3498,7 +3501,9 @@
                      }
                      Act::Send(path, to) => {
                          os_hostlink::post_audio(&path.to_string_lossy(), to);
@@ -1363,7 +1359,7 @@ diff -ruN a/vendor/lemon-studio/tesla/src/editor.rs b/vendor/lemon-studio/tesla/
                          if !ok {
                              os_hostlink::take_audio();
                          }
-@@ -3464,7 +3469,10 @@
+@@ -3508,7 +3513,10 @@
                      Act::Score(notes) => {
                          let n = notes.len();
                          let token = os_hostlink::post_notes(notes);
@@ -1378,7 +1374,7 @@ diff -ruN a/vendor/lemon-studio/tesla/src/editor.rs b/vendor/lemon-studio/tesla/
 diff -ruN a/vendor/lemon-studio/tesla/src/lib.rs b/vendor/lemon-studio/tesla/src/lib.rs
 --- a/vendor/lemon-studio/tesla/src/lib.rs
 +++ b/vendor/lemon-studio/tesla/src/lib.rs
-@@ -373,14 +373,13 @@
+@@ -374,14 +374,13 @@
      fn sync(&mut self, s: &Shared) {
          let ev = s.env_ver.load(Ordering::Acquire);
          if ev != self.env_ver || self.env.is_none() {
@@ -1400,7 +1396,7 @@ diff -ruN a/vendor/lemon-studio/tesla/src/lib.rs b/vendor/lemon-studio/tesla/src
                  }
              }
          }
-@@ -388,14 +387,11 @@
+@@ -389,14 +388,11 @@
          if v == self.ver {
              return;
          }
@@ -1419,7 +1415,7 @@ diff -ruN a/vendor/lemon-studio/tesla/src/lib.rs b/vendor/lemon-studio/tesla/src
              let n = self.frames();
              if n == 0 {
                  self.playing = false;
-@@ -610,6 +606,11 @@
+@@ -612,6 +608,11 @@
              s.capturing.store(false, Ordering::Relaxed);
          }
  

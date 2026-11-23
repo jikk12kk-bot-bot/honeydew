@@ -10,6 +10,10 @@ publish = false
 doctest = false
 
 [features]
+# Upstream's: the editors' native windows, popups and type-in boxes (`win`, `x11`, `mac`). Honeydew keeps their
+# dependencies unconditional; embedded, the editors draw into Honeydew's window whatever this says.
+default = ["gui"]
+gui = []
 # Honeydew (vendored addition): the editors draw into Honeydew's own window (`src/embed.rs`) on every platform, and
 # Honeydew takes their host link's `Automate` (`embed::take_automate`).
 embed = ["os-hostlink/embed"]
