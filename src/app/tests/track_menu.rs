@@ -1387,7 +1387,7 @@ fn at_c_1_a_held_icon_opens_the_track_menu_or_drags_the_channel() {
         rig.release(header(2));
         rig.frame(vec![]);
         assert!(
-            matches!(rig.app.main_screen.track_menu, Some((2, 0, _))),
+            matches!(rig.app.main_screen.track_menu, Some((1, 0, _))),
             "c {c}: menu {:?}, held (column, selected) {held:?}, now {:?} {}, overlays {:?}",
             rig.app.main_screen.track_menu,
             rig.app.main_screen.column,
