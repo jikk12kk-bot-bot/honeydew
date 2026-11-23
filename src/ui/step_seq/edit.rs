@@ -354,6 +354,28 @@ pub fn delete_row(lanes: &mut [Lane], pad: u8) {
     }
 }
 
+/// Where row `pad` goes when row `from` moves to `to`: `from` to `to`, the rows between one toward `from`'s place.
+pub fn moved_row(pad: u8, from: u8, to: u8) -> u8 {
+    match pad {
+        p if p == from => to,
+        p if from < p && p <= to => p - 1,
+        p if to <= p && p < from => p + 1,
+        p => p,
+    }
+}
+
+/// A pad dragged by its row header from row `from` to row `to`: in every drum clip of the channel its hits go with it,
+/// and the rows between move one toward its old place ([`moved_row`]). The clips sound as they did.
+pub fn move_row(lanes: &mut [Lane], from: u8, to: u8) {
+    for events in drum_events(lanes) {
+        for e in events.iter_mut() {
+            if let Some(p) = pad_of(e) {
+                *e = with_pad(*e, moved_row(p, from, to));
+            }
+        }
+    }
+}
+
 /// The drum editor's Swing (regular grid): every hit moves to the audio crate's `apply_drum_swing` of its position in
 /// `from`, the clip's positions (one per event) before the swing edit. Playback plays the moved hits as they are; d is
 /// the subdivision (`TDIV` byte 0; 0 counts as 1). Nothing happens when `from` no longer matches the clip or the amount

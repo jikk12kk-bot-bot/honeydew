@@ -441,10 +441,19 @@ impl DrumGridView {
             self.covered,
         );
         let heads = (&mut self.current, &mut self.press, &mut self.fold);
-        if let Some((row, at)) =
-            step_seq::row_headers(ui, &painter, cx, id(), &l, pads, &self.levels, ink, heads)
-        {
+        let levels = &self.levels;
+        let headers = step_seq::row_headers(ui, &painter, cx, id(), &l, pads, levels, ink, heads);
+        if let Some((row, at)) = headers.menu {
             self.overlay = Some(Overlay::Menu { row, at });
+        }
+        // A held header has the touch: the rows do not scroll under its drag; its drop moves the pad.
+        if headers.held {
+            self.scroller.yield_touch();
+        }
+        if let Some((from, to)) = headers.moved
+            && let (Ok(from), Ok(to)) = (u8::try_from(from), u8::try_from(to))
+        {
+            action = Some(StepAction::Move { from, to });
         }
         // The marquee: a square growing while a touch is held on empty grid, then the box.
         let marquee = match self.gesture {
@@ -1388,6 +1397,13 @@ impl DrumGridView {
             StepAction::Clone { pad } => {
                 steps::clone_row(&mut ch.lanes, pad);
                 self.current = usize::from(pad) + 1;
+                return;
+            }
+            StepAction::Move { from, to } => {
+                steps::move_row(&mut ch.lanes, from, to);
+                if let Ok(current) = u8::try_from(self.current) {
+                    self.current = usize::from(steps::moved_row(current, from, to));
+                }
                 return;
             }
             StepAction::Delete { pad } => {

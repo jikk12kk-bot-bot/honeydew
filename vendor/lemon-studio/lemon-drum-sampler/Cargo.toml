@@ -10,6 +10,9 @@ publish = false
 doctest = false
 
 [features]
+# Upstream's: the plugin's editor and the windows it opens in (off: a plugin with no editor).
+default = ["editor"]
+editor = ["os-plugkit/gui"]
 # Compiled into Lemon Studio: no exported plugin entry points (they would clash with the other built-in plugins).
 linked = ["lemon-sampler/linked"]
 # Honeydew (vendored addition): the editor draws into Honeydew's own window (`os-plugkit`'s `embed`).

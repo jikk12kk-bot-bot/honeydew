@@ -2865,9 +2865,9 @@ pub fn unlink_loop(clip: &mut Clip) -> bool {
     true
 }
 
-/// `Combine`'s tracks: each notes track holding two or more of `clips`, with their ids, the earliest clip's first. A
-/// track whose merged clip would not fit what a file holds (as [`can_unlink`]: content positions within u32 ticks, at
-/// most [`MAX_UNLINKED`] plays) is left out.
+/// `Combine`'s tracks: each notes or drum track holding two or more of `clips`, with their ids, the earliest clip's
+/// first. A track whose merged clip would not fit what a file holds (as [`can_unlink`]: content positions within u32
+/// ticks, at most [`MAX_UNLINKED`] plays) is left out.
 fn combine_groups(song: &Song, clips: &[ClipRef]) -> Vec<(usize, usize, Vec<u32>)> {
     let mut groups: Vec<(usize, usize, Vec<u32>)> = Vec::new();
     for &r in clips {
@@ -2875,7 +2875,8 @@ fn combine_groups(song: &Song, clips: &[ClipRef]) -> Vec<(usize, usize, Vec<u32>
             .channels
             .get(r.channel)
             .and_then(|c| c.lanes.get(r.lane));
-        if notes.is_none_or(|l| l.kind != LaneKind::Notes) || find(song, r).is_none() {
+        let combines = |l: &Lane| matches!(l.kind, LaneKind::Notes | LaneKind::Drums);
+        if notes.is_none_or(|l| !combines(l)) || find(song, r).is_none() {
             continue;
         }
         match groups
@@ -2913,14 +2914,16 @@ fn combine_groups(song: &Song, clips: &[ClipRef]) -> Vec<(usize, usize, Vec<u32>
     groups
 }
 
-/// `Combine` applies: some notes track holds two or more of `clips` ([`combine_groups`]).
+/// `Combine` applies: some notes or drum track holds two or more of `clips` ([`combine_groups`]).
 pub fn can_combine(song: &Song, clips: &[ClipRef]) -> bool {
     !combine_groups(song, clips).is_empty()
 }
 
-/// `Combine`: on each notes track holding two or more of `clips`, those clips become one: the earliest (its id, name
-/// and flags) from the earliest start to the latest end, every note playing where it played (each clip's passes
-/// written out, as `Unlink loop` does), one pass as long as the clip. Returns the combined clips.
+/// `Combine`: on each notes or drum track holding two or more of `clips`, those clips become one: the earliest (its id,
+/// name and flags) from the earliest start to the latest end, every note and hit playing where it played (each clip's
+/// passes written out, as `Unlink loop` does), one pass as long as the clip. A note (or held hit) that ran past the end
+/// of its clip, where playback cut it, ends there: a clip cut short stays silent after its cut. Returns the combined
+/// clips.
 pub fn combine(song: &mut Song, clips: &[ClipRef]) -> Vec<ClipRef> {
     let mut combined = Vec::new();
     for (channel, lane, ids) in combine_groups(song, clips) {
@@ -2933,9 +2936,13 @@ pub fn combine(song: &mut Song, clips: &[ClipRef]) -> Vec<ClipRef> {
         let mut events = Vec::new();
         for clip in lane_ref.clips.iter().filter(|c| ids.contains(&c.id)) {
             end = end.max(end_tick(clip));
+            let clip_end = end_tick(clip);
             let plays =
-                clip.events_in_song_range(u64::from(clip.start_tick), end_tick(clip).ceil() as u64);
-            events.extend(plays.map(|(tick, e)| at_pos(*e, (tick - u64::from(start)) as u32)));
+                clip.events_in_song_range(u64::from(clip.start_tick), clip_end.ceil() as u64);
+            events.extend(plays.map(|(tick, e)| {
+                let room = (clip_end - tick as f64) / f64::from(PPQ);
+                at_pos(cut_at(*e, room), (tick - u64::from(start)) as u32)
+            }));
         }
         events.sort_by_key(Event::pos);
         lane_ref
@@ -2958,6 +2965,16 @@ pub fn combine(song: &mut Song, clips: &[ClipRef]) -> Vec<ClipRef> {
         });
     }
     combined
+}
+
+/// `event` with its length (a note's, a drum hit's) at most `room` beats: where its clip's end cut it in playback.
+fn cut_at(mut event: Event, room: f64) -> Event {
+    if let Event::Note { len_beats, .. } | Event::Drum { len_beats, .. } = &mut event
+        && *len_beats > room
+    {
+        *len_beats = room.max(0.0);
+    }
+    event
 }
 
 /// `event` moved to content position `at`.
@@ -4044,6 +4061,89 @@ mod tests {
         );
         assert_eq!(plays(&clips[..1]), before);
         assert_eq!(song.channels[2].lanes[0].clips.len(), 1, "audio untouched");
+    }
+
+    /// `Combine` takes a drum track's clips too, and a note (or held hit) that ran past the cut end of its clip, which
+    /// playback cut there, ends at that cut: the combined clip is silent where the cut clip was.
+    #[test]
+    fn combine_merges_drum_clips_too_and_ends_each_note_at_its_clips_cut() {
+        let mut song = Song::default();
+        song.add_channel(ChannelKind::Synth(crate::song::SynthKind::MiniSynth));
+        song.add_channel(ChannelKind::Drums);
+        let long = |pos, len_beats| Event::Note {
+            pos,
+            len_beats,
+            key: 60,
+            velocity: Event::DEFAULT_VELOCITY,
+            pan: Event::DEFAULT_PAN,
+            slide: false,
+        };
+        let hit = |pos, pad, len_beats| Event::Drum {
+            pos,
+            len_beats,
+            pad,
+            velocity: Event::DEFAULT_VELOCITY,
+            pan: Event::DEFAULT_PAN,
+            value: Event::DEFAULT_PITCH,
+            repeat: 0,
+        };
+        // A bar-long clip cut to two beats, whose second note runs to the bar's end; then a clip at beat 4.
+        let mut a = clip(0, 2.0, 4.0, 0.0);
+        a.events = vec![long(0, 1.0), long(128, 3.0)];
+        let mut b = clip(512, 4.0, 4.0, 0.0);
+        b.events = vec![long(0, 4.0)];
+        // The same on the drum track: a held hit past the cut, then a later clip.
+        let mut c = clip(0, 2.0, 4.0, 0.0);
+        c.events = vec![hit(0, 0, 0.0), hit(128, 1, 3.0)];
+        let mut d = clip(512, 4.0, 4.0, 0.0);
+        d.events = vec![hit(0, 2, 0.0)];
+        for (channel, pair) in [(1, [a, b]), (2, [c, d])] {
+            let lane = &mut song.channels[channel].lanes[0];
+            lane.clips.clear();
+            for (id, mut clip) in (1..).zip(pair) {
+                clip.id = id;
+                lane.clips.push(clip);
+            }
+            lane.last_clip_id = 2;
+        }
+        let refs: Vec<ClipRef> = [1, 2]
+            .into_iter()
+            .flat_map(|channel| {
+                [1, 2].map(|id| ClipRef {
+                    channel,
+                    lane: 0,
+                    id,
+                })
+            })
+            .collect();
+        assert!(can_combine(&song, &refs));
+        assert_eq!(combine(&mut song, &refs), [refs[0], refs[2]]);
+        let combined = |channel: usize| song.channels[channel].lanes[0].clips.clone();
+        let (notes, drums) = (combined(1), combined(2));
+        assert_eq!((notes.len(), drums.len()), (1, 1));
+        let span = |c: &Clip| {
+            (
+                c.start_tick,
+                c.visible_len_beats,
+                c.loop_len_beats,
+                c.offset_beats,
+            )
+        };
+        assert_eq!(
+            span(&notes[0]),
+            (0, 8.0, 8.0, 0.0),
+            "from the first clip's start"
+        );
+        assert_eq!(span(&drums[0]), (0, 8.0, 8.0, 0.0));
+        // The second note ends at the cut (beat 2), not at beat 4.
+        assert_eq!(
+            notes[0].events,
+            [long(0, 1.0), long(128, 1.0), long(512, 4.0)]
+        );
+        assert_eq!(
+            drums[0].events,
+            [hit(0, 0, 0.0), hit(128, 1, 1.0), hit(512, 2, 0.0)]
+        );
     }
 
     #[test]

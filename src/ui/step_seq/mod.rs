@@ -279,6 +279,12 @@ pub enum StepAction {
     Delete {
         pad: u8,
     },
+    /// A row header held and dragged from row `from` to row `to`. Song: the row's hits go with it, the rows between
+    /// move one toward its old place ([`edit::move_row`]). Kit: the host moves the pad, which keeps its id.
+    Move {
+        from: u8,
+        to: u8,
+    },
     /// Kit only: `Set Name`'s custom pad name for the pad, "" to remove it.
     Rename {
         pad: u8,
@@ -740,9 +746,11 @@ fn header_pulse(ui: &Ui, id: Id, down: bool) -> f32 {
 /// have no fill and channel-coloured texts. The mixer's strip row right of each header is `moduleFill`, a device pixel
 /// short of the row's bottom edge (the strips' controls end there too, so the rows read as separate bands). The level
 /// meters show `levels` (per row, its peaks L and R) and follow the drum mixer's `fold`. A tap on the current row's
-/// header folds the drum mixer in or out; on another's, makes it current. Returns the row whose menu a long press (or
-/// right click) asked for, and where.
-/// The step sequencer and the free note-grid ([`crate::ui::drum_grid`]) each keep their own row, press and fold.
+/// header folds the drum mixer in or out; on another's, makes it current. A hold (300 ms) makes the row current;
+/// released without dragging it asks for the row's menu at the release, and a pad's header dragged vertically moves the
+/// pad, a line showing where it drops, the drop asking for the move (as the track headers do). A right click asks for
+/// the menu at once. The step sequencer and the free note-grid ([`crate::ui::drum_grid`]) each keep their own row, press
+/// and fold.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn row_headers(
     ui: &Ui,
@@ -754,15 +762,16 @@ pub(crate) fn row_headers(
     levels: &[[f32; 2]],
     ink: egui::Color32,
     (current, press, fold): (&mut usize, &mut bool, &mut Fold),
-) -> Option<(usize, Pos2)> {
+) -> RowHeaders {
     let (colors, m) = (&cx.theme.colors, cx.m);
     let module_fill = colors.module_fill.to_color32();
-    let mut menu = None;
+    let mut out = RowHeaders::default();
+    let hold_id = id.with("row hold");
     for row in l.visible_rows() {
         let header = l.header(row);
         let selected = row == *current;
         let mut response = ui.interact(header, id.with(("row", row)), Sense::click());
-        let long = gesture::long_press(ui, &mut response, m);
+        let p = gesture::press(ui, &mut response, m, gesture::vertical);
         // The strip row right of the header, under the mixer's page: `moduleFill`, on which an off strip disc is unseen.
         // It ends a device pixel short, where the strips' own controls already do: the grid shows through, so each
         // row's strip reads as its own band instead of one block of rows running together.
@@ -809,15 +818,84 @@ pub(crate) fn row_headers(
             }
             *current = row;
         }
-        if response.clicked_by(egui::PointerButton::Secondary) || long {
+        if p.long {
             *current = row;
-            menu = Some((
+            let origin = ui.input(|i| i.pointer.press_origin());
+            let hold = origin.map(|origin| RowHold {
+                row,
+                origin,
+                to: None,
+            });
+            ui.data_mut(|d| d.insert_temp(hold_id, hold));
+        }
+        let hold = ui
+            .data(|d| d.get_temp::<Option<RowHold>>(hold_id))
+            .flatten();
+        if let Some(mut hold) = hold.filter(|h| h.row == row && (p.held || p.long_released)) {
+            out.held |= p.held;
+            // The interact position: a finger's lift clears the latest one in its release frame.
+            let pos = ui
+                .input(|i| i.pointer.interact_pos())
+                .unwrap_or(hold.origin);
+            let dy = pos.y - hold.origin.y;
+            let pads = pads.count();
+            if row < pads && (hold.to.is_some() || dy.abs() > m.u(gesture::CALM_U)) {
+                // The row's place plus the finger's travel in whole rows, among the pads.
+                let rows = (dy / header.height().max(1.0)).round() as isize;
+                let to = (row as isize + rows).clamp(0, pads as isize - 1) as usize;
+                hold.to = Some(to);
+                ui.ctx().request_repaint();
+                if p.long_released {
+                    out.moved = (to != row).then_some((row, to));
+                } else if to != row {
+                    // Where it drops: a line over the header and the strip, at the row's far edge.
+                    let target = l.header(to);
+                    let y = if to > row {
+                        target.bottom()
+                    } else {
+                        target.top()
+                    };
+                    let line = Rect::from_x_y_ranges(
+                        header.left()..=l.column_right(),
+                        y - m.t()..=y + m.t(),
+                    );
+                    painter.rect_filled(line, 0.0, colors.text.to_color32());
+                }
+            } else if p.long_released {
+                out.menu = Some((row, pos));
+            }
+            let kept = (!p.long_released).then_some(hold);
+            ui.data_mut(|d| d.insert_temp(hold_id, kept));
+        }
+        if response.clicked_by(egui::PointerButton::Secondary) {
+            *current = row;
+            out.menu = Some((
                 row,
                 response.interact_pointer_pos().unwrap_or(header.center()),
             ));
         }
     }
-    menu
+    out
+}
+
+/// What the row headers' gestures asked for this frame ([`row_headers`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct RowHeaders {
+    /// The row whose menu a hold released in place (or a right click) asked for, and where.
+    pub menu: Option<(usize, Pos2)>,
+    /// A pad's header held and dragged: from its row to the row it dropped on.
+    pub moved: Option<(usize, usize)>,
+    /// A header is held after its long press: the touch is the header's, not the rows' scroll.
+    pub held: bool,
+}
+
+/// A row header held past its long press: its row, where the press went down, and the row it would drop on once it
+/// was dragged.
+#[derive(Clone, Copy, Debug)]
+struct RowHold {
+    row: usize,
+    origin: Pos2,
+    to: Option<usize>,
 }
 
 /// The `+` add-drum button in `l`, with id `id`: icon `AddLarge` in `text`, dimmed and inert once the kit's `pads` are
@@ -1135,10 +1213,22 @@ impl StepSeqView {
         }
         // Row headers: pad name over sample name, and the long press's row menu.
         let heads = (&mut self.selected, &mut self.press, &mut self.fold);
-        if let Some((row, at)) =
-            row_headers(ui, &painter, cx, id(), &l, pads, &self.levels, ink, heads)
-        {
+        let headers = row_headers(ui, &painter, cx, id(), &l, pads, &self.levels, ink, heads);
+        if let Some((row, at)) = headers.menu {
             self.overlay = Some(Overlay::Menu { row, at });
+        }
+        // A held header has the touch: the rows do not scroll under its drag.
+        if headers.held {
+            self.scroller.yield_touch();
+        }
+        let moved = headers.moved.and_then(|(from, to)| {
+            Some(StepAction::Move {
+                from: u8::try_from(from).ok()?,
+                to: u8::try_from(to).ok()?,
+            })
+        });
+        if moved.is_some() {
+            action = moved;
         }
 
         // The marquee: a square growing while a touch is held on an empty step, then the box.
@@ -1791,6 +1881,15 @@ impl StepSeqView {
                 self.selection.clear();
                 edit::clone_row(&mut channel.lanes, pad);
                 self.selected = usize::from(pad) + 1;
+                return;
+            }
+            StepAction::Move { from, to } => {
+                self.selection.clear();
+                edit::move_row(&mut channel.lanes, from, to);
+                let selected = u8::try_from(self.selected).ok();
+                if let Some(row) = selected.map(|s| edit::moved_row(s, from, to)) {
+                    self.selected = usize::from(row);
+                }
                 return;
             }
             StepAction::Delete { pad } => {

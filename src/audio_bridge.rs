@@ -75,7 +75,8 @@ impl SongAudioBridge {
                     )
                     .map_err(SongAudioError::Playback)?;
             }
-            for module in &channel.rack.modules {
+            // The channel's own rack's effects first, then its drum pads' ([`honeydew_audio::playback::PlaybackChannel::chain`]).
+            for module in channel.engine_modules() {
                 if module.type_id == crate::song::plugin::PLUGIN_EFFECT {
                     add_plugin_effect(&mut audio, song, channel_index, module, sample_rate)?;
                     continue;

@@ -74,7 +74,8 @@ fn process_rack(
         module.process(left, right, context);
         done = module.effects_above;
     }
-    audio.process_effects(done..usize::MAX, left, right, context)
+    // The channel's own rack ends where its drum pads' own racks start: the pads ran theirs.
+    audio.process_effects(done..audio.chain(), left, right, context)
 }
 
 /// Channel param 4: Pitch Bend.
@@ -354,15 +355,31 @@ impl SongAudioEngine {
                 samples,
                 song.time_sig,
             );
-            // Each instrument runs after the effects above it.
+            // Each instrument runs after the effects above it, in the channel's own rack.
             let mut effects = 0;
-            for module in &channel.rack.modules {
+            for module in channel.rack.chain(None) {
                 let id = module.instance_id;
                 if bridge.audio.effect(channel_index, id).is_some() {
                     effects += 1;
                 } else if let Some((_, instrument)) = modules.iter_mut().find(|(i, _)| *i == id) {
                     instrument.effects_above = effects;
                 }
+            }
+            // The drum pads' own racks follow the channel's in its effects (`SongAudioBridge::new`): each pad runs its
+            // run of them on its own sound.
+            bridge.audio.set_chain(channel_index, effects);
+            let kit = kits.last_mut().and_then(Option::as_mut);
+            if let (Some(kit), Some(drums)) = (kit, &channel.drum_kit) {
+                let mut at = effects;
+                let runs = (drums.slots.iter()).map(|slot| {
+                    let own = channel.rack.chain(Some(slot.file.id));
+                    let count = own
+                        .filter(|m| bridge.audio.effect(channel_index, m.instance_id).is_some())
+                        .count();
+                    at += count;
+                    at - count..at
+                });
+                kit.set_pad_effects(runs.collect());
             }
             for module in &channel.rack.modules {
                 let id = module.instance_id;
@@ -813,8 +830,9 @@ impl SongAudioEngine {
         };
         // Pads, clips and input first, into their channel's (or a pad's send target's) buffer; then each channel's rack
         // runs on it in order, in place, every instrument adding at its own position.
+        let processors = self.audio.channels_mut();
         for kit in self.kits.iter_mut().flatten() {
-            kit.render(&mut self.buffers);
+            kit.render(&mut self.buffers, processors, context);
         }
         let speed = self.speed();
         for (clips, buffer) in self.clips.iter_mut().zip(&mut self.buffers) {

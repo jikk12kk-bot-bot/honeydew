@@ -305,6 +305,46 @@ fn clone_and_delete_shift_the_rows_of_every_drum_clip() {
 }
 
 #[test]
+fn a_moved_row_takes_its_hits_and_the_rows_between_close_up() {
+    assert_eq!(
+        (0..5).map(|p| moved_row(p, 1, 3)).collect::<Vec<_>>(),
+        [0, 3, 1, 2, 4]
+    );
+    assert_eq!(
+        (0..5).map(|p| moved_row(p, 3, 1)).collect::<Vec<_>>(),
+        [0, 2, 3, 1, 4]
+    );
+    assert_eq!(
+        (0..3).map(|p| moved_row(p, 2, 2)).collect::<Vec<_>>(),
+        [0, 1, 2]
+    );
+    assert_eq!(moved_row(255, 255, 0), 0);
+    let mut lane = Lane::new(LaneKind::Drums);
+    let clip = lane.add_clip(0, 4.0);
+    clip.events = (0..3)
+        .map(|pad| Event::Drum {
+            pos: 0,
+            len_beats: 0.0,
+            pad,
+            velocity: 200 + pad,
+            pan: Event::DEFAULT_PAN,
+            value: Event::DEFAULT_PITCH,
+            repeat: 0,
+        })
+        .collect();
+    let mut lanes = vec![lane];
+    move_row(&mut lanes, 0, 2);
+    // Each hit keeps its velocity (its own sound) and goes to its pad's new row.
+    let pads: Vec<_> = (lanes[0].clips[0].events.iter())
+        .map(|e| match *e {
+            Event::Drum { pad, velocity, .. } => (velocity, pad),
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(pads, [(200, 2), (201, 0), (202, 1)]);
+}
+
+#[test]
 fn rows_cover_the_kit_and_every_pad_in_use() {
     let mut lane = Lane::new(LaneKind::Drums);
     assert_eq!(row_count(&lane, 0), 0);

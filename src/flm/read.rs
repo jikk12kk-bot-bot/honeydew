@@ -210,6 +210,8 @@ pub fn read_rack(
         module.instance_id = last;
         // Its sidechain named a channel of the song the rack was saved from.
         module.sidechain = None;
+        // So did its drum pad: a rack preset loads into the rack it is loaded into.
+        module.pad = None;
     }
     *last_instance_id = last;
     Ok(modules)
@@ -870,6 +872,8 @@ impl Reader {
                 }
                 // Honeydew's own sidechain (`flm::write`).
                 b"HDSc" => module.sidechain = child.reader().i32().ok(),
+                // Honeydew's own drum pad rack (`flm::write`).
+                b"HDPd" => module.pad = child.reader().u32().ok(),
                 b"PSTA" if plugin::is_plugin(type_id) => {
                     self.charge(child.payload.len(), &child.path)?;
                     let plugin = module.file.plugin.get_or_insert_default();

@@ -35,6 +35,9 @@ struct EffectInstance {
 pub struct PlaybackChannel {
     parameters: [f32; 134],
     effects: Vec<EffectInstance>,
+    /// How many of `effects`, from the first, are the channel's own rack: those after it are its drum pads' own racks,
+    /// which the pads run on themselves ([`Self::process_effects`] on their positions) before the channel's rack.
+    chain: usize,
     /// The sidechain sources its effects read: each one's channel index and its rack output this block
     /// ([`Self::take_key`]).
     keys: Vec<(usize, OwnedStereoBuffer)>,
@@ -57,6 +60,7 @@ impl AudioPlayback {
                         parameters
                     },
                     effects: Vec::new(),
+                    chain: usize::MAX,
                     keys: Vec::new(),
                 })
                 .collect(),
@@ -181,7 +185,16 @@ impl AudioPlayback {
         right: &mut [f32],
         context: ProcessContext,
     ) -> Result<(), PlaybackError> {
-        self.process_effects(channel, 0..usize::MAX, left, right, context)
+        let chain = self.channels.get(channel).map_or(0, |c| c.chain);
+        self.process_effects(channel, 0..chain, left, right, context)
+    }
+
+    /// Ends channel `channel`'s own rack after its first `chain` effects ([`PlaybackChannel::chain`]); the rest are its
+    /// drum pads'. An unknown channel is ignored.
+    pub fn set_chain(&mut self, channel: usize, chain: usize) {
+        if let Some(channel) = self.channels.get_mut(channel) {
+            channel.chain = chain;
+        }
     }
 
     /// [`Self::process_channel`] for only the channel's effects at positions `effects` (0 is its first, in rack order):
@@ -388,6 +401,11 @@ impl AudioPlayback {
 }
 
 impl PlaybackChannel {
+    /// How many effects, from the first, are the channel's own rack; the rest are its drum pads' own racks.
+    pub fn chain(&self) -> usize {
+        self.chain
+    }
+
     /// Channel `source`'s rack output this block, `left` and `right`, into its key buffer if this channel's effects read
     /// it: once the source has run, before its strip (fader, pan, mute) and before this channel runs. Allocates nothing;
     /// a block longer than the key buffer keys nothing.

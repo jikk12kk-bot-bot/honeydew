@@ -755,15 +755,21 @@ impl Slots {
                     rack::show(&mut self.rack, ui, app, *channel, &mut self.clipboard, held)
                 })
             }
-            Overlay::ModulesBrowser { channel, at } => modules_browser::show(
-                &mut self.modules_browser,
-                &mut self.preset_picker,
-                ui,
-                app,
-                *channel,
-                *at,
-                &self.clipboard,
-            ),
+            // On the rack the rack shows: a drum pad's own, else the channel's ([`rack::State::pad`]).
+            Overlay::ModulesBrowser { channel, at } => {
+                let split = app.song.split_rack(*channel, self.rack.pad_of(*channel));
+                let nav = modules_browser::show(
+                    &mut self.modules_browser,
+                    &mut self.preset_picker,
+                    ui,
+                    app,
+                    *channel,
+                    *at,
+                    &self.clipboard,
+                );
+                app.song.join_rack(split);
+                nav
+            }
             Overlay::Message {
                 tag,
                 lines,
@@ -781,8 +787,11 @@ impl Slots {
             }
             Overlay::PresetPicker { channel, target } => {
                 let held = self.roll_clip(*channel);
+                let split = app.song.split_rack(*channel, self.rack.pad_of(*channel));
                 let (state, rack) = (&mut self.preset_picker, &mut self.rack);
-                preset_picker::show(state, rack, ui, app, *channel, *target, held)
+                let nav = preset_picker::show(state, rack, ui, app, *channel, *target, held);
+                app.song.join_rack(split);
+                nav
             }
             Overlay::SoundFontPicker { channel, module } => {
                 let state = &mut self.soundfont_picker;

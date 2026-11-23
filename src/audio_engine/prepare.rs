@@ -262,7 +262,7 @@ fn notes(
     let mut effects = Vec::new();
     // The list after the first `stage.0` note effects.
     let mut stage = (usize::MAX, Vec::new());
-    for module in &song.channels[channel].rack.modules {
+    for module in song.channels[channel].rack.chain(None) {
         if (47..=51).contains(&module.type_id) {
             effects.push(note_effect(song, channel, module, end_beat)?);
             continue;
@@ -322,7 +322,7 @@ pub(crate) fn burned_notes(
     let end_beat = song_end_beat(song)?;
     let input = SongAudioBridge::note_events_in_block(song, channel, 0.0, end_beat)
         .map_err(EngineError::Song)?;
-    let effects = (song.channels[channel].rack.modules.iter())
+    let effects = (song.channels[channel].rack.chain(None))
         .filter(|module| (47..=51).contains(&module.type_id))
         .map(|module| note_effect(song, channel, module, end_beat))
         .collect::<Result<_, _>>()?;

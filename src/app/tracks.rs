@@ -573,8 +573,10 @@ impl HoneydewApp {
                 clip.muted |= at < to && at + clip.visible_ticks() > from;
             }
         }
+        // A pad's own note effects play its hits only, which the burn leaves alone.
         for module in &mut ch.rack.modules {
             if (47..=51).contains(&module.type_id)
+                && module.pad.is_none()
                 && let Some(enable) = module.params.first_mut()
             {
                 *enable = 0.0;

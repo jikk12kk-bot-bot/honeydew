@@ -2211,3 +2211,57 @@ fn the_tag_fields_are_saved_apart_and_a_song_with_none_writes_as_before() {
     song.file.meta = MetaState::default();
     assert_eq!(crate::flm::write(&song).unwrap(), before);
 }
+
+#[test]
+fn a_drum_pads_own_rack_splits_out_for_its_editor_and_joins_back_after_the_channels() {
+    let mut song = Song::default();
+    song.add_channel(ChannelKind::Drums);
+    let rack = &mut song.channels[1].rack;
+    let module = |rack: &mut Rack, type_id, pad| {
+        rack.last_instance_id += 1;
+        let mut m = ModuleInstance::new(type_id, rack.last_instance_id);
+        m.pad = pad;
+        rack.modules.push(m);
+    };
+    module(rack, 6, None);
+    module(rack, 11, Some(1));
+    module(rack, 3, None);
+    module(rack, 6, Some(2));
+    let types = |song: &Song| -> Vec<(u16, Option<u32>)> {
+        (song.channels[1].rack.modules.iter())
+            .map(|m| (m.type_id, m.pad))
+            .collect()
+    };
+    let chain: Vec<u16> = song.channels[1]
+        .rack
+        .chain(None)
+        .map(|m| m.type_id)
+        .collect();
+    assert_eq!(chain, [6, 3]);
+    // Pad 1's rack alone while its editor shows it; a module added there is pad 1's after the join.
+    let split = song.split_rack(1, Some(1));
+    assert_eq!(types(&song), [(11, Some(1))]);
+    let rack = &mut song.channels[1].rack;
+    module(rack, 0, None);
+    song.join_rack(split);
+    assert_eq!(
+        types(&song),
+        [
+            (6, None),
+            (3, None),
+            (6, Some(2)),
+            (11, Some(1)),
+            (0, Some(1))
+        ]
+    );
+    // The channel's own rack: its modules first.
+    let split = song.split_rack(1, None);
+    assert_eq!(types(&song), [(6, None), (3, None)]);
+    song.join_rack(split);
+    assert_eq!(types(&song)[..2], [(6, None), (3, None)]);
+    assert_eq!(song.channels[1].engine_modules().len(), 5);
+    // A pad the kit lacks takes its modules with it.
+    song.channels[1].drum_kit.as_mut().unwrap().slots.remove(0);
+    song.prune_pad_racks();
+    assert_eq!(types(&song), [(6, None), (3, None), (6, Some(2))]);
+}

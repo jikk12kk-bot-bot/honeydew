@@ -1373,6 +1373,40 @@ fn an_undo_under_a_header_drag_ends_the_drag_whether_or_not_it_changes_the_chann
     }
 }
 
+/// At c = 1 (the mini mixer out) a track's icon takes the collapsed header's gestures: a hold let go in place opens the
+/// track's menu, a hold dragged moves the channel.
+#[test]
+fn at_c_1_a_held_icon_opens_the_track_menu_or_drags_the_channel() {
+    for c in [0.0, 1.0] {
+        let mut rig = three_channels();
+        rig.app.main_screen.column = (c, c);
+        rig.frame(vec![]);
+        rig.frame(vec![]);
+        rig.hold_header(2);
+        let held = (rig.app.main_screen.column, rig.app.selected_channel);
+        rig.release(header(2));
+        rig.frame(vec![]);
+        assert!(
+            matches!(rig.app.main_screen.track_menu, Some((1, 0, _))),
+            "c {c}: menu {:?}, held (column, selected) {held:?}, now {:?} {}, overlays {:?}",
+            rig.app.main_screen.track_menu,
+            rig.app.main_screen.column,
+            rig.app.selected_channel,
+            rig.overlays(),
+        );
+    }
+    let mut rig = three_channels();
+    rig.app.main_screen.column = (1.0, 1.0);
+    rig.app.main_screen.track_menu = None;
+    rig.frame(vec![]);
+    rig.hold_header(1);
+    rig.drag_to(header(2));
+    rig.drag_to(header(3));
+    rig.release(header(3));
+    rig.frame(vec![]);
+    assert_ne!(names(&rig), NAMES, "the drag moved Drums");
+}
+
 #[test]
 fn a_current_sub_track_follows_its_channel_when_channels_move() {
     let mut rig = three_channels();

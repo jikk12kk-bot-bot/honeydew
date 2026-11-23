@@ -388,8 +388,10 @@ pub fn add_plugin(
 pub fn paste_module(rack: &mut Rack, module: &ModuleInstance, at: InsertAt) -> i32 {
     let instance_id = add_module(rack, module.type_id, at);
     let pasted = rack.get_mut(instance_id).expect("just added");
+    // In the rack `add_module` put it in, not the one it was copied from.
     *pasted = ModuleInstance {
         instance_id,
+        pad: pasted.pad,
         ..module.clone()
     };
     instance_id

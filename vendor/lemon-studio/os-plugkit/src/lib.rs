@@ -8,28 +8,31 @@
 //! `x11` on Linux, `mac` on macOS). Linux and macOS share one API and input type ([`gui`]), so a plugin's editor loop
 //! is the same on both. A Lemon instrument takes the channel's volume and pan as [`levels::Levels`].
 //!
+//! The native parts are the `gui` feature (on by default): without it a plugin built on this crate has no editor
+//! window, as the session with no interface hosts the stock plugins.
+//!
 // spec: plugins/lemon-sampler.md §4 (edits apply at once, menus), plugins/lemon-parametric-eq-2.md, plugins/plugin-formats.md
 
 pub mod levels;
 pub mod linked;
 pub mod live;
 pub mod vals;
-#[cfg(windows)]
+#[cfg(all(feature = "gui", windows))]
 pub mod win;
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "gui", target_os = "linux"))]
 pub mod x11;
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "gui", target_os = "macos"))]
 pub mod mac;
-#[cfg(any(target_os = "linux", target_os = "macos", feature = "embed"))]
+#[cfg(any(all(feature = "gui", any(target_os = "linux", target_os = "macos")), feature = "embed"))]
 pub mod input;
 // Honeydew (vendored addition): the editors drawn into Honeydew's own window, on every platform.
 #[cfg(feature = "embed")]
 pub mod embed;
 
 /// The editor window of this platform where it runs the plugins' shared editor loop: `x11` on Linux, `mac` on macOS.
-#[cfg(all(target_os = "linux", not(feature = "embed")))]
+#[cfg(all(feature = "gui", target_os = "linux", not(feature = "embed")))]
 pub use x11 as gui;
-#[cfg(all(target_os = "macos", not(feature = "embed")))]
+#[cfg(all(feature = "gui", target_os = "macos", not(feature = "embed")))]
 pub use mac as gui;
 /// Honeydew (vendored change): with `embed`, Honeydew's window.
 #[cfg(feature = "embed")]
