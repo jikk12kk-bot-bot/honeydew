@@ -361,12 +361,6 @@ fn the_row_menu_swing_cut_and_region_popups_close_with_the_editor() {
     assert!(shown(&rig, cut), "the cut menu opened");
     away_and_back(&mut rig);
     assert!(!shown(&rig, cut), "the cut menu came back");
-    let aux = strip(0, Ctl::Aux).with("menu").with((0_usize, 0_usize));
-    rig.click_id(strip(0, Ctl::Aux));
-    rig.frame(vec![]);
-    assert!(shown(&rig, aux), "the AUX menu opened");
-    away_and_back(&mut rig);
-    assert!(!shown(&rig, aux), "the AUX menu came back");
 
     // The ruler's range: its `+`, then the region menu.
     let count = |rig: &Rig, text: &str| {
@@ -589,57 +583,10 @@ fn a_strip_knob_drag_makes_no_undo_step_and_no_rebuild() {
 }
 
 #[test]
-fn an_undone_create_fx_channel_takes_the_pads_target_with_it_after_a_strip_change() {
-    // `Create FX Channel`, a Level drag, then its undo: the pad kept the deleted send's id, which the next new channel
-    // reuses. Only what a strip change moved goes into the steps before it.
-    let mut rig = drum_rig();
-    strip_page(&mut rig, drums::StripPage::Options);
-    rig.click_id(strip(0, Ctl::Aux));
-    rig.frame(vec![]);
-    rig.click_id(strip(0, Ctl::Aux).with("menu").with((0_usize, 1_usize)));
-    rig.frame(vec![]);
-    let send = rig.app.song.channels.last().unwrap().id;
-    assert_eq!(rig.kit().slots[0].file.send_target, send, "created");
-    strip_page(&mut rig, drums::StripPage::Mix);
-    let knob = rig.rect_of(strip(0, Ctl::Level));
-    rig.press(knob.center());
-    rig.drag_to(knob.center() + vec2(400.0, 0.0));
-    rig.release(knob.center() + vec2(400.0, 0.0));
-    rig.frame(vec![]);
-    let level = rig.kit().slots[0].params[0];
-    rig.frame(z(egui::Modifiers::NONE));
-    assert!(
-        rig.app.song.channels.iter().all(|c| c.id != send),
-        "the send is gone"
-    );
-    assert_eq!(
-        (
-            rig.kit().slots[0].file.send_target,
-            rig.kit().slots[0].params[0]
-        ),
-        (-1, level)
-    );
-    // The next new channel gets the id back; the pad stays on its own output.
-    let end = rig.app.song.channels.len();
-    let new = rig
-        .app
-        .song
-        .insert_channel(end, ChannelKind::EffectTrack)
-        .unwrap();
-    assert_eq!(rig.app.song.channels[new].id, send);
-    assert_eq!(rig.kit().slots[0].file.send_target, -1);
-}
-
-#[test]
 fn the_strips_rack_state_stays_through_an_undo_of_an_earlier_edit_of_its_channel() {
     // Tap a step, drag the strip's Level to 1.0, undo the tap: the Level once came back as 0.8531 (the step before the
-    // tap held the channel as it was). Pad params are rack state, with no undo; `Shift` and `AUX` too.
+    // tap held the channel as it was). Pad params are rack state, with no undo; `Shift` too.
     let mut rig = drum_rig();
-    let end = rig.app.song.channels.len();
-    let send = rig.app.song.insert_channel(end, ChannelKind::EffectTrack);
-    let send = rig.app.song.channels[send.unwrap()].id;
-    rig.app.song_edited(SongEdit::Final, 0);
-    rig.frame(vec![]);
     rig.click(rig.step(1, 0));
     assert_eq!(rig.hits(), [(1, 0)]);
     let knob = rig.rect_of(strip(0, Ctl::Level));
@@ -655,16 +602,12 @@ fn the_strips_rack_state_stays_through_an_undo_of_an_earlier_edit_of_its_channel
     rig.drag_to(knob - vec2(0.0, 216.0));
     rig.release(knob - vec2(0.0, 216.0));
     rig.frame(vec![]);
-    rig.click_id(strip(0, Ctl::Aux));
-    rig.frame(vec![]);
-    rig.click_id(strip(0, Ctl::Aux).with("menu").with((0_usize, 1_usize)));
-    rig.frame(vec![]);
     let strip_state = |rig: &Rig| {
         let slot = &rig.kit().slots[0];
-        (slot.params[0], slot.file.beat_offset, slot.file.send_target)
+        (slot.params[0], slot.file.beat_offset)
     };
     let set = strip_state(&rig);
-    assert!(set.0 == 1.0 && set.1 > 0.0 && set.2 == send, "{set:?}");
+    assert!(set.0 == 1.0 && set.1 > 0.0, "{set:?}");
     rig.frame(z(egui::Modifiers::NONE));
     assert_eq!((rig.hits(), strip_state(&rig)), (vec![], set));
     rig.frame(z(egui::Modifiers::SHIFT));
@@ -3579,22 +3522,9 @@ fn asks(rig: &mut Rig, what: Replace) -> bool {
     matches!(rig.app.files.take_overlay(), Some(Overlay::Message { tag: t, .. }) if t == tag)
 }
 
-/// Picks `AUX` menu row `row` of strip `slot` on the `Options` page.
-fn aux(rig: &mut Rig, slot: usize, row: usize) {
-    rig.click_id(strip(slot, Ctl::Aux));
-    rig.frame(vec![]);
-    rig.click_id(strip(slot, Ctl::Aux).with("menu").with((0_usize, row)));
-    rig.frame(vec![]);
-}
-
 #[test]
-fn rev_poly_cut_shift_and_an_aux_pick_alone_leave_open_and_new_unasked() {
+fn rev_poly_cut_and_shift_alone_leave_open_and_new_unasked() {
     let mut rig = drum_rig();
-    let at = rig.app.song.channels.len();
-    let send = rig.app.song.insert_channel(at, ChannelKind::EffectTrack);
-    let send = rig.app.song.channels[send.unwrap()].id;
-    rig.app.song_edited(SongEdit::Final, 0);
-    rig.frame(vec![]);
     rig.app.files.saved();
     strip_page(&mut rig, drums::StripPage::Pitch);
     rig.click_id(strip(1, Ctl::Rev));
@@ -3608,10 +3538,8 @@ fn rev_poly_cut_shift_and_an_aux_pick_alone_leave_open_and_new_unasked() {
     rig.drag_to(knob - vec2(0.0, 216.0));
     rig.release(knob - vec2(0.0, 216.0));
     rig.frame(vec![]);
-    // The send channel, after `Default`.
-    aux(&mut rig, 1, 1);
     let (a, b) = (&rig.kit().slots[0], &rig.kit().slots[1]);
-    assert!(b.file.reverse && !b.file.overlapping_voices && b.file.send_target == send);
+    assert!(b.file.reverse && !b.file.overlapping_voices);
     assert!(a.cut_group == 2 && a.file.beat_offset > 0.0, "{a:?}");
     assert!(!rig.app.files.modified());
     assert!(!asks(&mut rig, Replace::Pick));
@@ -3661,19 +3589,6 @@ fn stretch_is_a_change_only_when_its_ratio_changes() {
     reset_stretch(&mut rig, 0);
     assert_eq!(rig.kit().slots[0].file.stretch_ratio, 1.0);
     assert!(rig.app.files.modified());
-}
-
-#[test]
-fn create_fx_channel_is_a_change() {
-    let mut rig = drum_rig();
-    rig.app.files.saved();
-    strip_page(&mut rig, drums::StripPage::Options);
-    let channels = rig.app.song.channels.len();
-    // `Default`, then `Create FX Channel`: there is no send channel yet.
-    aux(&mut rig, 0, 1);
-    assert_eq!(rig.app.song.channels.len(), channels + 1);
-    assert!(rig.app.files.modified());
-    assert!(asks(&mut rig, Replace::Pick));
 }
 
 #[test]

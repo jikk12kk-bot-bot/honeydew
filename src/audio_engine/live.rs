@@ -41,7 +41,7 @@ pub(super) fn build(
     let end_beat = song_end_beat(song)?;
     let mut effects = Vec::new();
     let mut stages = vec![0; instruments.len()];
-    for module in &song.channels[channel].rack.modules {
+    for module in song.channels[channel].rack.chain(None) {
         if (47..=51).contains(&module.type_id) {
             effects.push(note_effect(song, channel, module, end_beat)?);
         } else if let Some(at) = instruments

@@ -85,7 +85,7 @@ impl MidiSends {
 pub(crate) fn midi_reach(song: &Song, plain: bool) -> Vec<Vec<usize>> {
     let sends = build(song);
     let effects = |c: usize| {
-        let mut modules = song.channels[c].rack.modules.iter();
+        let mut modules = song.channels[c].rack.chain(None);
         modules.any(|m| (47..=51).contains(&m.type_id))
     };
     (0..song.channels.len())
@@ -162,7 +162,7 @@ pub(super) fn forwarded(
             continue;
         }
         let input = input(song, channel, end_beat, &forwarded[channel])?;
-        let modules = song.channels[channel].rack.modules.iter();
+        let modules = song.channels[channel].rack.chain(None);
         let effects: Vec<_> = (modules.filter(|module| (47..=51).contains(&module.type_id)))
             .map(|module| note_effect(song, channel, module, end_beat))
             .collect::<Result<_, _>>()?;

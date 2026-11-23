@@ -128,6 +128,7 @@ fn views(song: &mut Song, local: Option<&Song>) {
                 common: _,
                 file: _,
                 sidechain: _,
+                pad: _,
             } = module;
             *minimized = original
                 .and_then(|c| {

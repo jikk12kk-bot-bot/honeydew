@@ -154,7 +154,8 @@ pub(super) fn build(
     let is_instrument = |module: &&ModuleInstance| {
         module_spec(module.type_id).is_some_and(|spec| spec.role == Role::Instrument)
     };
-    (channel.rack.modules.iter().filter(is_instrument))
+    // A drum pad's own rack holds effects alone: an instrument there plays nothing.
+    (channel.rack.chain(None).filter(is_instrument))
         .filter_map(|module| {
             let mut origin = DefaultHasher::new();
             module.type_id.hash(&mut origin);

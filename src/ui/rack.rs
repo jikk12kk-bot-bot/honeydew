@@ -1376,6 +1376,9 @@ pub struct RackPanel {
     pub soundfonts: SoundFonts,
     /// The channels the rack's sends can name: the host sets it each frame ([`send_targets`]).
     pub targets: Vec<SendTarget>,
+    /// The drum pad whose own rack shows, by name (the channel's rack holds it alone, [`crate::song::Song::split_rack`]):
+    /// the header names it after the channel, and the channel's sends do not show. The host sets it each frame.
+    pub pad: Option<String>,
     /// The recent control, by channel id, for a Modulator's `Modulate recent control`, and the names of the rack's
     /// Modulators' targets ([`modulation_names`]): the host sets them each frame.
     pub recent: Option<(i32, AutomationTarget)>,
@@ -1418,6 +1421,14 @@ pub struct RackPanel {
 }
 
 impl RackPanel {
+    /// The header's name: the channel's, and the drum pad's after it while a pad's own rack shows ([`Self::pad`]).
+    fn title(&self, channel: &str) -> String {
+        match &self.pad {
+            Some(pad) => format!("{channel} · {pad}"),
+            None => channel.to_owned(),
+        }
+    }
+
     /// Follows the channels to `channel(index)` (`None`: gone) after they moved, so that each keeps its panel states
     /// and the rack drawn keeps its scroll and open menu. A gone channel's panel states go, and so does its rack's
     /// state.
@@ -1583,7 +1594,7 @@ impl RackPanel {
         let heights: Vec<f32> = (channel.rack.modules.iter())
             .map(|m| held.map_or(self.card_height(m), |_| CARD_HEADER))
             .collect();
-        let sends = (channel.kind != ChannelKind::Master).then(|| SendRows {
+        let sends = (channel.kind != ChannelKind::Master && self.pad.is_none()).then(|| SendRows {
             rows: channel.file.sends.len(),
             disconnected: disconnected(channel, &self.targets),
             midi: (channel.kind.plays_notes()).then_some(channel.file.midi_sends.len()),
@@ -1758,7 +1769,8 @@ impl RackPanel {
             self.scroller.let_go(&axes(self.scroll));
         }
 
-        actions.close = self.chrome(ui, cx, rack, &channel.name, ink, contrast);
+        let title = self.title(&channel.name);
+        actions.close = self.chrome(ui, cx, rack, &title, ink, contrast);
         self.popups(ui, cx, index, channel, &mut actions);
         // A control that took the drag (an Equalizer handle claims it), or a popup open over the rack (a long press's
         // dialog with the finger still down), has the touch: the scroller yields it, as to a held track header, and no
@@ -2926,7 +2938,7 @@ impl RackPanel {
                     // The plugins' states as they are now, as a song save writes them.
                     let modules = channel.rack.modules.clone();
                     actions.preset = Some(PresetSource::Rack {
-                        name: channel.name.clone(),
+                        name: self.pad.clone().unwrap_or_else(|| channel.name.clone()),
                         modules: with_live_states(channel.id, modules),
                     });
                 }

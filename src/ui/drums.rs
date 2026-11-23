@@ -22,7 +22,7 @@ use crate::icons::IconId;
 use crate::metrics::{FontSize, Metrics};
 use crate::midi::{CcLink, links};
 use crate::params::{DRUM_SLOT_PARAMS, ParamKind};
-use crate::song::{AutomationTarget, ChannelKind, DrumKit, SamplerSlot, Song};
+use crate::song::{AutomationTarget, DrumKit, SamplerSlot};
 use crate::ui::ctrl_menu::Touch;
 use crate::ui::fine_tune;
 use crate::ui::layout::{self, Node, Size};
@@ -164,7 +164,6 @@ pub enum Ctl {
     Cut,
     Poly,
     Shift,
-    Aux,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -264,7 +263,7 @@ const ENVELOPE: [Spec; 4] = [
     spec(Ctl::Sus, Kind::Knob(None), "SUS", Some(8), 1.0, KNOB_MR),
     spec(Ctl::Rel, Kind::Knob(None), "REL", Some(9), 1.0, KNOB_MR),
 ];
-const OPTIONS: [Spec; 5] = [
+const OPTIONS: [Spec; 4] = [
     spec(Ctl::Hold, Kind::HSlider, "Hold", Some(5), 2.0, 0.0),
     spec(Ctl::Cut, Kind::Menu, "Cut...", None, 1.0, 0.0),
     spec(Ctl::Poly, POLY, "Poly", None, 1.0, 0.0),
@@ -276,7 +275,6 @@ const OPTIONS: [Spec; 5] = [
         2.0,
         0.0,
     ),
-    spec(Ctl::Aux, Kind::Menu, "AUX", None, 1.2, 0.0),
 ];
 
 fn page_specs(page: StripPage) -> &'static [Spec] {
@@ -388,9 +386,7 @@ pub struct DrumsState {
     /// Per slot, its output's peak L = max(left, right) this frame, from the engine's slot meters; the host sets it.
     /// Empty, or a slot past its end, is silent.
     pub peaks: Vec<f32>,
-    /// The song's send channels (id, name), for the `AUX` menu: the host sets it each frame ([`send_channels`]).
-    pub sends: Vec<(i32, String)>,
-    /// The open `Cut...` or `AUX` popup: its slot, its control and its centre. The host closes it with the view.
+    /// The open `Cut...` popup: its slot, its control and its centre. The host closes it with the view.
     pub menu: Option<(usize, Ctl, Pos2)>,
 }
 
@@ -427,11 +423,6 @@ pub enum DrumsAction {
     Param { slot: usize, param: usize },
     /// The slot's cut group changed.
     CutGroup(usize),
-    /// The slot's send target (`LINk`@10) changed in the kit: a final song edit (the routing changes).
-    SendTarget(usize),
-    /// The slot's `AUX` picked `Create FX Channel`: the host makes a send channel the slot targets
-    /// ([`create_pad_send`]).
-    CreateFxChannel(usize),
     /// The slot's icon 21 button: make its row current and open the pad sample picker on it (its `Load Sample`).
     LoadSample(usize),
     /// `REV` flipped the slot's reverse (`MAIN`@1036) in the kit: send it on, nothing to re-render.
@@ -799,26 +790,14 @@ fn control(
                 label_font: FontSize::Pt10,
                 ..c
             };
-            // `AUX` routed to a send channel shows it, lit: `FX 5` for `Effect 5`.
-            let routed = (spec.ctl == Ctl::Aux)
-                .then(|| aux_label(slot.file.send_target, &state.sends))
-                .flatten();
-            let clicked = match &routed {
-                Some(label) => widgets::value_button(ui, cx, &text, label).clicked(),
-                None => widgets::text_button(ui, cx, &text).clicked(),
-            };
-            if clicked {
+            if widgets::text_button(ui, cx, &text).clicked() {
                 state.menu = Some((row, spec.ctl, rect.center()));
             }
             let at = (state.menu)
                 .filter(|&(r, ctl, _)| (r, ctl) == (row, spec.ctl))
                 .map(|m| m.2)?;
-            let (picked, close) = if spec.ctl == Ctl::Aux {
-                aux_pick(ui, cx, id.with("menu"), at, slot, &state.sends, row)
-            } else {
-                let (picked, close) = cut_menu(ui, cx, id.with("menu"), at, slot);
-                (picked.then_some(DrumsAction::CutGroup(row)), close)
-            };
+            let (picked, close) = cut_menu(ui, cx, id.with("menu"), at, slot);
+            let picked = picked.then_some(DrumsAction::CutGroup(row));
             if close {
                 state.menu = None;
             }
@@ -900,96 +879,6 @@ fn held_knob(
     }
     (file.beat_offset, file.beat_offset_control) = (k / 128.0, v);
     Some(DrumsAction::Shift(row))
-}
-
-/// The song's send channels as the `AUX` menu lists them: (channel id, name), in song order.
-pub fn send_channels(song: &Song) -> Vec<(i32, String)> {
-    (song.channels.iter())
-        .filter(|c| c.kind == ChannelKind::EffectTrack)
-        .map(|c| (c.id, c.name.clone()))
-        .collect()
-}
-
-/// `Create FX Channel` from slot `slot` of channel `channel`'s kit ([`DrumsAction::CreateFxChannel`]): a new send
-/// channel at the end of `song`, which the slot targets. Returns its index; `None` for no such slot, or once the
-/// channel ids are used up.
-pub fn create_pad_send(song: &mut Song, channel: usize, slot: usize) -> Option<usize> {
-    let kit = song.channels.get(channel)?.drum_kit.as_ref()?;
-    kit.slots.get(slot)?;
-    let new = song.insert_channel(song.channels.len(), ChannelKind::EffectTrack)?;
-    let id = song.channels[new].id;
-    let kit = song.channels[channel].drum_kit.as_mut()?;
-    kit.slots[slot].file.send_target = id;
-    Some(new)
-}
-
-/// What a slot's `AUX` button shows while it is routed to send channel `target` of `sends` (by id): the channel's name,
-/// `Effect N` shortened to `FX N`, and `FX` for one with no name. `None` at `Default` (−1), or for a target no longer
-/// in the song.
-fn aux_label(target: i32, sends: &[(i32, String)]) -> Option<String> {
-    if target < 0 {
-        return None;
-    }
-    let (_, name) = sends.iter().find(|(id, _)| *id == target)?;
-    let name = name.trim();
-    Some(match name.strip_prefix("Effect") {
-        _ if name.is_empty() => "FX".to_owned(),
-        Some(rest) if rest.is_empty() || rest.starts_with(' ') => format!("FX{rest}"),
-        _ => name.to_owned(),
-    })
-}
-
-/// What the `AUX` menu picks: a target id (−1 `Default`), or `Create FX Channel`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AuxPick {
-    Target(i32),
-    Create,
-}
-
-/// The pad Send menu for a pad targeting `target`: `Default` (−1, through the drum channel), each send channel of
-/// `sends` by name (its id), then `Create FX Channel`; the current target highlighted. Master and regular
-/// channels are not offered.
-fn aux_menu(target: i32, sends: &[(i32, String)]) -> Vec<PopupItem<AuxPick>> {
-    let targets = std::iter::once((-1, "Default".to_owned())).chain(sends.iter().cloned());
-    let mut items: Vec<_> = targets
-        .enumerate()
-        .map(|(row, (id, name))| PopupItem {
-            current: id == target,
-            ..PopupItem::new(AuxPick::Target(id), 0, row, name)
-        })
-        .collect();
-    items.push(PopupItem::new(
-        AuxPick::Create,
-        0,
-        items.len(),
-        "Create FX Channel",
-    ));
-    items
-}
-
-/// The `AUX` popup of slot `row`, centred on `at`. A picked target is written to the slot; `Create FX Channel` is left
-/// to the host. Returns that, and whether the popup closes.
-fn aux_pick(
-    ui: &Ui,
-    cx: &UiCtx,
-    id: Id,
-    at: Pos2,
-    slot: &mut SamplerSlot,
-    sends: &[(i32, String)],
-    row: usize,
-) -> (Option<DrumsAction>, bool) {
-    let items = aux_menu(slot.file.send_target, sends);
-    let ctx = ui.ctx();
-    let result = popup::show(ctx, id, at, ctx.content_rect(), &items, cx);
-    let picked = match result.selected {
-        Some(AuxPick::Create) => Some(DrumsAction::CreateFxChannel(row)),
-        Some(AuxPick::Target(id)) if id != slot.file.send_target => {
-            slot.file.send_target = id;
-            Some(DrumsAction::SendTarget(row))
-        }
-        _ => None,
-    };
-    (picked, result.close)
 }
 
 /// The `Cut...` popup centred on `at`. No item is current: the menu is never synced from the slot (the row header's

@@ -45,9 +45,17 @@ pub struct State {
     /// Issue #98: a card's ◀ or ▶, as (channel id, instance id, −1 or 1), for the overlays to load next frame
     /// ([`super::preset_picker::step_preset`]).
     pub(crate) step: Option<(i32, i32, i32)>,
+    /// The drum pad whose own rack the rack and its browser and pickers show, as (channel, the pad's slot id): the
+    /// drum editor's current row while it shows that channel. The app sets it each frame; else the channel's rack.
+    pub(crate) pad: Option<(usize, u32)>,
 }
 
 impl State {
+    /// The rack of channel `channel` that shows: a drum pad's own ([`Self::pad`]), else `None`, the channel's.
+    pub(crate) fn pad_of(&self, channel: usize) -> Option<u32> {
+        self.pad.filter(|&(c, _)| c == channel).map(|(_, pad)| pad)
+    }
+
     /// One frame of the slide: in while a rack is `shown`, else out, in an area `width_px` wide, a step per frame of
     /// `ctx` ([`anim::PANEL_KEEP`](crate::ui::anim::PANEL_KEEP)), however many passes the frame runs. Returns how far in the
     /// rack is now, 0 closed … 1 open.
@@ -202,7 +210,15 @@ pub fn show(
     }
     let rate = app.audio.sample_rate().map_or(0.0, |r| r as f32);
     crate::panels::set_text_env(ui.ctx(), app.song.tempo_bpm, rate);
+    // A drum pad's own rack, or the channel's: the rack holds it alone while the panel draws it.
+    let pad = state.pad_of(channel);
+    let pad = pad.filter(|&p| ch.drum_kit.as_ref().is_some_and(|k| k.slot_by_id(p).is_some()));
+    state.panel.pad = pad.map(|p| ch.pad_name(p).unwrap_or("Pad").to_owned());
+    let split = app.song.split_rack(channel, pad);
+    let ch = &mut app.song.channels[channel];
+    let channel_id = ch.id;
     let actions = state.panel.show(&mut ui, &app.cx, rect, channel, ch);
+    app.song.join_rack(split);
     state.touch = actions.touch.map(|t| (channel, t)).or(state.touch);
     state.ask_delete = actions
         .ask_delete
@@ -219,7 +235,6 @@ pub fn show(
             skipped: 0,
         });
     }
-    let channel_id = ch.id;
     if let Some((id, by)) = actions.step_preset {
         state.step = Some((channel_id, id, by));
     }

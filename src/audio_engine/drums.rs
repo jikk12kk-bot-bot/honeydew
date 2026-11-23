@@ -5,7 +5,9 @@
 use std::collections::VecDeque;
 
 use honeydew_audio::drums::{DEFAULTS, Pad, PadSampler, hit_pitch};
+use honeydew_audio::ProcessContext;
 use honeydew_audio::mixer::OwnedStereoBuffer;
+use honeydew_audio::playback::PlaybackChannel;
 use honeydew_audio::note_effects::{NoteEffectModule, NoteEffectTrace};
 use honeydew_audio::sequencer::{InputNoteEvent, NoteKind, sort_note_events};
 
@@ -30,6 +32,8 @@ pub(super) struct Kit {
     peaks: Vec<[f32; 2]>,
     /// One block of one pad, before it is added into its output.
     scratch: OwnedStereoBuffer,
+    /// Per pad, the positions of its own rack's effects among its channel's ([`Self::set_pad_effects`]).
+    pad_effects: Vec<std::ops::Range<usize>>,
 }
 
 impl Kit {
@@ -57,10 +61,21 @@ impl Kit {
         }
     }
 
-    /// Adds one block of every pad into its output channel's buffer, before that channel's rack runs, and keeps its
-    /// peak. A pad with a send target (`LINk`@10 ≥ 0) skips its own channel entirely (rack, strip and sends) but for
-    /// its channel being out of the mix ([`Self::out`]).
-    pub fn render(&mut self, buffers: &mut [OwnedStereoBuffer]) {
+    /// Per pad, the positions of its own rack's effects among its channel's, after the channel's own rack's
+    /// ([`PlaybackChannel::chain`]): the pad runs them on its sound alone.
+    pub fn set_pad_effects(&mut self, runs: Vec<std::ops::Range<usize>>) {
+        self.pad_effects = runs;
+    }
+
+    /// Adds one block of every pad, through its own rack's effects (in `processors`, its channel's), into its output
+    /// channel's buffer, before that channel's rack runs, and keeps its peak. A pad with a send target (`LINk`@10 ≥ 0)
+    /// skips its own channel entirely (rack, strip and sends) but for its channel being out of the mix ([`Self::out`]).
+    pub fn render(
+        &mut self,
+        buffers: &mut [OwnedStereoBuffer],
+        processors: &mut [PlaybackChannel],
+        context: ProcessContext,
+    ) {
         for (pad, &output) in self.outputs.iter().enumerate() {
             let buffer = &mut buffers[output];
             let frames = buffer.left.len().min(self.scratch.left.len());
@@ -74,6 +89,13 @@ impl Kit {
             if self.out && output != self.channel {
                 self.peaks[pad] = [0.0; 2];
                 continue;
+            }
+            // Its own rack: a failed effect leaves the sound as it is, as a missing one does.
+            if let (Some(run), Some(effects)) = (
+                self.pad_effects.get(pad).filter(|run| !run.is_empty()),
+                processors.get_mut(self.channel),
+            ) {
+                let _ = effects.process_effects(run.clone(), left, right, context);
             }
             let mut peak = [0.0_f32; 2];
             let out = buffer.left.iter_mut().zip(buffer.right.iter_mut());
@@ -146,6 +168,7 @@ pub(super) fn build(
             left: vec![0.0; super::BLOCK_FRAMES],
             right: vec![0.0; super::BLOCK_FRAMES],
         },
+        pad_effects: Vec::new(),
     })
 }
 
@@ -193,6 +216,8 @@ struct Strike {
     pan: u8,
     value: u16,
     off: Option<f64>,
+    /// The pad it was hit on.
+    pad: usize,
 }
 
 /// [`hits`] by beat, in the order they were made, before `end_beat` drops what is past it.
@@ -207,9 +232,17 @@ pub(super) fn played(
     let Some(kit) = &song.channels[channel].drum_kit else {
         return Ok(Vec::new());
     };
-    let effects = (song.channels[channel].rack.modules.iter())
-        .filter(|module| (47..=51).contains(&module.type_id))
-        .map(|module| note_effect(song, channel, module, end_beat))
+    // The channel's own rack's note effects, and per pad its own rack's.
+    let rack = &song.channels[channel].rack;
+    let note_effects = |pad: Option<u32>| {
+        (rack.chain(pad))
+            .filter(|module| (47..=51).contains(&module.type_id))
+            .map(|module| note_effect(song, channel, module, end_beat))
+            .collect::<Result<Vec<_>, _>>()
+    };
+    let effects = note_effects(None)?;
+    let own = (kit.slots.iter())
+        .map(|slot| note_effects(Some(slot.file.id)))
         .collect::<Result<Vec<_>, _>>()?;
     let ppq = f64::from(PPQ);
     let mut prepared = Vec::new();
@@ -250,10 +283,8 @@ pub(super) fn played(
                 let sixteenth = 0.25 + if even { swing / 8.0 } else { -swing / 8.0 };
                 let repeats = (1..=r as u32).map(|k| pos + sixteenth * f64::from(k) / (r + 1.0));
                 // A silent hit, or one on a pad with no key, is no note: it plays as it is.
-                match kit
-                    .pad_note(pad)
-                    .filter(|_| !effects.is_empty() && velocity > 0)
-                {
+                let rack = !effects.is_empty() || own.get(pad).is_some_and(|own| !own.is_empty());
+                match kit.pad_note(pad).filter(|_| rack && velocity > 0) {
                     Some(key) => {
                         let strike = |beat, off| Strike {
                             beat,
@@ -262,6 +293,7 @@ pub(super) fn played(
                             pan,
                             value,
                             off,
+                            pad,
                         };
                         struck.push(strike(hit_tick / ppq, off));
                         struck.extend(repeats.map(|beat| strike(beat, None)));
@@ -291,9 +323,94 @@ pub(super) fn played(
     }
     if !struck.is_empty() {
         let args = (song, channel, end_beat, sample_rate, tempo_bpm);
+        let struck = own_racks(args, own, struck, traces)?;
         prepared.extend(through(args, kit, effects, struck, traces)?);
     }
     Ok(prepared)
+}
+
+/// The hits of each pad with note effects in its own rack (`racks`, per pad) through them, as [`through`] passes hits
+/// through the channel's: each pad's alone, as notes of its key, a hit lasting to its note-off on a notes lane, else a
+/// sixteenth. What comes out are the hits the channel's note effects then take, of the same pad: each at its note's
+/// beat, key, velocity and pan, with the Pitch value of the hit it passed as (one on its key and beat, in turn), else
+/// of the latest hit on its key before it, and on a notes lane its note's note-off. The other hits pass as they are.
+fn own_racks(
+    (song, channel, end_beat, sample_rate, tempo_bpm): (&Song, usize, f64, f32, f32),
+    racks: Vec<Vec<NoteEffectModule>>,
+    struck: Vec<Strike>,
+    traces: &mut Vec<(usize, NoteEffectTrace)>,
+) -> Result<Vec<Strike>, EngineError> {
+    let tick = 1.0 / f64::from(PPQ);
+    let mut out = Vec::with_capacity(struck.len());
+    let mut by_pad = vec![Vec::new(); racks.len()];
+    for strike in struck {
+        match by_pad.get_mut(strike.pad) {
+            Some(hits) if !racks[strike.pad].is_empty() => hits.push(strike),
+            _ => out.push(strike),
+        }
+    }
+    for (effects, mut hits) in racks.into_iter().zip(by_pad) {
+        let Some(pad) = hits.first().map(|s| s.pad) else {
+            continue;
+        };
+        hits.retain(|strike| strike.beat <= end_beat);
+        let mut input = Vec::with_capacity(2 * hits.len());
+        for s in &hits {
+            let off = s.off.unwrap_or(s.beat + 0.25).max(s.beat + tick);
+            let pan = f32::from(s.pan) / 255.0;
+            input.push(InputNoteEvent::on(s.beat, i16::from(s.key), s.velocity).with_pan(pan));
+            input.push(InputNoteEvent::off(off, i16::from(s.key)));
+        }
+        sort_note_events(&mut input);
+        let mut traced = Vec::new();
+        let output = (note_rack(song, effects, sample_rate)?)
+            .process_events_traced(
+                0.0,
+                end_beat + 1.0,
+                f64::from(tempo_bpm),
+                &input,
+                &mut traced,
+            )
+            .map_err(EngineError::Notes)?;
+        add_traces(traces, channel, traced);
+        hits.sort_by(|a, b| a.key.cmp(&b.key).then(a.beat.total_cmp(&b.beat)));
+        // Per key, the hits made whose note is still open, oldest first.
+        let mut open = vec![VecDeque::new(); 128];
+        let mut used = vec![false; hits.len()];
+        for event in output {
+            let Some(key) = u8::try_from(event.pitch).ok().filter(|&k| k < 128) else {
+                continue;
+            };
+            if event.kind == NoteKind::Off {
+                if let Some(at) = open[usize::from(key)].pop_front() {
+                    let made: &mut Strike = &mut out[at];
+                    made.off = made.off.map(|_| event.beat);
+                }
+                continue;
+            }
+            let (at, latest) = (
+                hits.partition_point(|s| (s.key, s.beat) < (key, event.beat)),
+                hits.partition_point(|s| (s.key, s.beat) <= (key, event.beat)),
+            );
+            let turn = (at..latest).find(|&i| !used[i]);
+            let from = turn.or(latest.checked_sub(1)).map(|i| hits[i]);
+            let from = from.filter(|s| s.key == key);
+            if let Some(i) = turn {
+                used[i] = true;
+            }
+            open[usize::from(key)].push_back(out.len());
+            out.push(Strike {
+                beat: event.beat,
+                key,
+                velocity: event.velocity,
+                pan: (event.pan * 255.0).round().clamp(0.0, 255.0) as u8,
+                value: from.map_or(Event::DEFAULT_PITCH, |s| s.value),
+                off: from.and_then(|s| s.off),
+                pad,
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Issue #40: `struck`, the hits of `channel` on pads with a key, pass the rack's

@@ -52,6 +52,10 @@ pub struct ModuleInstance {
     /// own input. Only a module that [takes a key](Self::takes_key) uses it ([`Self::key_source`]). The `.flm`
     /// keeps it in an `HDSc` chunk FL Studio Mobile skips (`flm::write`).
     pub sidechain: Option<i32>,
+    /// Honeydew's own: the drum pad (its slot's `LINk` id) whose own rack this module is in, `None`: the channel's
+    /// rack. A pad's modules run on that pad alone, before the channel's rack ([`Rack::chain`]). The `.flm` keeps it in
+    /// an `HDPd` chunk (`flm::write`); FL Studio Mobile, which skips it, plays them in the channel's rack.
+    pub pad: Option<u32>,
 }
 
 impl ModuleInstance {
@@ -93,6 +97,7 @@ impl ModuleInstance {
             minimized: false,
             file: ModuleFileState::default(),
             sidechain: None,
+            pad: None,
         }
     }
 
@@ -111,6 +116,7 @@ impl ModuleInstance {
             minimized: self.minimized,
             file,
             sidechain: self.sidechain,
+            pad: self.pad,
             ..preset
         };
     }
@@ -257,26 +263,70 @@ impl Rack {
         Some(self.modules.remove(index))
     }
 
-    /// Swaps the module with its predecessor; false when it is first or absent.
+    /// Swaps the module with its predecessor in its own rack (the channel's, or its pad's: [`ModuleInstance::pad`]);
+    /// false when it is first there or absent.
     pub fn move_up(&mut self, instance_id: i32) -> bool {
-        match self.index_of(instance_id) {
-            Some(i) if i > 0 => {
-                self.modules.swap(i - 1, i);
+        let Some(i) = self.index_of(instance_id) else {
+            return false;
+        };
+        let pad = self.modules[i].pad;
+        match self.modules[..i].iter().rposition(|m| m.pad == pad) {
+            Some(j) => {
+                self.modules.swap(j, i);
                 true
             }
-            _ => false,
+            None => false,
         }
     }
 
-    /// Swaps the module with its successor; false when it is last or absent.
+    /// Swaps the module with its successor in its own rack; false when it is last there or absent.
     pub fn move_down(&mut self, instance_id: i32) -> bool {
-        match self.index_of(instance_id) {
-            Some(i) if i + 1 < self.modules.len() => {
-                self.modules.swap(i, i + 1);
+        let Some(i) = self.index_of(instance_id) else {
+            return false;
+        };
+        let pad = self.modules[i].pad;
+        match self.modules[i + 1..].iter().position(|m| m.pad == pad) {
+            Some(j) => {
+                self.modules.swap(i, i + 1 + j);
                 true
             }
-            _ => false,
+            None => false,
         }
+    }
+
+    /// The modules of one rack, in chain order: the channel's own (`pad` `None`), or the drum pad's with that slot id.
+    pub fn chain(&self, pad: Option<u32>) -> impl Iterator<Item = &ModuleInstance> {
+        self.modules.iter().filter(move |m| m.pad == pad)
+    }
+
+    /// Takes every module that is not in rack `pad` ([`Self::chain`]) out, and returns them: the rack then holds that one
+    /// rack alone, for an editor of the whole rack. [`Self::join`] puts them back.
+    pub fn split(&mut self, pad: Option<u32>) -> Vec<ModuleInstance> {
+        let (mine, others) = std::mem::take(&mut self.modules)
+            .into_iter()
+            .partition(|m| m.pad == pad);
+        self.modules = mine;
+        others
+    }
+
+    /// Puts `others` ([`Self::split`]) back beside rack `pad`: every module the rack holds now is that one's (a new one
+    /// too), the channel's own first.
+    pub fn join(&mut self, pad: Option<u32>, others: Vec<ModuleInstance>) {
+        for module in &mut self.modules {
+            module.pad = pad;
+        }
+        match pad {
+            None => self.modules.extend(others),
+            Some(_) => {
+                let mine = std::mem::replace(&mut self.modules, others);
+                self.modules.extend(mine);
+            }
+        }
+    }
+
+    /// Drops the modules of the drum pads `keep` names no slot of (a pad deleted).
+    pub fn prune_pads(&mut self, keep: &dyn Fn(u32) -> bool) {
+        self.modules.retain(|m| m.pad.is_none_or(keep));
     }
 
     /// The chain position of module `instance_id`.

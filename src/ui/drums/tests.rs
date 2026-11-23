@@ -572,7 +572,7 @@ fn switching_the_page_switches_every_strip() {
         (StripPage::Envelope, &["ATK", "DEC", "SUS", "REL"][..]),
         (
             StripPage::Options,
-            &["Hold", "Cut...", "Poly", "Shift", "AUX"][..],
+            &["Hold", "Cut...", "Poly", "Shift"][..],
         ),
     ];
     for (page, _) in pages {
@@ -1501,80 +1501,6 @@ fn a_finger_down_again_without_its_lift_lets_go_of_its_pad_first() {
         [DrumsAction::PadUp(0), DrumsAction::PadDown(2)]
     );
     assert_eq!(rig.held(), [2]);
-}
-
-// ---- the pad Send menu ----
-
-#[test]
-fn the_aux_menu_is_default_the_send_channels_and_create_fx_channel() {
-    let sends = [(4, "Effect 4".to_owned()), (9, "Verb".to_owned())];
-    let items = |target| -> Vec<(String, bool)> {
-        aux_menu(target, &sends)
-            .into_iter()
-            .map(|i| (i.label.into_owned(), i.current))
-            .collect()
-    };
-    let item = |label: &str, current| (label.to_owned(), current);
-    // The current target highlighted.
-    assert_eq!(
-        items(-1),
-        [
-            item("Default", true),
-            item("Effect 4", false),
-            item("Verb", false),
-            item("Create FX Channel", false),
-        ]
-    );
-    assert_eq!(items(9)[2], item("Verb", true));
-    // A file's 0 (the master) is no item: none is current.
-    assert!(items(0).iter().all(|(_, current)| !current));
-}
-
-#[test]
-fn the_aux_menu_sets_the_pads_send_target() {
-    let mut rig = Rig::new(View::Strips);
-    rig.state.page = StripPage::Options;
-    rig.state.sends = vec![(4, "Effect 4".to_owned())];
-    rig.frame(vec![]);
-    let open = |rig: &mut Rig| {
-        rig.click(rig.at(1, Ctl::Aux));
-        rig.frame(vec![]);
-    };
-    open(&mut rig);
-    rig.click(rig.text_at("Effect 4"));
-    assert_eq!(rig.actions, [DrumsAction::SendTarget(1)]);
-    assert_eq!(rig.kit.slots[1].file.send_target, 4);
-    rig.frame(vec![]);
-    assert_eq!(rig.count("Effect 4"), 0, "closed");
-    open(&mut rig);
-    rig.click(rig.text_at("Default"));
-    assert_eq!(rig.actions, [DrumsAction::SendTarget(1)]);
-    assert_eq!(rig.kit.slots[1].file.send_target, -1);
-    // `Create FX Channel` is the host's: a new send channel the pad then targets.
-    rig.frame(vec![]);
-    open(&mut rig);
-    rig.click(rig.text_at("Create FX Channel"));
-    assert_eq!(rig.actions, [DrumsAction::CreateFxChannel(1)]);
-    assert_eq!(rig.kit.slots[1].file.send_target, -1);
-}
-
-#[test]
-fn create_fx_channel_targets_a_new_effect_channel_from_the_pad() {
-    let mut song = crate::song::Song::default();
-    song.add_channel(crate::song::ChannelKind::Drums);
-    song.add_channel(crate::song::ChannelKind::EffectTrack);
-    assert_eq!(send_channels(&song), [(2, "Effect 2".to_owned())]);
-    assert_eq!(create_pad_send(&mut song, 1, 3), Some(3));
-    let new = &song.channels[3];
-    assert_eq!(
-        (new.kind, new.name.as_str()),
-        (crate::song::ChannelKind::EffectTrack, "Effect 3")
-    );
-    let kit = song.channels[1].drum_kit.as_ref().unwrap();
-    assert_eq!(kit.slots[3].file.send_target, 3);
-    // No such slot: no channel.
-    assert_eq!(create_pad_send(&mut song, 1, 99), None);
-    assert_eq!(song.channels.len(), 4);
 }
 
 #[test]

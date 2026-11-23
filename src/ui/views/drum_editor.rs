@@ -93,6 +93,16 @@ fn edit_kit(kit: &mut DrumKit, action: &StepAction) {
             kit.slots.remove(usize::from(*pad));
             pads_deleted(&mut kit.file.pads, *pad);
         }
+        // The pad keeps its id (its own rack and automation) and every hex pad its sound.
+        StepAction::Move { from, to }
+            if usize::from(*from) < kit.slots.len() && usize::from(*to) < kit.slots.len() =>
+        {
+            let slot = kit.slots.remove(usize::from(*from));
+            kit.slots.insert(usize::from(*to), slot);
+            for entry in &mut kit.file.pads {
+                *entry = step_seq::edit::moved_row(*entry, *from, *to);
+            }
+        }
         // `Set Name`: the custom pad name, MAIN@1051 ("" removes it); MAIN@12 stays.
         StepAction::Rename { pad, name } => {
             if let Some(slot) = kit.slots.get_mut(usize::from(*pad)) {
@@ -221,6 +231,20 @@ impl State {
         (lane.kind == LaneKind::Drums).then_some(lane.grid)
     }
 
+    /// The slot id of the pad on the current row while the editor shows channel `channel`: the pad whose own rack the
+    /// rack shows ([`super::rack::State::pad`]).
+    pub(crate) fn rack_pad(&self, song: &Song, channel: usize) -> Option<u32> {
+        if self.channel != Some(channel) {
+            return None;
+        }
+        let row = match self.mode(song) {
+            Some(DrumGrid::Notes) => self.grid.current,
+            _ => self.step.selected,
+        };
+        let kit = song.channels.get(channel)?.drum_kit.as_ref()?;
+        Some(kit.slots.get(row)?.file.id)
+    }
+
     /// Makes pad `pad` the current row of the editor showing ([`Self::mode`]).
     pub(crate) fn select_row(&mut self, song: &Song, pad: usize) {
         match self.mode(song) {
@@ -297,7 +321,6 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, app: &mut AppCtx, channel: usi
         item_list_index(&mut ui, &app.cx, &list, &mut page);
         state.drums.page = StripPage::ALL[page];
     }
-    state.drums.sends = drums::send_channels(app.song);
     let links = crate::midi::links::links(&app.song.channels[channel].file.cc_links);
     let kit = app.song.channels[channel]
         .drum_kit
@@ -360,7 +383,7 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, app: &mut AppCtx, channel: usi
     // reads only at build (send targets, the beat offset, a stretch) gets a new engine. Only `Create FX Channel` is a
     // song edit: it adds a channel. The bound controls and a new `Stretch` ratio set the song-changed flag; `REV`,
     // `Poly`, `Cut...`, `Shift` and an `AUX` target do not.
-    let (mut rack, mut rebuild, mut create, mut load) = (false, false, None, None);
+    let (mut rack, mut rebuild, mut load) = (false, false, None);
     for action in actions {
         match action {
             // The kit has the new value already.
@@ -383,7 +406,7 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, app: &mut AppCtx, channel: usi
                 rack = true;
             }
             // A pad's Shift reaches its hits on every step and notes lane at once, at this rebuild.
-            DrumsAction::SendTarget(_) | DrumsAction::Shift(_) => rebuild = true,
+            DrumsAction::Shift(_) => rebuild = true,
             // The new ratio's first frames render now from the sample the cache holds, and the engine is rebuilt at
             // once to play them; the rest streams in on the pick worker ([`restretched`]). With nothing to render (no
             // stretch, a render the cache has, no sample) only the rebuild.
@@ -392,7 +415,6 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, app: &mut AppCtx, channel: usi
                 (rack, rebuild) = (true, true);
                 app.audio.samples.stream_slot(&kit.slots[slot]);
             }
-            DrumsAction::CreateFxChannel(slot) => create = Some(slot),
             DrumsAction::LoadSample(slot) => load = Some(slot),
             // The strips play no pads.
             DrumsAction::PadDown(_) | DrumsAction::PadUp(_) | DrumsAction::Swap(..) => {}
@@ -401,12 +423,6 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, app: &mut AppCtx, channel: usi
     state.rack_pending |= rack;
     if rebuild {
         app.rack_state_rebuilt();
-    }
-    // A new send channel goes last: no channel index moves.
-    if let Some(slot) = create
-        && drums::create_pad_send(app.song, channel, slot).is_some()
-    {
-        app.song_edited(true);
     }
     // Icon 21: its row becomes current, then the row menu's `Load Sample`.
     let load = load.and_then(|row| {
@@ -927,6 +943,25 @@ mod tests {
         assert_eq!(kit.pad_note(1), Some(40));
         edit_kit(&mut kit, &set(None));
         assert_eq!(kit.pad_note(1), Some(49));
+    }
+
+    #[test]
+    fn a_moved_pad_keeps_its_id_and_every_hex_pad_its_sound() {
+        let mut kit = DrumKit::default_kit();
+        let ids = |kit: &DrumKit| kit.slots.iter().map(|s| s.file.id).collect::<Vec<_>>();
+        let sounds = |kit: &DrumKit| -> Vec<u32> {
+            (0..8).map(|pad| kit.slots[drums::pad_slot(kit, pad)].file.id).collect()
+        };
+        let before = sounds(&kit);
+        edit_kit(&mut kit, &StepAction::Move { from: 0, to: 2 });
+        assert_eq!(ids(&kit), [2, 3, 1, 4, 5, 6, 7, 8]);
+        assert_eq!(sounds(&kit), before);
+        edit_kit(&mut kit, &StepAction::Move { from: 2, to: 0 });
+        assert_eq!(ids(&kit), [1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(sounds(&kit), before);
+        // Past the last pad: nothing moves.
+        edit_kit(&mut kit, &StepAction::Move { from: 1, to: 40 });
+        assert_eq!(ids(&kit), [1, 2, 3, 4, 5, 6, 7, 8]);
     }
 
     #[test]

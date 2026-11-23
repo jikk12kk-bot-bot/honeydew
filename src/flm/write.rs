@@ -278,13 +278,18 @@ pub fn write_rack(modules: &[ModuleInstance]) -> Result<Vec<u8>, FlmError> {
 
 /// An `RMOd` payload: the type and instance id, then the body, then Honeydew's own sidechain
 /// ([`ModuleInstance::sidechain`]) if it has one: an `HDSc`, `i32` the source channel's id, which FL Studio Mobile skips as
-/// an unknown chunk. A module preset (the body alone) keeps none.
+/// an unknown chunk; then, in a drum pad's own rack, an `HDPd`, `u32` the pad's slot id. A module preset (the body
+/// alone) keeps neither.
 fn write_module(writer: &mut ChunkWriter, module: &ModuleInstance) -> Result<(), FlmError> {
     writer.u32(u32::from(module.type_id))?;
     writer.u32(module.instance_id as u32)?;
     write_module_body(writer, module)?;
     if let Some(source) = module.sidechain {
         writer.chunk(*b"HDSc", |writer| writer.i32(source))?;
+    }
+    // Honeydew's own: the drum pad whose own rack holds it ([`ModuleInstance::pad`]), its slot id.
+    if let Some(pad) = module.pad {
+        writer.chunk(*b"HDPd", |writer| writer.u32(pad))?;
     }
     Ok(())
 }

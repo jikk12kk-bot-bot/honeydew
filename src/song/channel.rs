@@ -296,7 +296,30 @@ impl Channel {
             Ok(i) => module.param_spec(i)?.name,
             Err(_) => params::COMMON_PARAMS.get(common_index(target.param)?)?.name,
         };
-        Some(format!("{param} : {}", module.title()))
+        // A drum pad's own module names its pad.
+        match module.pad.and_then(|pad| self.pad_name(pad)) {
+            Some(pad) => Some(format!("{param} : {} · {pad}", module.title())),
+            None => Some(format!("{param} : {}", module.title())),
+        }
+    }
+
+    /// The name of the drum pad with slot id `pad`, as its row header's first line shows it, else its sample's name;
+    /// `None` without such a pad, or with no name at all.
+    pub fn pad_name(&self, pad: u32) -> Option<&str> {
+        let slot = self.drum_kit.as_ref()?.slot_by_id(pad)?;
+        [slot.display_name(), &slot.name]
+            .into_iter()
+            .find(|n| !n.is_empty())
+    }
+
+    /// The rack's modules in the order the engine runs them: the channel's own rack, then each drum pad's own rack
+    /// ([`super::ModuleInstance::pad`]) in pad order. A module of a pad the kit no longer has is left out.
+    pub fn engine_modules(&self) -> Vec<&super::ModuleInstance> {
+        let mut modules: Vec<_> = self.rack.chain(None).collect();
+        for slot in self.drum_kit.iter().flat_map(|kit| &kit.slots) {
+            modules.extend(self.rack.chain(Some(slot.file.id)));
+        }
+        modules
     }
 
     /// Adds an automation lane for `target`, labelled by [`Self::automation_label`] (empty when `None`), where a file

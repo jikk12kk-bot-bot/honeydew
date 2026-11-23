@@ -291,6 +291,41 @@ impl Song {
         self.channels.get(channel)?.rack.get(instance_id)
     }
 
+    /// Channel `channel`'s rack holding rack `pad` alone (a drum pad's own, `None` the channel's), for an editor of a
+    /// whole rack ([`Rack::split`]). Returns what [`Self::join_rack`] puts back: the channel's id (an editor may move
+    /// it) and the other modules. `None` without such a channel, or with no other module.
+    pub fn split_rack(&mut self, channel: usize, pad: Option<u32>) -> Option<SplitRack> {
+        let ch = self.channels.get_mut(channel)?;
+        if ch.rack.modules.iter().all(|m| m.pad == pad) {
+            return None;
+        }
+        Some(SplitRack {
+            channel: ch.id,
+            pad,
+            others: ch.rack.split(pad),
+        })
+    }
+
+    /// Puts back what [`Self::split_rack`] took: every module the channel's rack holds now is in its rack. A channel
+    /// that is gone takes nothing back.
+    pub fn join_rack(&mut self, split: Option<SplitRack>) {
+        let Some(split) = split else {
+            return;
+        };
+        if let Some(ch) = self.channels.iter_mut().find(|c| c.id == split.channel) {
+            ch.rack.join(split.pad, split.others);
+        }
+    }
+
+    /// Drops the modules of drum pads' own racks whose pad the channel's kit no longer has ([`Rack::prune_pads`]).
+    pub fn prune_pad_racks(&mut self) {
+        for ch in &mut self.channels {
+            let kit = ch.drum_kit.as_ref();
+            ch.rack
+                .prune_pads(&|pad| kit.is_some_and(|k| k.slot_by_id(pad).is_some()));
+        }
+    }
+
     /// Appends a channel of `kind`, see [`Self::insert_channel`].
     pub fn add_channel(&mut self, kind: ChannelKind) {
         self.insert_channel(self.channels.len(), kind);
@@ -660,6 +695,15 @@ fn random_guid(salt: i32) -> [u8; 16] {
         half.copy_from_slice(&state.hash_one((salt, n, entropy())).to_le_bytes());
     }
     guid
+}
+
+/// A channel's rack split for an editor of one of its racks ([`Song::split_rack`]): the channel's id, the rack shown,
+/// and the modules taken out.
+#[derive(Debug)]
+pub struct SplitRack {
+    channel: i32,
+    pad: Option<u32>,
+    others: Vec<ModuleInstance>,
 }
 
 #[cfg(target_arch = "wasm32")]
