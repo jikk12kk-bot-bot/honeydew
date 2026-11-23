@@ -306,9 +306,18 @@ fn clone_and_delete_shift_the_rows_of_every_drum_clip() {
 
 #[test]
 fn a_moved_row_takes_its_hits_and_the_rows_between_close_up() {
-    assert_eq!((0..5).map(|p| moved_row(p, 1, 3)).collect::<Vec<_>>(), [0, 3, 1, 2, 4]);
-    assert_eq!((0..5).map(|p| moved_row(p, 3, 1)).collect::<Vec<_>>(), [0, 2, 3, 1, 4]);
-    assert_eq!((0..3).map(|p| moved_row(p, 2, 2)).collect::<Vec<_>>(), [0, 1, 2]);
+    assert_eq!(
+        (0..5).map(|p| moved_row(p, 1, 3)).collect::<Vec<_>>(),
+        [0, 3, 1, 2, 4]
+    );
+    assert_eq!(
+        (0..5).map(|p| moved_row(p, 3, 1)).collect::<Vec<_>>(),
+        [0, 2, 3, 1, 4]
+    );
+    assert_eq!(
+        (0..3).map(|p| moved_row(p, 2, 2)).collect::<Vec<_>>(),
+        [0, 1, 2]
+    );
     assert_eq!(moved_row(255, 255, 0), 0);
     let mut lane = Lane::new(LaneKind::Drums);
     let clip = lane.add_clip(0, 4.0);

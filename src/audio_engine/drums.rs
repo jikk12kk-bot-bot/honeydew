@@ -4,11 +4,11 @@
 
 use std::collections::VecDeque;
 
-use honeydew_audio::drums::{DEFAULTS, Pad, PadSampler, hit_pitch};
 use honeydew_audio::ProcessContext;
+use honeydew_audio::drums::{DEFAULTS, Pad, PadSampler, hit_pitch};
 use honeydew_audio::mixer::OwnedStereoBuffer;
-use honeydew_audio::playback::PlaybackChannel;
 use honeydew_audio::note_effects::{NoteEffectModule, NoteEffectTrace};
+use honeydew_audio::playback::PlaybackChannel;
 use honeydew_audio::sequencer::{InputNoteEvent, NoteKind, sort_note_events};
 
 use super::EngineError;

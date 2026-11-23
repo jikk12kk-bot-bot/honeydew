@@ -950,7 +950,9 @@ mod tests {
         let mut kit = DrumKit::default_kit();
         let ids = |kit: &DrumKit| kit.slots.iter().map(|s| s.file.id).collect::<Vec<_>>();
         let sounds = |kit: &DrumKit| -> Vec<u32> {
-            (0..8).map(|pad| kit.slots[drums::pad_slot(kit, pad)].file.id).collect()
+            (0..8)
+                .map(|pad| kit.slots[drums::pad_slot(kit, pad)].file.id)
+                .collect()
         };
         let before = sounds(&kit);
         edit_kit(&mut kit, &StepAction::Move { from: 0, to: 2 });

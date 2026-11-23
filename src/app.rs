@@ -723,7 +723,10 @@ impl HoneydewApp {
             self.count_time();
         }
         // A drum pad deleted, or a drumset loaded, takes the pads' own racks with them.
-        if matches!(edit, SongEdit::Final | SongEdit::Quiet | SongEdit::RackRebuild) {
+        if matches!(
+            edit,
+            SongEdit::Final | SongEdit::Quiet | SongEdit::RackRebuild
+        ) {
             self.song.prune_pad_racks();
         }
         // A stronger edit ends the gesture its own way; a channel param's leaves it.
@@ -2683,7 +2686,9 @@ impl HoneydewApp {
                 };
                 // Inside a drum channel's editor, the rack is its current pad's own (#4 of 0.0.14).
                 self.slots.rack.pad = match self.nav.view {
-                    View::DrumEditor(c) => (self.slots.drum_editor.rack_pad(app.song, c)).map(|p| (c, p)),
+                    View::DrumEditor(c) => {
+                        (self.slots.drum_editor.rack_pad(app.song, c)).map(|p| (c, p))
+                    }
                     _ => None,
                 };
                 let overlay_navs =

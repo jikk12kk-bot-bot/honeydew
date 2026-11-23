@@ -570,10 +570,7 @@ fn switching_the_page_switches_every_strip() {
         (StripPage::Mix, &["Solo"][..]),
         (StripPage::Pitch, &["REV", "Pitch", "Stretch", "Start"][..]),
         (StripPage::Envelope, &["ATK", "DEC", "SUS", "REL"][..]),
-        (
-            StripPage::Options,
-            &["Hold", "Cut...", "Poly", "Shift"][..],
-        ),
+        (StripPage::Options, &["Hold", "Cut...", "Poly", "Shift"][..]),
     ];
     for (page, _) in pages {
         rig.state.page = page;

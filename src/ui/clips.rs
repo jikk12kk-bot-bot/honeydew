@@ -2937,7 +2937,8 @@ pub fn combine(song: &mut Song, clips: &[ClipRef]) -> Vec<ClipRef> {
         for clip in lane_ref.clips.iter().filter(|c| ids.contains(&c.id)) {
             end = end.max(end_tick(clip));
             let clip_end = end_tick(clip);
-            let plays = clip.events_in_song_range(u64::from(clip.start_tick), clip_end.ceil() as u64);
+            let plays =
+                clip.events_in_song_range(u64::from(clip.start_tick), clip_end.ceil() as u64);
             events.extend(plays.map(|(tick, e)| {
                 let room = (clip_end - tick as f64) / f64::from(PPQ);
                 at_pos(cut_at(*e, room), (tick - u64::from(start)) as u32)
@@ -4107,19 +4108,42 @@ mod tests {
         }
         let refs: Vec<ClipRef> = [1, 2]
             .into_iter()
-            .flat_map(|channel| [1, 2].map(|id| ClipRef { channel, lane: 0, id }))
+            .flat_map(|channel| {
+                [1, 2].map(|id| ClipRef {
+                    channel,
+                    lane: 0,
+                    id,
+                })
+            })
             .collect();
         assert!(can_combine(&song, &refs));
         assert_eq!(combine(&mut song, &refs), [refs[0], refs[2]]);
         let combined = |channel: usize| song.channels[channel].lanes[0].clips.clone();
         let (notes, drums) = (combined(1), combined(2));
         assert_eq!((notes.len(), drums.len()), (1, 1));
-        let span = |c: &Clip| (c.start_tick, c.visible_len_beats, c.loop_len_beats, c.offset_beats);
-        assert_eq!(span(&notes[0]), (0, 8.0, 8.0, 0.0), "from the first clip's start");
+        let span = |c: &Clip| {
+            (
+                c.start_tick,
+                c.visible_len_beats,
+                c.loop_len_beats,
+                c.offset_beats,
+            )
+        };
+        assert_eq!(
+            span(&notes[0]),
+            (0, 8.0, 8.0, 0.0),
+            "from the first clip's start"
+        );
         assert_eq!(span(&drums[0]), (0, 8.0, 8.0, 0.0));
         // The second note ends at the cut (beat 2), not at beat 4.
-        assert_eq!(notes[0].events, [long(0, 1.0), long(128, 1.0), long(512, 4.0)]);
-        assert_eq!(drums[0].events, [hit(0, 0, 0.0), hit(128, 1, 1.0), hit(512, 2, 0.0)]);
+        assert_eq!(
+            notes[0].events,
+            [long(0, 1.0), long(128, 1.0), long(512, 4.0)]
+        );
+        assert_eq!(
+            drums[0].events,
+            [hit(0, 0, 0.0), hit(128, 1, 1.0), hit(512, 2, 0.0)]
+        );
     }
 
     #[test]

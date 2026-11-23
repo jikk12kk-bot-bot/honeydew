@@ -2232,7 +2232,11 @@ fn a_drum_pads_own_rack_splits_out_for_its_editor_and_joins_back_after_the_chann
             .map(|m| (m.type_id, m.pad))
             .collect()
     };
-    let chain: Vec<u16> = song.channels[1].rack.chain(None).map(|m| m.type_id).collect();
+    let chain: Vec<u16> = song.channels[1]
+        .rack
+        .chain(None)
+        .map(|m| m.type_id)
+        .collect();
     assert_eq!(chain, [6, 3]);
     // Pad 1's rack alone while its editor shows it; a module added there is pad 1's after the join.
     let split = song.split_rack(1, Some(1));
@@ -2242,7 +2246,13 @@ fn a_drum_pads_own_rack_splits_out_for_its_editor_and_joins_back_after_the_chann
     song.join_rack(split);
     assert_eq!(
         types(&song),
-        [(6, None), (3, None), (6, Some(2)), (11, Some(1)), (0, Some(1))]
+        [
+            (6, None),
+            (3, None),
+            (6, Some(2)),
+            (11, Some(1)),
+            (0, Some(1))
+        ]
     );
     // The channel's own rack: its modules first.
     let split = song.split_rack(1, None);

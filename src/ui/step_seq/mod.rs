@@ -828,11 +828,15 @@ pub(crate) fn row_headers(
             });
             ui.data_mut(|d| d.insert_temp(hold_id, hold));
         }
-        let hold = ui.data(|d| d.get_temp::<Option<RowHold>>(hold_id)).flatten();
+        let hold = ui
+            .data(|d| d.get_temp::<Option<RowHold>>(hold_id))
+            .flatten();
         if let Some(mut hold) = hold.filter(|h| h.row == row && (p.held || p.long_released)) {
             out.held |= p.held;
             // The interact position: a finger's lift clears the latest one in its release frame.
-            let pos = ui.input(|i| i.pointer.interact_pos()).unwrap_or(hold.origin);
+            let pos = ui
+                .input(|i| i.pointer.interact_pos())
+                .unwrap_or(hold.origin);
             let dy = pos.y - hold.origin.y;
             let pads = pads.count();
             if row < pads && (hold.to.is_some() || dy.abs() > m.u(gesture::CALM_U)) {
@@ -846,7 +850,11 @@ pub(crate) fn row_headers(
                 } else if to != row {
                     // Where it drops: a line over the header and the strip, at the row's far edge.
                     let target = l.header(to);
-                    let y = if to > row { target.bottom() } else { target.top() };
+                    let y = if to > row {
+                        target.bottom()
+                    } else {
+                        target.top()
+                    };
                     let line = Rect::from_x_y_ranges(
                         header.left()..=l.column_right(),
                         y - m.t()..=y + m.t(),

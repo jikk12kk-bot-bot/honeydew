@@ -212,7 +212,11 @@ pub fn show(
     crate::panels::set_text_env(ui.ctx(), app.song.tempo_bpm, rate);
     // A drum pad's own rack, or the channel's: the rack holds it alone while the panel draws it.
     let pad = state.pad_of(channel);
-    let pad = pad.filter(|&p| ch.drum_kit.as_ref().is_some_and(|k| k.slot_by_id(p).is_some()));
+    let pad = pad.filter(|&p| {
+        ch.drum_kit
+            .as_ref()
+            .is_some_and(|k| k.slot_by_id(p).is_some())
+    });
     state.panel.pad = pad.map(|p| ch.pad_name(p).unwrap_or("Pad").to_owned());
     let split = app.song.split_rack(channel, pad);
     let ch = &mut app.song.channels[channel];
