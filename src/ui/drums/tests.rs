@@ -211,15 +211,14 @@ fn each_page_splits_the_layer_by_the_spec_weights() {
             (Rel, 474.0, 118.0)
         ]
     );
-    // 2 · 1 · 1 · 2 · 1.2: 70 px per unit of weight.
+    // 2 · 1 · 1 · 2: 84 px per unit of weight.
     assert_eq!(
         widths(StripPage::Options),
         [
-            (Hold, 96.0, 140.0),
-            (Cut, 236.0, 70.0),
-            (Poly, 306.0, 70.0),
-            (Shift, 376.0, 140.0),
-            (Aux, 516.0, 84.0)
+            (Hold, 96.0, 168.0),
+            (Cut, 264.0, 84.0),
+            (Poly, 348.0, 84.0),
+            (Shift, 432.0, 168.0)
         ]
     );
 }
