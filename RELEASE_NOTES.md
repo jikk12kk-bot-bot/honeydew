@@ -11,8 +11,5 @@
 - `Combine` works on drum clips too.
 - Combined clips keep every cut. A note or held hit that ran past the end of a cut clip now ends at the cut, as you heard it, instead of running on through the cut part. The combined clip starts where the first clip starts.
 
-## Track headers
-- With the mixer column open, long press a track's icon and let go to open the track menu, or long press and drag to move the track, the same as when the column is closed.
-
 ## Lemon Studio plugins
 - The built-in Lemon plugins are updated to Lemon Studio's latest (`349c6ba`). Several Lemon Samplers playing the same sample share one copy of it in memory, and a sample path can name environment variables (`%NAME%`). On the desktop, text in a plugin's editor that its own font can't draw now uses a system font that can.
