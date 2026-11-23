@@ -1377,18 +1377,26 @@ fn an_undo_under_a_header_drag_ends_the_drag_whether_or_not_it_changes_the_chann
 /// track's menu, a hold dragged moves the channel.
 #[test]
 fn at_c_1_a_held_icon_opens_the_track_menu_or_drags_the_channel() {
+    for c in [0.0, 1.0] {
+        let mut rig = three_channels();
+        rig.app.main_screen.column = (c, c);
+        rig.frame(vec![]);
+        rig.frame(vec![]);
+        rig.hold_header(2);
+        let held = (rig.app.main_screen.column, rig.app.selected_channel);
+        rig.release(header(2));
+        rig.frame(vec![]);
+        assert!(
+            matches!(rig.app.main_screen.track_menu, Some((2, 0, _))),
+            "c {c}: menu {:?}, held (column, selected) {held:?}, now {:?} {}, overlays {:?}",
+            rig.app.main_screen.track_menu,
+            rig.app.main_screen.column,
+            rig.app.selected_channel,
+            rig.overlays(),
+        );
+    }
     let mut rig = three_channels();
     rig.app.main_screen.column = (1.0, 1.0);
-    rig.frame(vec![]);
-    rig.frame(vec![]);
-    rig.hold_header(2);
-    rig.release(header(2));
-    rig.frame(vec![]);
-    assert!(
-        matches!(rig.app.main_screen.track_menu, Some((2, 0, _))),
-        "{:?}",
-        rig.app.main_screen.track_menu
-    );
     rig.app.main_screen.track_menu = None;
     rig.frame(vec![]);
     rig.hold_header(1);
