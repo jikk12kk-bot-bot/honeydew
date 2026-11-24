@@ -795,5 +795,26 @@ fn write_slot(
         }
         Ok(())
     })?;
+    // Honeydew's own pad sends, only when there are any: `i32` the target channel id, `f32` Enable and Level, each;
+    // and its MIDI sends: `i32` the target channel id and `u32` on (1) or off (0), each.
+    if !file.sends.is_empty() {
+        writer.chunk(*b"HDPs", |writer| {
+            for send in &file.sends {
+                writer.i32(send.target_channel_id)?;
+                writer.f32(send.enabled)?;
+                writer.f32(send.level)?;
+            }
+            Ok(())
+        })?;
+    }
+    if !file.midi_sends.is_empty() {
+        writer.chunk(*b"HDPm", |writer| {
+            for send in &file.midi_sends {
+                writer.i32(send.target_channel_id)?;
+                writer.u32(send.enabled.into())?;
+            }
+            Ok(())
+        })?;
+    }
     write_raw(writer, &file.unknown_chunks)
 }

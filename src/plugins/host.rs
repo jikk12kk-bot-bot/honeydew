@@ -1111,6 +1111,83 @@ pub fn take_automate() -> Vec<(i32, i32, i32)> {
     })
 }
 
+/// The edits of their saved state the built-in plugins' editors made since the last call, each once it is done (the
+/// plugin's `Edited`: a curve dragged, a sample loaded, a menu pick): its module in `song` takes the instance's state
+/// now. Returns each edited module as it was before, as (channel id, instance id, module): an undo step each
+/// ([`crate::history::History::plugin_edited`]).
+pub fn take_edited(song: &mut Song) -> Vec<(i32, i32, ModuleInstance)> {
+    let edited = os_plugkit::embed::take_edited();
+    if edited.is_empty() {
+        return Vec::new();
+    }
+    with(|host| {
+        let mut out = Vec::new();
+        for id in edited {
+            let mut live = host.live.iter_mut();
+            let found =
+                live.find(|(_, h)| h.embedded.is_some_and(|(e, _)| u64::from(e) == id as u64));
+            let Some((&(channel_id, instance_id), hosted)) = found else {
+                continue;
+            };
+            let channel = song.channels.iter_mut().find(|c| c.id == channel_id);
+            let Some(module) = channel.and_then(|c| c.rack.get_mut(instance_id)) else {
+                continue;
+            };
+            let saved = hosted.plugin.lock().ok().and_then(|mut p| {
+                p.idle();
+                p.save_state()
+            });
+            let (Some(state), Some(_)) = (saved, module.file.plugin.as_deref()) else {
+                continue;
+            };
+            let before = module.clone();
+            let state: Arc<[u8]> = state.into();
+            if let Some(plugin_ref) = module.file.plugin.as_deref_mut() {
+                plugin_ref.state = state.clone();
+            }
+            hosted.origin = state;
+            out.push((channel_id, instance_id, before));
+        }
+        out
+    })
+}
+
+/// An undo or redo gave module `instance_id` of channel `channel_id` the saved state of `song`'s copy (a plugin step of
+/// its state, [`take_edited`]): its running instance loads it. Its params as the instance then has them are what the
+/// next [`sync`] compares the song's with, so each that differs goes to it after.
+pub fn load_state(song: &Song, channel_id: i32, instance_id: i32) {
+    let channel = song.channels.iter().find(|c| c.id == channel_id);
+    let Some(module) = channel.and_then(|c| c.rack.get(instance_id)) else {
+        return;
+    };
+    let Some(plugin_ref) = module.file.plugin.as_deref() else {
+        return;
+    };
+    with(|host| {
+        let Some(hosted) = host.live.get_mut(&(channel_id, instance_id)) else {
+            return;
+        };
+        let values = {
+            let Ok(mut p) = hosted.plugin.lock() else {
+                return;
+            };
+            if plugin_ref.state.is_empty() || !p.load_state(&plugin_ref.state) {
+                return;
+            }
+            (hosted.ids.iter())
+                .map(|&id| p.param_value(id).unwrap_or(0.0) as f32)
+                .collect::<Vec<f32>>()
+        };
+        for (i, &v) in values.iter().enumerate() {
+            hosted.params.known(i, v);
+        }
+        if hosted.song_values.len() == values.len() {
+            hosted.song_values = values;
+        }
+        hosted.origin = plugin_ref.state.clone();
+    });
+}
+
 /// While `f` runs, the engines built get fresh instances of their plugins (an export renders on its own, twice): each
 /// with the live instance's state now, else the module's, at the build's rate, rendering offline.
 pub fn rendering<T>(f: impl FnOnce() -> T) -> T {

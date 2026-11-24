@@ -410,7 +410,11 @@ fn downstream(song: &Song, x: usize) -> Vec<usize> {
     let targets = |i: usize| {
         let c = &song.channels[i];
         let sends = c.file.sends.iter().map(|s| s.target_channel_id);
-        let pads = (c.drum_kit.iter()).flat_map(|kit| kit.slots.iter().map(|s| s.file.send_target));
+        let slots = c.drum_kit.iter().flat_map(|kit| &kit.slots);
+        let pads = slots.flat_map(|s| {
+            let own = s.file.sends.iter().map(|s| s.target_channel_id);
+            std::iter::once(s.file.send_target).chain(own)
+        });
         sends.chain(pads).filter_map(index).collect::<Vec<_>>()
     };
     let (mut found, mut next) = (Vec::new(), vec![x]);

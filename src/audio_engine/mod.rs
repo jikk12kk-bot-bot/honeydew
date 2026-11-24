@@ -322,6 +322,12 @@ impl SongAudioEngine {
                 for (index, value) in slot.params.iter().copied().enumerate() {
                     initial.push((channel_index, id, index as i32, value));
                 }
+                // Its sends' Enable and Level, as slot params 0x1000 / 0x2000 + the target's id.
+                for send in &slot.file.sends {
+                    let target = send.target_channel_id;
+                    initial.push((channel_index, id, 0x1000 + target, send.enabled));
+                    initial.push((channel_index, id, 0x2000 + target, send.level));
+                }
             }
             kits.push(kit);
             clips.push(audio_clips::build(

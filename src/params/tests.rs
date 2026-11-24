@@ -1580,6 +1580,27 @@ fn gate_asymmetry_is_66_v_squared() {
 }
 
 #[test]
+fn reverb_2_delay_reads_beats_while_tempo_is_on() {
+    let at = |tempo: f32, v: f32| {
+        let mut params = [0.0; 19];
+        params[12] = tempo;
+        let cx = TextCx {
+            params: &params,
+            ..TextCx::default()
+        };
+        text_in(35, 11, v, cx)
+    };
+    assert_eq!(
+        [0.0, 0.25, 1.0].map(|v| at(0.0, v)),
+        ["0ms", "250ms", "1000ms"]
+    );
+    assert_eq!(
+        [0.0, 0.25, 1.0].map(|v| at(1.0, v)),
+        ["0.00 beat", "0.25 beat", "1.00 beat"]
+    );
+}
+
+#[test]
 fn autoduck_attack_follows_the_song_tempo() {
     // b = 0.5·v + 0.001 in f32, round(b·60000/BPM) ms.
     let at = |bpm: f64, v: f32| {

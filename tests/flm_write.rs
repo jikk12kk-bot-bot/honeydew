@@ -1198,3 +1198,28 @@ fn a_slots_main_flags_and_beat_offset_round_trip() {
         (true, 0.375, 0.7, 3, false)
     );
 }
+
+#[test]
+fn a_pads_own_sends_survive_round_trip() {
+    let mut song = Song::default();
+    song.add_channel(ChannelKind::Drums);
+    song.add_channel(ChannelKind::EffectTrack);
+    song.add_channel(ChannelKind::Synth(SynthKind::MiniSynth));
+    let (fx, synth) = (song.channels[2].id, song.channels[3].id);
+    let slot = &mut song.channels[1].drum_kit.as_mut().unwrap().slots[2];
+    slot.file.sends.push(honeydew::song::SendState {
+        target_channel_id: fx,
+        enabled: 0.0,
+        enabled_init: 0.0,
+        level: 0.5,
+        level_init: 0.5,
+        ..Default::default()
+    });
+    slot.file.midi_sends.push(honeydew::song::MidiSend {
+        target_channel_id: synth,
+        enabled: true,
+    });
+    slot.file.send_target = fx;
+    let read_back = read(&write(&song).unwrap()).unwrap();
+    assert_eq!(read_back.channels[1].drum_kit, song.channels[1].drum_kit);
+}

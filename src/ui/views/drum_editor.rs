@@ -501,6 +501,13 @@ pub fn show(state: &mut State, ui: &mut egui::Ui, app: &mut AppCtx, channel: usi
             .as_mut()
             .expect("checked above");
         edit_kit(kit, &action);
+        // A cloned pad gets a copy of its original's own rack.
+        if let StepAction::Clone { pad } = action {
+            let id = |k: usize| kit.slots.get(k).map(|s| s.file.id);
+            if let (Some(from), Some(to)) = (id(usize::from(pad)), id(usize::from(pad) + 1)) {
+                app.song.channels[channel].rack.copy_pad(from, to);
+            }
+        }
         match action {
             StepAction::Swing { final_edit, .. } => app.song_edited(final_edit),
             // The play loop is no edit; the playhead is the transport's.

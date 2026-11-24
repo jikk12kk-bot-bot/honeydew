@@ -521,7 +521,7 @@ diff -ruN a/vendor/lemon-studio/os-hostlink/src/lib.rs b/vendor/lemon-studio/os-
  mod local {
      use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
      use std::sync::{Arc, Mutex, OnceLock, Weak};
-@@ -446,6 +449,35 @@
+@@ -446,6 +449,41 @@
          /// Plugin -> host (`Changed`, `Note`, `Automate`, `Edited`): queued for the host's next tick, which is woken. 1 when a host
          /// is there, 0 otherwise (as unanswered messages on Windows).
          pub fn to_host(&self, cmd: Cmd, arg: isize) -> isize {
@@ -530,6 +530,12 @@ diff -ruN a/vendor/lemon-studio/os-hostlink/src/lib.rs b/vendor/lemon-studio/os-
 +            #[cfg(feature = "embed")]
 +            if cmd == Cmd::Automate {
 +                AUTOMATE.with_borrow_mut(|q| q.push((self.parent, arg)));
++                return 1;
++            }
++            // Honeydew (vendored change): and `Edited`, an undo step of the editor's own edit (`take_edited`).
++            #[cfg(feature = "embed")]
++            if cmd == Cmd::Edited {
++                EDITED.with_borrow_mut(|q| q.push(self.parent));
 +                return 1;
 +            }
 +            // Honeydew (vendored change): and Tesla's `Audio` to the playlist (#117): the file it posted is kept for this
@@ -557,7 +563,7 @@ diff -ruN a/vendor/lemon-studio/os-hostlink/src/lib.rs b/vendor/lemon-studio/os-
              if !self.hosted() {
                  return 0;
              }
-@@ -461,6 +493,36 @@
+@@ -461,6 +499,44 @@
  
      static REGISTRY: Mutex<Vec<(u64, Weak<Peer>)>> = Mutex::new(Vec::new());
      static QUEUE: Mutex<Vec<(u64, Cmd, isize)>> = Mutex::new(Vec::new());
@@ -567,6 +573,7 @@ diff -ruN a/vendor/lemon-studio/os-hostlink/src/lib.rs b/vendor/lemon-studio/os-
 +    #[cfg(feature = "embed")]
 +    thread_local! {
 +        static AUTOMATE: std::cell::RefCell<Vec<(u64, isize)>> = const { std::cell::RefCell::new(Vec::new()) };
++        static EDITED: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
 +        static SENT: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 +        static SCORED: std::cell::RefCell<Vec<Vec<NoteOut>>> = const { std::cell::RefCell::new(Vec::new()) };
 +    }
@@ -576,6 +583,13 @@ diff -ruN a/vendor/lemon-studio/os-hostlink/src/lib.rs b/vendor/lemon-studio/os-
 +    #[cfg(feature = "embed")]
 +    pub fn take_automate() -> Vec<(u64, isize)> {
 +        AUTOMATE.with_borrow_mut(std::mem::take)
++    }
++
++    /// Honeydew (vendored addition): the editors (their host windows) on this thread that sent `Edited` since the last
++    /// call, once per edit, oldest first.
++    #[cfg(feature = "embed")]
++    pub fn take_edited() -> Vec<u64> {
++        EDITED.with_borrow_mut(std::mem::take)
 +    }
 +
 +    /// Honeydew (vendored addition): the files this thread's editors sent to the playlist since the last call (`Audio`),
@@ -594,21 +608,21 @@ diff -ruN a/vendor/lemon-studio/os-hostlink/src/lib.rs b/vendor/lemon-studio/os-
      static HOST_WAKER: OnceLock<fn()> = OnceLock::new();
  
      /// Host: how plugins wake its UI loop when they send something.
-@@ -543,6 +605,10 @@
+@@ -543,6 +619,10 @@
  
  #[cfg(not(windows))]
  pub use local::{set_host_waker, take_host_messages, Link, Peer};
 +#[cfg(all(windows, feature = "embed"))]
 +pub use local::Peer;
 +#[cfg(feature = "embed")]
-+pub use local::{take_automate, take_scored, take_sent};
++pub use local::{take_automate, take_edited, take_scored, take_sent};
  
  #[cfg(test)]
  mod tests {
 diff -ruN a/vendor/lemon-studio/os-plugkit/src/embed.rs b/vendor/lemon-studio/os-plugkit/src/embed.rs
 --- a/vendor/lemon-studio/os-plugkit/src/embed.rs
 +++ b/vendor/lemon-studio/os-plugkit/src/embed.rs
-@@ -0,0 +1,613 @@
+@@ -0,0 +1,620 @@
 +// Copyright (C) 2026 The Honeydew contributors
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
@@ -1123,6 +1137,13 @@ diff -ruN a/vendor/lemon-studio/os-plugkit/src/embed.rs b/vendor/lemon-studio/os
 +pub fn take_automate() -> Vec<(Parent, usize)> {
 +    let asked = os_hostlink::take_automate().into_iter();
 +    asked.filter_map(|(id, i)| Some((Parent::try_from(id).ok()?, usize::try_from(i).ok()?))).collect()
++}
++
++/// The editors on this thread whose own edit of their plugin's saved state ended since the last call (`os_hostlink`'s
++/// `Edited`), once per edit, oldest first: Honeydew makes each an undo step.
++pub fn take_edited() -> Vec<Parent> {
++    let edited = os_hostlink::take_edited().into_iter();
++    edited.filter_map(|id| Parent::try_from(id).ok()).collect()
 +}
 +
 +/// Issue #117: the files this thread's editors sent to the playlist since the last call (Tesla's `Send to arranger as

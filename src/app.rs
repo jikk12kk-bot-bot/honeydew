@@ -216,6 +216,12 @@ pub struct HoneydewApp {
     row_drag: bool,
     /// Channel params moved that the undo history does not have yet ([`History::sync`]).
     params_moved: bool,
+    /// The edits in plugins' own windows not ended yet, by (channel id, instance id): the module as the edit found it,
+    /// and how many of its param gestures are open (`app::plugins`).
+    plugin_edits: std::collections::HashMap<(i32, i32), (crate::song::ModuleInstance, u32)>,
+    /// The last plugin step's module (channel id, instance id) and when it was made: its plugin's `Edited` that follows
+    /// at once joins it (`app::plugins`).
+    plugin_stepped: Option<((i32, i32), f64)>,
     /// The quit question was answered `Yes`: the window's close request that follows is let through.
     quitting: bool,
     /// The flash shown (`Saved!`), and when it showed.
@@ -349,6 +355,8 @@ impl Default for HoneydewApp {
             param_gesture: false,
             row_drag: false,
             params_moved: false,
+            plugin_edits: std::collections::HashMap::new(),
+            plugin_stepped: None,
             quitting: false,
             flash: None,
             preview: None,
@@ -865,6 +873,8 @@ impl HoneydewApp {
         }
         // What the step keeps. Across a version restored, the whole song, the plugins' states too.
         self.params_moved = false;
+        self.plugin_edits.clear();
+        self.plugin_stepped = None;
         let whole = self.history.crosses(step);
         if whole {
             crate::plugins::store_states(&mut self.song);
@@ -897,8 +907,12 @@ impl HoneydewApp {
         self.main_screen.forget_keys_views(gone);
         // The selected channel may be gone.
         self.selected_channel = self.selected_channel.min(self.song.channels.len() - 1);
+        let plugin_step = self.history.take_plugin_step();
         if whole {
             crate::plugins::song_replaced();
+        } else if let Some(step) = plugin_step.filter(|s| s.state) {
+            // A plugin's edit of its saved state undone or redone: its instance loads the state the module has now.
+            crate::plugins::load_state(&self.song, step.channel_id, step.instance_id);
         }
         self.rebuild_as(tick, Handover::Undo);
     }

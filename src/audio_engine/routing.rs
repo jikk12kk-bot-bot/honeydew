@@ -97,8 +97,13 @@ pub(super) fn build(song: &Song) -> (Vec<ChannelMix>, Routing) {
     let mut edges = targets;
     for (index, channel) in song.channels.iter().enumerate() {
         let slots = channel.drum_kit.iter().flat_map(|kit| &kit.slots);
-        for slot in slots.filter(|slot| slot.file.send_target >= 0) {
-            if let Some(target) = ids.iter().position(|&id| id == slot.file.send_target)
+        // A pad's AUX target and its own sends' (`HDPs`).
+        let pads = slots.flat_map(|slot| {
+            let sends = slot.file.sends.iter().map(|s| s.target_channel_id);
+            std::iter::once(slot.file.send_target).chain(sends)
+        });
+        for pad_target in pads.filter(|&id| id >= 0) {
+            if let Some(target) = ids.iter().position(|&id| id == pad_target)
                 && target != index
                 && !edges[index].contains(&target)
             {

@@ -1,7 +1,7 @@
 use super::*;
 
-// The parameter menu opens on a long press of the mouse too (300 ms within 0.5 U; a knob's or slider's 500 ms, and
-// any slide over 2 points cancels it: `gesture::control_long_press`).
+// The parameter menu opens on a long press of the mouse too (300 ms within 0.5 U); a knob's or slider's on the release of
+// one held 500 ms that never slid over 2 points (`gesture::control_menu`): held, it drags.
 
 impl Rig {
     /// Presses the control's centre with the mouse and holds it still, a frame every 1/60 s, until the frame `secs`
@@ -23,12 +23,9 @@ impl Rig {
     }
 }
 
-/// Knobs, sliders and toggles (bound: the `ParamMenu::Bound` items, after `Reset` on knobs and sliders), and a bound
-/// button.
+/// Toggles (bound: the `ParamMenu::Bound` items) and a bound button, whose menu opens at the long press.
 fn rigs() -> Vec<Rig> {
-    let mut rigs: Vec<Rig> = [Kind::Knob, Kind::VSlider, Kind::HSlider, Kind::Toggle]
-        .map(|kind| Rig::new(kind, 0.25))
-        .into();
+    let mut rigs: Vec<Rig> = [Kind::Toggle].map(|kind| Rig::new(kind, 0.25)).into();
     let mut button = Rig::new(Kind::Button, 0.0);
     button.style = |b| Button {
         menu: ParamMenu::Bound,
@@ -38,19 +35,13 @@ fn rigs() -> Vec<Rig> {
     rigs
 }
 
-/// The hold that opens `kind`'s menu (s): a knob's or slider's is longer.
-fn due(kind: Kind) -> f64 {
-    match kind {
-        Kind::Knob | Kind::VSlider | Kind::HSlider => crate::ui::gesture::CONTROL_LONG_PRESS_S,
-        _ => crate::ui::gesture::LONG_PRESS_S,
-    }
-}
+const CONTROLS: [Kind; 3] = [Kind::Knob, Kind::VSlider, Kind::HSlider];
 
 #[test]
 fn a_mouse_held_still_300_ms_opens_the_parameter_menu_and_its_release_neither_clicks_nor_edits() {
     for mut rig in rigs() {
         let kind = rig.kind;
-        rig.hold(due(kind), false);
+        rig.hold(crate::ui::gesture::LONG_PRESS_S, false);
         assert!(rig.popup_is_open(), "{kind:?}: open at its due");
         // Held on past egui's 0.8 s and moved: the press drags nothing under the menu.
         for _ in 0..40 {
@@ -75,6 +66,40 @@ fn a_mouse_held_still_300_ms_opens_the_parameter_menu_and_its_release_neither_cl
             texts.iter().any(|t| t == "Add automation track"),
             "{kind:?}"
         );
+    }
+}
+
+#[test]
+fn a_knob_or_slider_opens_its_menu_on_the_release_of_a_still_long_press_which_edits_nothing() {
+    for kind in CONTROLS {
+        let mut rig = Rig::new(kind, 0.25);
+        rig.hold(crate::ui::gesture::CONTROL_LONG_PRESS_S + 0.2, false);
+        assert!(!rig.popup_is_open(), "{kind:?}: no menu while held");
+        rig.button(RECT.center(), PointerButton::Primary, false);
+        assert!(!rig.clicked, "{kind:?}");
+        assert_eq!(rig.value, 0.25, "{kind:?}");
+        rig.frame(vec![]);
+        assert!(rig.popup_is_open(), "{kind:?}: open on the release");
+        assert!(rig.menu_rect().is_some(), "{kind:?}");
+        let texts: Vec<String> = texts(&rig.shapes).into_iter().map(|t| t.0).collect();
+        assert!(texts.iter().any(|t| t == "Reset"), "{kind:?}");
+    }
+}
+
+#[test]
+fn a_knob_or_slider_held_long_then_slid_changes_its_value_and_opens_no_menu() {
+    for kind in CONTROLS {
+        let mut rig = Rig::new(kind, 0.25);
+        rig.hold(1.0, false);
+        let mut at = RECT.center();
+        for _ in 0..10 {
+            at += vec2(4.0, -4.0);
+            rig.frame(vec![Event::PointerMoved(at)]);
+        }
+        assert_ne!(rig.value, 0.25, "{kind:?}: it drags");
+        rig.button(at, PointerButton::Primary, false);
+        rig.frame(vec![]);
+        assert!(!rig.popup_is_open(), "{kind:?}: no menu after a slide");
     }
 }
 
@@ -121,5 +146,15 @@ fn a_knob_or_slider_held_300_ms_opens_no_menu_and_a_slide_before_its_500_ms_neve
             rig.frame(vec![]);
         }
         assert!(!rig.popup_is_open(), "{kind:?}: a slide cancels it");
+        rig.button(
+            RECT.center() + vec2(0.0, -3.0),
+            PointerButton::Primary,
+            false,
+        );
+        rig.frame(vec![]);
+        assert!(
+            !rig.popup_is_open(),
+            "{kind:?}: nor opens it on the release"
+        );
     }
 }

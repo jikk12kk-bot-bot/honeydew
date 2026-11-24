@@ -538,8 +538,9 @@ pub fn signal(ui: &Ui, id: Id) -> Signal {
         .unwrap_or_default()
 }
 
-/// Shows control `id`'s parameter menu while it is open; a long press ([`gesture::long_press`], mouse or touch) or a
-/// secondary click on `response` opens it, centred on the pointer, and the release after a long press is no click.
+/// Shows control `id`'s parameter menu while it is open; a long press ([`gesture::long_press`], mouse or touch; a knob's
+/// or slider's on its release in place, [`gesture::control_menu`]) or a secondary click on `response` opens it, centred
+/// on the pointer, and the release after a long press is no click.
 /// `reset`: the control is a knob or slider, whose menu starts with `Reset`; `fine_tune`: it ends with `Fine tune
 /// control`. Returns the item picked this frame.
 fn context_menu(
@@ -560,14 +561,14 @@ fn context_menu(
         post(ui, id, |s| s.pressed = true);
     }
     let menu_id = menu_id(id);
-    // A knob or slider waits longer, and any slide cancels it: a finger resting on a fader before it moves slides it.
+    // A knob or slider opens it on the release of a long press that stayed still: held, it drags at once.
     let long = match reset {
-        true => gesture::control_long_press(ui, response, cx.m),
-        false => gesture::long_press(ui, response, cx.m),
+        true => gesture::control_menu(ui, response, cx.m),
+        false => gesture::long_press(ui, response, cx.m).then_some(response.rect.center()),
     };
-    if response.clicked_by(PointerButton::Secondary) || long {
-        let at = response
-            .interact_pointer_pos()
+    if response.clicked_by(PointerButton::Secondary) || long.is_some() {
+        let at = (response.interact_pointer_pos())
+            .or(long)
             .unwrap_or(response.rect.center());
         open_popup(ui, menu_id, at);
     }

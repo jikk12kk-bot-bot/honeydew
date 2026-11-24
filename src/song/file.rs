@@ -559,6 +559,11 @@ pub struct SlotFileState {
     pub main_extra: Vec<u8>,
     /// `LINk` bytes after 14.
     pub link_extra: Vec<u8>,
+    /// Honeydew's own `HDPs`: the pad's sends, past its own rack, beside its output (its channel, or
+    /// [`Self::send_target`]): its target, Enable and Level, as a channel's `SEND` (the rest unused).
+    pub sends: Vec<SendState>,
+    /// Honeydew's own `HDPm`: the channels the pad's hits also go to, as notes of the pad's own note.
+    pub midi_sends: Vec<MidiSend>,
 }
 
 impl Default for SlotFileState {
@@ -573,6 +578,8 @@ impl Default for SlotFileState {
             output_bus: -1,
             midi_key: u16::MAX,
             send_target: -1,
+            sends: Vec::new(),
+            midi_sends: Vec::new(),
             stretch_mode: 0,
             stretch_ratio: 1.0,
             pitch_semitones: 0.0,

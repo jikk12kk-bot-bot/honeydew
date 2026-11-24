@@ -511,7 +511,11 @@ fn validate(song: &Song) -> Result<(), Conflict> {
             indegree[j] += 1;
         }
         for slot in ch.drum_kit.iter().flat_map(|k| &k.slots) {
-            if slot.file.send_target >= 0 && index(slot.file.send_target).is_none() {
+            let sends = (slot.file.sends.iter().map(|s| s.target_channel_id))
+                .chain(slot.file.midi_sends.iter().map(|s| s.target_channel_id));
+            if (slot.file.send_target >= 0 && index(slot.file.send_target).is_none())
+                || sends.clone().any(|id| index(id).is_none())
+            {
                 return Err(Conflict(format!(
                     "Channel {}: pad send target removed",
                     ch.id
