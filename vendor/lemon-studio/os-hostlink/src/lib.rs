@@ -456,6 +456,12 @@ mod local {
                 AUTOMATE.with_borrow_mut(|q| q.push((self.parent, arg)));
                 return 1;
             }
+            // Honeydew (vendored change): and `Edited`, an undo step of the editor's own edit (`take_edited`).
+            #[cfg(feature = "embed")]
+            if cmd == Cmd::Edited {
+                EDITED.with_borrow_mut(|q| q.push(self.parent));
+                return 1;
+            }
             // Honeydew (vendored change): and Tesla's `Audio` to the playlist (#117): the file it posted is kept for this
             // thread (`take_sent`). The other places are not answered.
             #[cfg(feature = "embed")]
@@ -499,6 +505,7 @@ mod local {
     #[cfg(feature = "embed")]
     thread_local! {
         static AUTOMATE: std::cell::RefCell<Vec<(u64, isize)>> = const { std::cell::RefCell::new(Vec::new()) };
+        static EDITED: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
         static SENT: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
         static SCORED: std::cell::RefCell<Vec<Vec<NoteOut>>> = const { std::cell::RefCell::new(Vec::new()) };
     }
@@ -508,6 +515,13 @@ mod local {
     #[cfg(feature = "embed")]
     pub fn take_automate() -> Vec<(u64, isize)> {
         AUTOMATE.with_borrow_mut(std::mem::take)
+    }
+
+    /// Honeydew (vendored addition): the editors (their host windows) on this thread that sent `Edited` since the last
+    /// call, once per edit, oldest first.
+    #[cfg(feature = "embed")]
+    pub fn take_edited() -> Vec<u64> {
+        EDITED.with_borrow_mut(std::mem::take)
     }
 
     /// Honeydew (vendored addition): the files this thread's editors sent to the playlist since the last call (`Audio`),
@@ -608,7 +622,7 @@ pub use local::{set_host_waker, take_host_messages, Link, Peer};
 #[cfg(all(windows, feature = "embed"))]
 pub use local::Peer;
 #[cfg(feature = "embed")]
-pub use local::{take_automate, take_scored, take_sent};
+pub use local::{take_automate, take_edited, take_scored, take_sent};
 
 #[cfg(test)]
 mod tests {

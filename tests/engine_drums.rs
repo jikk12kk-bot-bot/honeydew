@@ -957,3 +957,47 @@ fn a_cut_group_reaches_the_playing_kit_as_a_setting() {
         out[3899]
     );
 }
+
+/// A pad's own send (`HDPs`) adds it, at the send's Level, into its target beside its own channel: the drum channel's
+/// Level does not touch the send, the send's Level slot param moves it live, and a muted drum channel sends nothing.
+#[test]
+fn a_pads_own_send_adds_it_into_the_target_beside_its_channel() {
+    let unit = unit();
+    let mut song = kit(&["dc"]);
+    song.add_channel(ChannelKind::EffectTrack);
+    hits(&mut song, [hit(0, 0)]);
+    let target = song.channels[2].id;
+    slots(&mut song)[0].file.sends.push(honeydew::song::SendState {
+        target_channel_id: target,
+        ..Default::default()
+    });
+    song.channels[1].params.0[0] = 0.0;
+    assert!(close(play(&song, 100)[50], unit), "the send alone");
+    song.channels[1].params.0[0] = 0.8531;
+    let mut engine = engine(&song);
+    let id = -(slots(&mut song)[0].file.id as i32);
+    engine.set_param(1, id, 0x2000 + target, 0.0);
+    engine.play();
+    assert!(close(render(&mut engine, 100)[50], unit), "its Level, live: the channel alone");
+    song.channels[1].params.0[2] = 1.0;
+    assert_eq!(play(&song, 100)[50], 0.0, "the drum channel muted");
+}
+
+/// A pad's MIDI send (`HDPm`) plays the pad's hits on the target as notes of the pad's own note, at their beats.
+#[test]
+fn a_pads_midi_send_plays_its_hits_on_the_target_as_its_note() {
+    let mut song = kit(&["dc", "dc"]);
+    song.add_channel(ChannelKind::Synth(honeydew::song::SynthKind::MiniSynth));
+    hits(&mut song, [hit(0, 0), hit(0, 1)]);
+    let target = song.channels[2].id;
+    slots(&mut song)[1].file.midi_sends.push(honeydew::song::MidiSend {
+        target_channel_id: target,
+        enabled: true,
+    });
+    let key = song.channels[1].drum_kit.as_ref().unwrap().pad_note(1).unwrap();
+    let mut engine = engine(&song);
+    engine.play();
+    render(&mut engine, 1000);
+    assert_eq!(engine.sounding(2), 1 << key);
+    assert!(strip_peak(&engine, 2) > 0.01, "the target plays it");
+}

@@ -10,7 +10,8 @@ use eframe::egui::Context;
 
 use crate::keymap;
 use crate::song::{
-    Channel, Clip, Event, Lane, ModuleInstance, RawChunk, SamplerSlot, SlotFileState, Song,
+    Channel, Clip, Event, Lane, ModuleInstance, RawChunk, SamplerSlot, SendState, SlotFileState,
+    Song,
 };
 
 /// The `Project version size limit` in force, in bytes: what the undo history holds at most ([`History::limit`]), and
@@ -86,6 +87,18 @@ struct Snapshot {
     channels: Vec<Arc<Channel>>,
     /// A version restored ([`History::replaced`]): an undo or redo across it restores a whole song.
     restored: bool,
+    /// An edit in a plugin module's own window ([`History::plugin_edited`]): the module it made, which an undo or redo
+    /// of it restores although no undo step covers the rack ([`keep_live`]).
+    plugin: Option<PluginStep>,
+}
+
+/// The module a plugin step ([`History::plugin_edited`]) edited: its channel's id, its instance id, and whether the
+/// edit was of its saved state (the plugin's `Edited`), not only of its params.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PluginStep {
+    pub channel_id: i32,
+    pub instance_id: i32,
+    pub state: bool,
 }
 
 impl Snapshot {
@@ -132,6 +145,7 @@ impl Snapshot {
             head,
             channels,
             restored: false,
+            plugin: None,
         }
     }
 
@@ -178,6 +192,8 @@ pub struct History {
     open: bool,
     /// The memory the steps may hold, in bytes ([`set_size_limit`]): past it a new step drops the oldest ones.
     pub limit: usize,
+    /// The plugin step the last undo or redo restored a module of ([`Self::take_plugin_step`]).
+    plugin_restored: Option<PluginStep>,
 }
 
 #[cfg(test)]
@@ -253,10 +269,20 @@ fn keep_live(to: &mut Arc<Channel>, from: &Channel) -> bool {
             ((f.enabled, f.level) != (t.enabled, t.level)).then_some((i, f))
         })
         .collect();
+    // A pad's sends' values, by target, as the channel's.
+    fn pad_send(slot: &SamplerSlot, id: i32) -> Option<&SendState> {
+        slot.file.sends.iter().find(|s| s.target_channel_id == id)
+    }
+    let send_moved = |f: &SamplerSlot, t: &SamplerSlot| {
+        (t.file.sends.iter()).any(|t| {
+            let f = pad_send(f, t.target_channel_id);
+            f.is_some_and(|f| (f.enabled, f.level) != (t.enabled, t.level))
+        })
+    };
     let pads: Vec<_> = (to.drum_kit.iter().flat_map(|k| k.slots.iter().enumerate()))
         .filter_map(|(i, t)| {
             let f = pad(t.file.id)?;
-            (f.params != t.params || !same_sample(f, t)).then_some((i, f))
+            (f.params != t.params || !same_sample(f, t) || send_moved(f, t)).then_some((i, f))
         })
         .collect();
     let last = |c: &Channel| c.drum_kit.as_ref().map(|k| k.file.last_slot_id);
@@ -280,6 +306,11 @@ fn keep_live(to: &mut Arc<Channel>, from: &Channel) -> bool {
         t.params = f.params;
         (t.name, t.folder) = (f.name.clone(), f.folder.clone());
         let file = &mut t.file;
+        for send in &mut file.sends {
+            if let Some(g) = pad_send(f, send.target_channel_id) {
+                (send.enabled, send.level) = (g.enabled, g.level);
+            }
+        }
         file.path.clone_from(&f.file.path);
         file.preset_path.clone_from(&f.file.preset_path);
         file.provenance.clone_from(&f.file.provenance);
@@ -324,6 +355,7 @@ impl History {
             redo: Vec::new(),
             open: false,
             limit: size_limit(),
+            plugin_restored: None,
         }
     }
 
@@ -386,6 +418,82 @@ impl History {
         self.trim();
     }
 
+    /// An edit in a plugin module's own window ended (its gesture's release, or the plugin's `Edited`): `song` holds the
+    /// module as it left it, `before` as it found it. One undo step, although no undo step covers the rack: the step
+    /// before it holds `before`, and an undo or redo of it restores that module ([`Self::take_plugin_step`]). A gesture
+    /// still open becomes a step first. Whether it saved a step (the module changed).
+    pub fn plugin_edited(&mut self, song: &Song, step: PluginStep, before: &ModuleInstance) -> bool {
+        if self.open {
+            self.edited(song, true);
+        }
+        self.sync(song);
+        let Some(ch) = (self.current.channels.iter_mut()).find(|c| c.id == step.channel_id) else {
+            return false;
+        };
+        if ch.rack.get(step.instance_id).is_none_or(|m| m == before) {
+            return false;
+        }
+        if let Some(module) = Arc::make_mut(ch).rack.get_mut(step.instance_id) {
+            module.clone_from(before);
+        }
+        let next = Snapshot {
+            plugin: Some(step),
+            ..Snapshot::new(song, &self.current.channels)
+        };
+        self.undo
+            .push_back(std::mem::replace(&mut self.current, next));
+        self.redo.clear();
+        self.trim();
+        true
+    }
+
+    /// The plugin's own edit of its saved state that follows the step of a param edit in its window at once (`Edited`)
+    /// joins that step, when it is the last one and module `(channel id, instance id)`'s: an undo or redo of it then
+    /// loads the state too. Whether it joined.
+    pub fn plugin_amend(&mut self, song: &Song, (channel_id, instance_id): (i32, i32)) -> bool {
+        let Some(step) = self.current.plugin.as_mut() else {
+            return false;
+        };
+        if self.open || (step.channel_id, step.instance_id) != (channel_id, instance_id) {
+            return false;
+        }
+        step.state = true;
+        self.sync(song);
+        true
+    }
+
+    /// The plugin step the last undo or redo restored a module of ([`Self::plugin_edited`]), once.
+    pub fn take_plugin_step(&mut self) -> Option<PluginStep> {
+        self.plugin_restored.take()
+    }
+
+    /// The module of plugin step `step` as the current step holds it.
+    fn plugin_module(&self, step: Option<PluginStep>) -> Option<(PluginStep, ModuleInstance)> {
+        let step = step?;
+        let ch = (self.current.channels.iter()).find(|c| c.id == step.channel_id)?;
+        Some((step, ch.rack.get(step.instance_id)?.clone()))
+    }
+
+    /// Puts `kept` ([`Self::plugin_module`]) back into the current step and `song`, after [`Self::restore`] gave them
+    /// the live rack.
+    fn put_plugin_module(&mut self, kept: Option<(PluginStep, ModuleInstance)>, song: &mut Song) {
+        let Some((step, module)) = kept else {
+            return;
+        };
+        let put = |ch: &mut Channel| {
+            if let Some(m) = ch.rack.get_mut(step.instance_id) {
+                m.clone_from(&module);
+            }
+        };
+        if let Some(ch) = (self.current.channels.iter_mut()).find(|c| c.id == step.channel_id) {
+            put(Arc::make_mut(ch));
+        }
+        if let Some(ch) = song.channels.iter_mut().find(|c| c.id == step.channel_id) {
+            put(ch);
+        }
+        self.plugin_restored = Some(step);
+    }
+
     /// Whether `step` crosses a restore ([`Self::replaced`]) and so restores a whole song.
     pub fn crosses(&self, step: Step) -> bool {
         match step {
@@ -405,6 +513,7 @@ impl History {
         }
         self.current = Snapshot {
             restored: self.current.restored,
+            plugin: self.current.plugin,
             ..Snapshot::new(song, &self.current.channels)
         };
         self.redo.clear();
@@ -439,6 +548,7 @@ impl History {
         let stepped = self.open && self.edited(song, true);
         let next = Snapshot {
             restored: self.current.restored,
+            plugin: self.current.plugin,
             ..Snapshot::new(song, &self.current.channels)
         };
         self.carry(song, &was, (!stepped).then_some(&next));
@@ -512,13 +622,20 @@ impl History {
         }
         // Only this step: another one that held the channel may have the target.
         let ids: Vec<i32> = self.current.channels.iter().map(|c| c.id).collect();
-        let dangling =
-            |s: &SamplerSlot| s.file.send_target >= 0 && !ids.contains(&s.file.send_target);
+        let dangling = |s: &SamplerSlot| {
+            (s.file.send_target >= 0 && !ids.contains(&s.file.send_target))
+                || (s.file.sends.iter()).any(|t| !ids.contains(&t.target_channel_id))
+                || (s.file.midi_sends.iter()).any(|t| !ids.contains(&t.target_channel_id))
+        };
         for ch in &mut self.current.channels {
             if ch.drum_kit.iter().flat_map(|k| &k.slots).any(dangling) {
                 let slots = (Arc::make_mut(ch).drum_kit.iter_mut()).flat_map(|k| &mut k.slots);
                 for slot in slots.filter(|s| dangling(s)) {
-                    slot.file.send_target = -1;
+                    if !ids.contains(&slot.file.send_target) {
+                        slot.file.send_target = -1;
+                    }
+                    slot.file.sends.retain(|t| ids.contains(&t.target_channel_id));
+                    slot.file.midi_sends.retain(|t| ids.contains(&t.target_channel_id));
                 }
             }
         }
@@ -530,11 +647,17 @@ impl History {
     pub fn undo(&mut self) -> Option<Song> {
         let live = self.current.channels.clone();
         let whole = self.crosses(Step::Undo);
+        let mut plugin = None;
         if !std::mem::take(&mut self.open) {
             let prev = self.undo.pop_back()?;
+            plugin = self.current.plugin;
             self.redo.push(std::mem::replace(&mut self.current, prev));
         }
-        Some(self.restore(&live, whole))
+        // A plugin step undone: the module as the step before holds it.
+        let kept = self.plugin_module(plugin);
+        let mut song = self.restore(&live, whole);
+        self.put_plugin_module(kept, &mut song);
+        Some(song)
     }
 
     /// The song to restore, `None` when there is nothing to redo. It drops a gesture in progress.
@@ -543,9 +666,13 @@ impl History {
         let next = self.redo.pop()?;
         self.open = false;
         let live = self.current.channels.clone();
+        let plugin = next.plugin;
         self.undo
             .push_back(std::mem::replace(&mut self.current, next));
-        Some(self.restore(&live, whole))
+        let kept = self.plugin_module(plugin);
+        let mut song = self.restore(&live, whole);
+        self.put_plugin_module(kept, &mut song);
+        Some(song)
     }
 
     /// The undo steps kept.
@@ -604,6 +731,34 @@ mod tests {
             tempo_bpm: bpm,
             ..song.clone()
         }
+    }
+
+    /// An edit in a plugin's window is an undo step of its module, although the rack is not covered by undo: an undo
+    /// restores the module as the edit found it, a redo as it left it, each once named for the app.
+    #[test]
+    fn a_plugin_step_undoes_and_redoes_its_module() {
+        let mut song = song_with(1);
+        let n = song.channels.len() - 1;
+        let id = song.channels[n].rack.add(6);
+        song.channels[n].rack.get_mut(id).unwrap().params = vec![1.0, 0.5];
+        let mut history = History::new(&song);
+        let before = song.channels[n].rack.get(id).unwrap().clone();
+        song.channels[n].rack.get_mut(id).unwrap().params[1] = 0.987;
+        let step = PluginStep {
+            channel_id: song.channels[n].id,
+            instance_id: id,
+            state: true,
+        };
+        assert!(history.plugin_edited(&song, step, &before));
+        assert!(!history.plugin_edited(&song, step, &song.channels[n].rack.get(id).unwrap().clone()));
+        let value = |song: &Song| song.channels[n].rack.get(id).unwrap().params[1];
+        let undone = history.undo().unwrap();
+        assert_eq!(value(&undone), before.params[1]);
+        assert_eq!(history.take_plugin_step(), Some(step));
+        assert_eq!(history.take_plugin_step(), None);
+        let redone = history.redo().unwrap();
+        assert_eq!(value(&redone), 0.987);
+        assert_eq!(history.take_plugin_step(), Some(step));
     }
 
     #[test]

@@ -218,6 +218,7 @@ pub fn show(
             .is_some_and(|k| k.slot_by_id(p).is_some())
     });
     state.panel.pad = pad.map(|p| ch.pad_name(p).unwrap_or("Pad").to_owned());
+    state.panel.pad_slot = pad;
     let split = app.song.split_rack(channel, pad);
     let ch = &mut app.song.channels[channel];
     let channel_id = ch.id;
@@ -281,9 +282,12 @@ pub fn show(
         rewrote |= write_auto_clip(app.song, channel, id, samples, &read, always, held);
     }
     // `Create FX Channel`: the new send channel goes last, so no channel index moves.
-    let created = actions
-        .create_send
-        .and_then(|at| create_send(app.song, channel, at));
+    let created = (actions.create_send)
+        .and_then(|at| create_send(app.song, channel, at))
+        .or_else(|| {
+            let (pad, at) = actions.create_pad_send?;
+            crate::ui::rack::create_pad_send(app.song, channel, pad, at)
+        });
     if actions.replace_song || created.is_some() || rewrote {
         app.song_edited(true);
     }

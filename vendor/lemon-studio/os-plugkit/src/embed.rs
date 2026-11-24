@@ -514,6 +514,13 @@ pub fn take_automate() -> Vec<(Parent, usize)> {
     asked.filter_map(|(id, i)| Some((Parent::try_from(id).ok()?, usize::try_from(i).ok()?))).collect()
 }
 
+/// The editors on this thread whose own edit of their plugin's saved state ended since the last call (`os_hostlink`'s
+/// `Edited`), once per edit, oldest first: Honeydew makes each an undo step.
+pub fn take_edited() -> Vec<Parent> {
+    let edited = os_hostlink::take_edited().into_iter();
+    edited.filter_map(|id| Parent::try_from(id).ok()).collect()
+}
+
 /// Issue #117: the files this thread's editors sent to the playlist since the last call (Tesla's `Send to arranger as
 /// audio clip`), which Honeydew answers although no editor joins its strip (`os_hostlink`'s `Audio`), oldest first.
 pub fn take_sent() -> Vec<std::path::PathBuf> {

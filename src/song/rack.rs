@@ -324,6 +324,20 @@ impl Rack {
         }
     }
 
+    /// Copies drum pad `from`'s rack to pad `to` (a cloned pad), after the rack's modules: each copy with its own new id,
+    /// as a pasted module.
+    pub fn copy_pad(&mut self, from: u32, to: u32) {
+        let copies: Vec<ModuleInstance> = self.chain(Some(from)).cloned().collect();
+        for module in copies {
+            self.last_instance_id += 1;
+            self.modules.push(ModuleInstance {
+                instance_id: self.last_instance_id,
+                pad: Some(to),
+                ..module
+            });
+        }
+    }
+
     /// Drops the modules of the drum pads `keep` names no slot of (a pad deleted).
     pub fn prune_pads(&mut self, keep: &dyn Fn(u32) -> bool) {
         self.modules.retain(|m| m.pad.is_none_or(keep));

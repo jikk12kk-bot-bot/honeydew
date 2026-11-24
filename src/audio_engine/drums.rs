@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 
 use honeydew_audio::ProcessContext;
 use honeydew_audio::drums::{DEFAULTS, Pad, PadSampler, hit_pitch};
-use honeydew_audio::mixer::OwnedStereoBuffer;
+use honeydew_audio::mixer::{OwnedStereoBuffer, level_gain, send_param};
 use honeydew_audio::note_effects::{NoteEffectModule, NoteEffectTrace};
 use honeydew_audio::playback::PlaybackChannel;
 use honeydew_audio::sequencer::{InputNoteEvent, NoteKind, sort_note_events};
@@ -34,12 +34,34 @@ pub(super) struct Kit {
     scratch: OwnedStereoBuffer,
     /// Per pad, the positions of its own rack's effects among its channel's ([`Self::set_pad_effects`]).
     pad_effects: Vec<std::ops::Range<usize>>,
+    /// Per pad, its sends (`HDPs`), past its own rack, beside its output.
+    sends: Vec<Vec<PadSend>>,
+}
+
+/// One send of a pad: into channel `target`'s buffer (its id `id`), at `level` by the channel Level law, while
+/// `enabled` > 0.5. Slot params 0x1000 / 0x2000 + `id` set them, as a channel's send params do.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PadSend {
+    target: usize,
+    id: i32,
+    enabled: f32,
+    level: f32,
 }
 
 impl Kit {
     /// Slot param `index` of the slot with id `id`; an unknown slot or index is ignored.
     pub fn set_slot_param(&mut self, id: u32, index: i32, value: f32) {
         let pad = self.ids.iter().position(|&slot| slot == id);
+        if let (Some(pad), Some((target, level))) = (pad, send_param(index)) {
+            let sends = self.sends.get_mut(pad).into_iter().flatten();
+            for send in sends.filter(|send| send.id == target) {
+                match level {
+                    true => send.level = value,
+                    false => send.enabled = value,
+                }
+            }
+            return;
+        }
         if let (Some(pad), Ok(index)) = (pad, usize::try_from(index)) {
             self.sampler.set_param(pad, index, value);
         }
@@ -70,6 +92,7 @@ impl Kit {
     /// Adds one block of every pad, through its own rack's effects (in `processors`, its channel's), into its output
     /// channel's buffer, before that channel's rack runs, and keeps its peak. A pad with a send target (`LINk`@10 ≥ 0)
     /// skips its own channel entirely (rack, strip and sends) but for its channel being out of the mix ([`Self::out`]).
+    /// Its own sends (`HDPs`) add it, past its rack, into their targets' buffers too, while its channel is in the mix.
     pub fn render(
         &mut self,
         buffers: &mut [OwnedStereoBuffer],
@@ -77,8 +100,7 @@ impl Kit {
         context: ProcessContext,
     ) {
         for (pad, &output) in self.outputs.iter().enumerate() {
-            let buffer = &mut buffers[output];
-            let frames = buffer.left.len().min(self.scratch.left.len());
+            let frames = buffers[output].left.len().min(self.scratch.left.len());
             let (left, right) = (
                 &mut self.scratch.left[..frames],
                 &mut self.scratch.right[..frames],
@@ -98,12 +120,27 @@ impl Kit {
                 let _ = effects.process_effects(run.clone(), left, right, context);
             }
             let mut peak = [0.0_f32; 2];
+            let buffer = &mut buffers[output];
             let out = buffer.left.iter_mut().zip(buffer.right.iter_mut());
             for ((l, r), (pl, pr)) in out.zip(left.iter().zip(right.iter())) {
                 (*l, *r) = (*l + pl, *r + pr);
                 peak = [peak[0].max(pl.abs()), peak[1].max(pr.abs())];
             }
             self.peaks[pad] = peak;
+            if self.out {
+                continue;
+            }
+            let sends = self.sends.get(pad).into_iter().flatten();
+            for send in sends.filter(|send| send.enabled > 0.5) {
+                let gain = level_gain(send.level);
+                let Some(target) = buffers.get_mut(send.target).filter(|_| gain > 0.0) else {
+                    continue;
+                };
+                let out = target.left.iter_mut().zip(target.right.iter_mut());
+                for ((l, r), (pl, pr)) in out.zip(left.iter().zip(right.iter())) {
+                    (*l, *r) = (*l + gain * pl, *r + gain * pr);
+                }
+            }
         }
     }
 
@@ -155,6 +192,27 @@ pub(super) fn build(
         targets.filter(|_| target >= 0).unwrap_or(channel)
     };
     let count = kit.slots.len();
+    // A send to no channel, its own channel or one named already is left out.
+    let sends = (kit.slots.iter())
+        .map(|slot| {
+            let mut sends: Vec<PadSend> = Vec::new();
+            for send in &slot.file.sends {
+                let id = send.target_channel_id;
+                let target = song.channels.iter().position(|other| other.id == id);
+                if let Some(target) = target.filter(|&t| t != channel)
+                    && !sends.iter().any(|s| s.target == target)
+                {
+                    sends.push(PadSend {
+                        target,
+                        id,
+                        enabled: send.enabled,
+                        level: send.level,
+                    });
+                }
+            }
+            sends
+        })
+        .collect();
     Some(Kit {
         sampler: PadSampler::new(pads, sample_rate),
         out: false,
@@ -169,6 +227,7 @@ pub(super) fn build(
             right: vec![0.0; super::BLOCK_FRAMES],
         },
         pad_effects: Vec::new(),
+        sends,
     })
 }
 
@@ -327,6 +386,92 @@ pub(super) fn played(
         prepared.extend(through(args, kit, effects, struck, traces)?);
     }
     Ok(prepared)
+}
+
+/// Per channel, the notes the pads' MIDI sends (`HDPm`) send it over the song (to `end_beat`): each hit of a pad with
+/// a key ([`DrumKit::pad_note`]) in its playing clips, and its Repeat hits, as a note of that key at the hit's beat
+/// (plus its slot's beat offset) and velocity, lasting to its note-off on a notes lane, else a sixteenth. A silent hit
+/// is none. A send to no channel, the master, its own channel or a target named already is left out.
+pub(super) fn pad_notes(song: &Song, end_beat: f64) -> Vec<Vec<InputNoteEvent>> {
+    let mut notes = vec![Vec::new(); song.channels.len()];
+    let ppq = f64::from(PPQ);
+    let tick = 1.0 / ppq;
+    for (channel, ch) in song.channels.iter().enumerate() {
+        let Some(kit) = &ch.drum_kit else {
+            continue;
+        };
+        // Per pad, the channels its MIDI sends go to.
+        let targets: Vec<Vec<usize>> = (kit.slots.iter())
+            .map(|slot| {
+                let mut targets = Vec::new();
+                for send in slot.file.midi_sends.iter().filter(|s| s.enabled) {
+                    let id = send.target_channel_id;
+                    let target = song.channels.iter().position(|c| c.id == id);
+                    if let Some(t) = target.filter(|&t| t != 0 && t != channel)
+                        && !targets.contains(&t)
+                    {
+                        targets.push(t);
+                    }
+                }
+                targets
+            })
+            .collect();
+        if targets.iter().all(Vec::is_empty) {
+            continue;
+        }
+        for lane in ch.lanes.iter().filter(|lane| lane.kind == LaneKind::Drums) {
+            let notes_lane = lane.grid == DrumGrid::Notes;
+            let swing = if notes_lane { 0.0 } else { lane.swing };
+            for clip in playing_clips(lane) {
+                let clip_end = (f64::from(clip.start_tick) + clip.visible_ticks()) / ppq;
+                for (at, event) in clip.events_in_song_range(0, (end_beat * ppq).ceil() as u64) {
+                    let Event::Drum {
+                        len_beats,
+                        pad,
+                        velocity,
+                        repeat,
+                        ..
+                    } = *event
+                    else {
+                        continue;
+                    };
+                    let pad = usize::from(pad);
+                    let (Some(slot), Some(key), Some(to)) =
+                        (kit.slot_on_pad(pad), kit.pad_note(pad), targets.get(pad))
+                    else {
+                        continue;
+                    };
+                    if to.is_empty() || velocity == 0 {
+                        continue;
+                    }
+                    let pos = at as f64 / ppq;
+                    let offset = Some(slot.file.beat_offset).filter(|offset| offset.is_finite());
+                    let beat = (at as f64 + offset.unwrap_or(0.0) * ppq).max(0.0).trunc() / ppq;
+                    let held = notes_lane && len_beats.is_finite() && len_beats > 0.0;
+                    let off = held.then(|| (pos + len_beats).min(clip_end));
+                    let r = f64::from((repeat as i8).max(0));
+                    let even = ((4.0 * pos) as u64).is_multiple_of(2);
+                    let sixteenth = 0.25 + if even { swing / 8.0 } else { -swing / 8.0 };
+                    let repeat_at = |k: u32| pos + sixteenth * f64::from(k) / (r + 1.0);
+                    let repeats = (1..=r as u32).map(|k| (repeat_at(k), None));
+                    for (beat, off) in std::iter::once((beat, off)).chain(repeats) {
+                        if beat > end_beat {
+                            continue;
+                        }
+                        let off: f64 = off.unwrap_or(beat + 0.25).max(beat + tick);
+                        for &t in to {
+                            notes[t].push(InputNoteEvent::on(beat, i16::from(key), velocity));
+                            notes[t].push(InputNoteEvent::off(off, i16::from(key)));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for events in &mut notes {
+        sort_note_events(events);
+    }
+    notes
 }
 
 /// The hits of each pad with note effects in its own rack (`racks`, per pad) through them, as [`through`] passes hits

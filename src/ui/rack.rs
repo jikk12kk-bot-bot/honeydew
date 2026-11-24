@@ -1103,6 +1103,40 @@ pub fn create_send(song: &mut Song, channel: usize, at: usize) -> Option<usize> 
     Some(new)
 }
 
+/// `Create FX Channel` from drum pad `pad`'s SENDS (by slot id, [`RackActions::create_pad_send`]): as [`create_send`],
+/// the pad's send `at` goes to the new send channel.
+pub fn create_pad_send(song: &mut Song, channel: usize, pad: u32, at: usize) -> Option<usize> {
+    slot_mut(song.channels.get_mut(channel)?, pad)?;
+    let new = song.insert_channel(song.channels.len(), ChannelKind::EffectTrack)?;
+    let id = song.channels[new].id;
+    let sends = &mut slot_mut(&mut song.channels[channel], pad)?.file.sends;
+    match sends.get_mut(at) {
+        Some(send) => send.target_channel_id = id,
+        None => sends.push(SendState {
+            target_channel_id: id,
+            ..SendState::default()
+        }),
+    }
+    Some(new)
+}
+
+/// The slot with id `id` of `channel`'s kit.
+fn slot_mut(channel: &mut Channel, id: u32) -> Option<&mut crate::song::SamplerSlot> {
+    (channel.drum_kit.as_mut()?.slots.iter_mut()).find(|s| s.file.id == id)
+}
+
+/// The sends a rack's SENDS edit, audio and MIDI: drum pad `pad`'s (by slot id; `None` without that slot), else the
+/// channel's.
+fn send_lists(
+    pad: Option<u32>,
+    channel: &mut Channel,
+) -> Option<(&mut Vec<SendState>, &mut Vec<MidiSend>)> {
+    match pad {
+        Some(id) => slot_mut(channel, id).map(|s| (&mut s.file.sends, &mut s.file.midi_sends)),
+        None => Some((&mut channel.file.sends, &mut channel.file.midi_sends)),
+    }
+}
+
 /// An item of the send-target menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SendPick {
@@ -1252,6 +1286,9 @@ pub struct RackActions {
     /// `Create FX Channel` in the send-target menu: make a new send channel and point the channel's send at this index
     /// to it, past the last one for a new send ([`create_send`]); a final song edit.
     pub create_send: Option<usize>,
+    /// `Create FX Channel` in a drum pad's send-target menu: (its slot id, the send index), as [`Self::create_send`]
+    /// ([`create_pad_send`]).
+    pub create_pad_send: Option<(u32, usize)>,
     /// A DW Sampler's `New from samples…`: open the instrument builder for the module with this instance id.
     pub builder: Option<i32>,
     /// Issue #68: a Lemon card's full screen button: show the editor of the module with this instance id full screen.
@@ -1379,6 +1416,8 @@ pub struct RackPanel {
     /// The drum pad whose own rack shows, by name (the channel's rack holds it alone, [`crate::song::Song::split_rack`]):
     /// the header names it after the channel, and the channel's sends do not show. The host sets it each frame.
     pub pad: Option<String>,
+    /// That drum pad's slot id (`LINk`@0): its SENDS show in place of the channel's. The host sets it with [`Self::pad`].
+    pub pad_slot: Option<u32>,
     /// The recent control, by channel id, for a Modulator's `Modulate recent control`, and the names of the rack's
     /// Modulators' targets ([`modulation_names`]): the host sets them each frame.
     pub recent: Option<(i32, AutomationTarget)>,
@@ -1391,6 +1430,8 @@ pub struct RackPanel {
     send_menu: Option<(Option<usize>, Pos2)>,
     /// The open `Add MIDI Send` menu's centre.
     midi_menu: Option<Pos2>,
+    /// The open `OUT` menu's centre (a drum pad's SENDS).
+    out_menu: Option<Pos2>,
     /// The open sidechain menu: its card and its centre ([`Self::key_menu`]).
     key_menu: Option<(i32, Pos2)>,
     /// The card held to reorder it. Meanwhile every card shows minimized, a view the song does not hold.
@@ -1594,11 +1635,21 @@ impl RackPanel {
         let heights: Vec<f32> = (channel.rack.modules.iter())
             .map(|m| held.map_or(self.card_height(m), |_| CARD_HEADER))
             .collect();
-        let sends = (channel.kind != ChannelKind::Master && self.pad.is_none()).then(|| SendRows {
-            rows: channel.file.sends.len(),
-            disconnected: disconnected(channel, &self.targets),
-            midi: (channel.kind.plays_notes()).then_some(channel.file.midi_sends.len()),
-        });
+        // A drum pad's own rack: its SENDS, its `OUT` row first.
+        let slot = (self.shown_pad()).and_then(|id| channel.drum_kit.as_ref()?.slot_by_id(id));
+        let sends = match (&self.pad, slot) {
+            (Some(_), Some(slot)) => Some(SendRows {
+                rows: 1 + slot.file.sends.len(),
+                disconnected: false,
+                midi: Some(slot.file.midi_sends.len()),
+            }),
+            (Some(_), None) => None,
+            (None, _) => (channel.kind != ChannelKind::Master).then(|| SendRows {
+                rows: channel.file.sends.len(),
+                disconnected: disconnected(channel, &self.targets),
+                midi: (channel.kind.plays_notes()).then_some(channel.file.midi_sends.len()),
+            }),
+        };
         let input = channel.kind == ChannelKind::AudioRecord;
         let end = flow_sends(rack, 0.0, u, input, &heights, sends).bottom;
         // One axis, y in points over the whole rack. Not while a card is held: neither its finger nor the wheel scrolls
@@ -1724,7 +1775,10 @@ impl RackPanel {
             actions.open_browser = Some(InsertAt::End);
         }
         if let Some(sends) = &f.sends {
-            self.sends(ui, cx, sends, index, channel, ink, &mut actions);
+            match self.shown_pad() {
+                Some(pad) => self.pad_sends(ui, cx, sends, index, channel, pad, ink, &mut actions),
+                None => self.sends(ui, cx, sends, index, channel, ink, &mut actions),
+            }
         }
         // The held card's 5 px outline in the channel colour, outside its rounded rect, over its neighbours.
         if let (Some(r), Some(_)) = (held_rect, self.drag) {
@@ -2057,6 +2111,120 @@ impl RackPanel {
         }
     }
 
+    /// A drum pad's SENDS in `f` (its own rack shows; `pad` its slot id), as a channel's: the header; the `OUT` row,
+    /// where the pad plays (its channel, or the send channel its AUX, `LINk`@10, names), its swap icon picking that; a
+    /// row per send of the pad's, past its own rack, beside its output; a row per MIDI send, which sends the pad's hits
+    /// as notes of its own note; `Add Send` and `Add MIDI Send`. A send row's toggle and slider are slot params 0x1000
+    /// / 0x2000 + the target's id (instance −`pad`), live param edits; every other edit is final.
+    #[allow(clippy::too_many_arguments)]
+    fn pad_sends(
+        &mut self,
+        ui: &mut Ui,
+        cx: &UiCtx,
+        f: &SendsFlow,
+        index: usize,
+        channel: &mut Channel,
+        pad: u32,
+        ink: Color32,
+        actions: &mut RackActions,
+    ) {
+        let m = cx.m;
+        let (ppp, text) = (m.ppp(), cx.theme.colors.text.to_color32());
+        let header = f.header / ppp;
+        let (icon, label) = header.split_left_right_at_x(header.left() + header.width() / 10.0);
+        draw_icon(ui.painter(), icon, IconId::Routing, text, 1.0, m);
+        let align = Align2::LEFT_CENTER;
+        widgets::text_label(ui, cx, label, "SENDS", FontSize::Pt10, align, text);
+        let base = ui.id().with("pad sends").with(pad);
+        let channel_name = channel.name.clone();
+        let Some(slot) = slot_mut(channel, pad) else {
+            return;
+        };
+        let name_of = |target: i32| {
+            let named = self.targets.iter().find(|t| t.id == target);
+            // Without the host's names: the master's, else the name a new send channel gets.
+            named.map_or_else(
+                || match target {
+                    0 => "MASTER".to_owned(),
+                    id => format!("Effect {id}"),
+                },
+                |t| t.name.clone(),
+            )
+        };
+        let label = |ui: &mut Ui, rect, text: &str| {
+            let align = Align2::CENTER_CENTER;
+            widgets::text_label(ui, cx, rect, text, FontSize::Pt10, align, ink);
+        };
+        if let Some(&row) = f.rows.first() {
+            let [tag, swap, name, rest, x] = send_row(ui, cx, row / ppp);
+            label(ui, tag, "OUT");
+            let target = slot.file.send_target;
+            let out = if target >= 0 { name_of(target) } else { channel_name };
+            label(ui, name.union(rest).union(x), &out);
+            if icon_button(ui, cx, base.with("out"), swap, IconId::Swap, ink) {
+                self.out_menu = Some(swap.center());
+            }
+        }
+        let instance_id = -(pad as i32);
+        let mut remove = None;
+        let rows = f.rows.iter().skip(1);
+        for (i, (send, &row)) in slot.file.sends.iter_mut().zip(rows).enumerate() {
+            let [toggle, swap, name, level, x] = send_row(ui, cx, row / ppp);
+            let target = send.target_channel_id;
+            let id = base.with(i);
+            let mut control = |param: i32, value: f32| {
+                actions.params.push(ParamChange {
+                    channel: index,
+                    instance_id,
+                    index: param,
+                    value,
+                });
+            };
+            let c = Control {
+                menu: ParamMenu::Unbound,
+                ..Control::new(id.with("enable"), toggle, "", ink, 1.0)
+            };
+            if widgets::toggle(ui, cx, &c, &mut send.enabled, |_| String::new()).changed() {
+                control(0x1000 + target, send.enabled);
+            }
+            let c = Control {
+                menu: ParamMenu::Unbound,
+                value_above: Some(eframe::egui::Align::Center),
+                ..Control::new(id.with("level"), level, "", ink, SEND_UNITY)
+            };
+            let text = |v| crate::params::CHANNEL_PARAMS[0].display_text(v);
+            if widgets::h_slider(ui, cx, &c, &mut send.level, text).changed() {
+                control(0x2000 + target, send.level);
+            }
+            if icon_button(ui, cx, id.with("swap"), swap, IconId::Swap, ink) {
+                self.send_menu = Some((Some(i), swap.center()));
+            }
+            label(ui, name, &name_of(target));
+            if icon_button(ui, cx, id.with("remove"), x, IconId::Close, ink) {
+                remove = Some(i);
+            }
+        }
+        if let Some(i) = remove {
+            slot.file.sends.remove(i);
+            actions.replace_song = true;
+        }
+        self.midi_sends(ui, cx, f, channel, ink, actions);
+        let add = f.add / ppp;
+        add_row(ui, cx, add, "Add Send    ", ink, None);
+        if ui.interact(add, base.with("add"), Sense::click()).clicked() {
+            self.send_menu = Some((None, add.center()));
+        }
+        if let Some(add) = f.midi_add.map(|r| r / ppp) {
+            add_row(ui, cx, add, "Add MIDI Send    ", ink, None);
+            if ui
+                .interact(add, base.with("add midi"), Sense::click())
+                .clicked()
+            {
+                self.midi_menu = Some(add.center());
+            }
+        }
+    }
+
     /// The MIDI send rows in `f`, one per MIDI send of `channel`: as a send row, its toggle switches it on and off, a
     /// `MIDI` tag stands where the swap icon would, its target's name takes the rest of the room and its X removes it.
     /// Every edit is final: the engine prepares the forwarded notes ahead.
@@ -2072,8 +2240,10 @@ impl RackPanel {
         let ppp = cx.m.ppp();
         let base = ui.id().with("midi sends");
         let mut remove = None;
-        let sends = channel.file.midi_sends.iter_mut();
-        for (i, (send, &row)) in sends.zip(&f.midi_rows).enumerate() {
+        let Some((_, list)) = send_lists(self.shown_pad(), channel) else {
+            return;
+        };
+        for (i, (send, &row)) in list.iter_mut().zip(&f.midi_rows).enumerate() {
             let [toggle, tag, name, rest, x] = send_row(ui, cx, row / ppp);
             let id = base.with(i);
             let c = Control::new(id.with("enable"), toggle, "", ink, 1.0);
@@ -2097,19 +2267,22 @@ impl RackPanel {
             }
         }
         if let Some(i) = remove {
-            channel.file.midi_sends.remove(i);
+            list.remove(i);
             actions.replace_song = true;
         }
     }
 
     /// The open `Add MIDI Send` menu, one column: the instrument and drum channels it may name ([`SendTarget::midi`])
-    /// that the channel does not send to yet, or a dimmed `No channel to send to`. A pick adds a MIDI send, on; a final
-    /// edit.
+    /// that the channel (or the shown drum pad, [`Self::pad_slot`]) does not send to yet, or a dimmed `No channel to
+    /// send to`. A pick adds a MIDI send, on; a final edit.
     fn midi_menu(&mut self, ui: &Ui, cx: &UiCtx, channel: &mut Channel, actions: &mut RackActions) {
         let Some(at) = self.midi_menu else {
             return;
         };
-        let sends = &channel.file.midi_sends;
+        let Some((_, sends)) = send_lists(self.shown_pad(), channel) else {
+            self.midi_menu = None;
+            return;
+        };
         let free = |t: &&SendTarget| t.midi && !sends.iter().any(|s| s.target_channel_id == t.id);
         let mut items: Vec<_> = (self.targets.iter().filter(free).enumerate())
             .map(|(row, t)| PopupItem::new(t.id, 0, row, t.name.clone()))
@@ -2134,7 +2307,7 @@ impl RackPanel {
             ctx.request_repaint();
         }
         if let Some(id) = r.selected {
-            channel.file.midi_sends.push(MidiSend {
+            sends.push(MidiSend {
                 target_channel_id: id,
                 enabled: true,
             });
@@ -2151,14 +2324,23 @@ impl RackPanel {
         channel.output_bus = output_bus(&channel.file.sends, &buses);
     }
 
-    /// The open send-target menu, one column: the offered targets the channel does not send to yet (for a swap, its own
-    /// target shown current), then `Create FX Channel`. A pick adds a send at the defaults, or retargets the swapped
-    /// one keeping its Enable and Level; a final edit.
+    /// The drum pad whose own rack and SENDS show ([`Self::pad_slot`]), by slot id; `None` for the channel's rack.
+    fn shown_pad(&self) -> Option<u32> {
+        self.pad_slot.filter(|_| self.pad.is_some())
+    }
+
+    /// The open send-target menu, one column: the offered targets the channel (or the shown drum pad) does not send to
+    /// yet (for a swap, its own target shown current), then `Create FX Channel`. A pick adds a send at the defaults, or
+    /// retargets the swapped one keeping its Enable and Level; a final edit.
     fn send_menu(&mut self, ui: &Ui, cx: &UiCtx, channel: &mut Channel, actions: &mut RackActions) {
         let Some((swap, at)) = self.send_menu else {
             return;
         };
-        let sends = &channel.file.sends;
+        let pad = self.shown_pad();
+        let Some((sends, _)) = send_lists(pad, channel) else {
+            self.send_menu = None;
+            return;
+        };
         let own = swap.and_then(|i| sends.get(i)).map(|s| s.target_channel_id);
         let free = |t: &&SendTarget| {
             t.offered && (Some(t.id) == own || !sends.iter().any(|s| s.target_channel_id == t.id))
@@ -2188,21 +2370,59 @@ impl RackPanel {
             self.send_menu = None;
             ctx.request_repaint();
         }
-        let at = swap.unwrap_or(channel.file.sends.len());
+        let at = swap.unwrap_or(sends.len());
         match r.selected {
-            Some(SendPick::Create) => actions.create_send = Some(at),
+            Some(SendPick::Create) => match pad {
+                Some(pad) => actions.create_pad_send = Some((pad, at)),
+                None => actions.create_send = Some(at),
+            },
             Some(SendPick::Target(id)) if Some(id) != own => {
-                match channel.file.sends.get_mut(at) {
+                match sends.get_mut(at) {
                     Some(send) => send.target_channel_id = id,
-                    None => channel.file.sends.push(SendState {
+                    None => sends.push(SendState {
                         target_channel_id: id,
                         ..SendState::default()
                     }),
                 }
-                self.settle_output(channel);
+                if pad.is_none() {
+                    self.settle_output(channel);
+                }
                 actions.replace_song = true;
             }
             _ => {}
+        }
+    }
+
+    /// The open `OUT` menu of the shown drum pad: where it plays, its channel (`LINk`@10 −1) or a send channel
+    /// ([`SendTarget::offered`], not the master), its pick shown current. A pick is a final edit.
+    fn out_menu(&mut self, ui: &Ui, cx: &UiCtx, channel: &mut Channel, actions: &mut RackActions) {
+        let Some(at) = self.out_menu else {
+            return;
+        };
+        let name = channel.name.clone();
+        let slot = self.shown_pad().and_then(|id| slot_mut(channel, id));
+        let Some(slot) = slot else {
+            self.out_menu = None;
+            return;
+        };
+        let current = slot.file.send_target;
+        let offered = (self.targets.iter()).filter(|t| t.id != 0 && (t.offered || t.id == current));
+        let picks = std::iter::once((-1, name)).chain(offered.map(|t| (t.id, t.name.clone())));
+        let items: Vec<_> = (picks.enumerate())
+            .map(|(row, (id, name))| PopupItem {
+                current: id == current || (id == -1 && current < 0),
+                ..PopupItem::new(id, 0, row, name)
+            })
+            .collect();
+        let ctx = ui.ctx();
+        let r = popup::show(ctx, ui.id().with("out menu"), at, ctx.content_rect(), &items, cx);
+        if r.close {
+            self.out_menu = None;
+            ctx.request_repaint();
+        }
+        if let Some(id) = r.selected.filter(|&id| id != current.max(-1)) {
+            slot.file.send_target = id;
+            actions.replace_song = true;
         }
     }
 
@@ -2805,6 +3025,7 @@ impl RackPanel {
     ) {
         self.send_menu(ui, cx, channel, actions);
         self.midi_menu(ui, cx, channel, actions);
+        self.out_menu(ui, cx, channel, actions);
         self.key_menu(ui, cx, channel, actions);
         let ctx = ui.ctx();
         let screen = ctx.content_rect();

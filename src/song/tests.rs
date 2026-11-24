@@ -2265,3 +2265,19 @@ fn a_drum_pads_own_rack_splits_out_for_its_editor_and_joins_back_after_the_chann
     song.prune_pad_racks();
     assert_eq!(types(&song), [(6, None), (3, None), (6, Some(2))]);
 }
+
+#[test]
+fn a_cloned_pads_rack_is_a_copy_with_its_own_ids() {
+    let mut rack = Rack::default();
+    for (type_id, pad) in [(6, None), (11, Some(1)), (3, Some(1)), (6, Some(2))] {
+        rack.last_instance_id += 1;
+        let mut m = ModuleInstance::new(type_id, rack.last_instance_id);
+        m.pad = pad;
+        rack.modules.push(m);
+    }
+    rack.copy_pad(1, 9);
+    let copy: Vec<(u16, i32)> = rack.chain(Some(9)).map(|m| (m.type_id, m.instance_id)).collect();
+    assert_eq!(copy, [(11, 6), (3, 7)]);
+    assert_eq!(rack.last_instance_id, 7);
+    assert_eq!(rack.chain(Some(1)).count(), 2, "the original keeps its own");
+}

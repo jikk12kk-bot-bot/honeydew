@@ -292,7 +292,7 @@ fn valid_controls(level: f32, pan: f32) -> bool {
 /// The channel Level law: dB = 66·v^0.6 − 60, so 0.8531 is unity and 1 is +6 dB;
 /// v = 0 is exact silence. Send Level follows it too, `SEND`@20 stores it the same way (0.8531 = 0 dB) and
 /// @8 is derived from it.
-fn level_gain(level: f32) -> f32 {
+pub fn level_gain(level: f32) -> f32 {
     if level == 0.0 {
         return 0.0;
     }

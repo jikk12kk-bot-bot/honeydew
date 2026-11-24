@@ -737,6 +737,39 @@ impl Reader {
                         *value = reader.f32()?;
                     }
                 }
+                // Honeydew's own pad sends (`flm::write`); a repeated target is ignored.
+                b"HDPs" => {
+                    let mut reader = child.reader();
+                    let sends = &mut slot.file.sends;
+                    while let (Ok(id), Ok(enabled), Ok(level)) =
+                        (reader.i32(), reader.f32(), reader.f32())
+                    {
+                        if !sends.iter().any(|s| s.target_channel_id == id) {
+                            self.charge(2 * size_of::<SendState>(), &child.path)?;
+                            sends.push(SendState {
+                                target_channel_id: id,
+                                enabled,
+                                enabled_init: enabled,
+                                level,
+                                level_init: level,
+                                ..SendState::default()
+                            });
+                        }
+                    }
+                }
+                b"HDPm" => {
+                    let mut reader = child.reader();
+                    let sends = &mut slot.file.midi_sends;
+                    while let (Ok(id), Ok(on)) = (reader.i32(), reader.u32()) {
+                        if !sends.iter().any(|s| s.target_channel_id == id) {
+                            self.charge(size_of::<MidiSend>(), &child.path)?;
+                            sends.push(MidiSend {
+                                target_channel_id: id,
+                                enabled: on != 0,
+                            });
+                        }
+                    }
+                }
                 _ => self.unknown(&child, &mut slot.file.unknown_chunks)?,
             }
         }

@@ -5,9 +5,9 @@
 //! - The pointer over it is the editor's, in the editor's pixels: presses (a second one within 0.4 s and 12 points is a
 //!   double click), moves, releases (also outside, while a press it took is held) and the wheel. While the editor holds
 //!   the cursor (a knob drag) the moves go as movement and the cursor hides. Issue #68: a double click on a knob or
-//!   fader resets it, as a double tap does Honeydew's own. PR #87: a long press ([`gesture::long_press`]) is a right
-//!   click at the press, so a phone reaches a knob's menu (Reset, …) as a secondary click does on the desktop; a tap
-//!   or a moved press stays a left one.
+//!   fader resets it, as a double tap does Honeydew's own. PR #87: a long press let go where it went down
+//!   ([`gesture::control_menu`]) is a right click at the press, so a phone reaches a knob's menu (Reset, …) as a
+//!   secondary click does on the desktop; a tap or a moved press stays a left one, and a held knob drags.
 //! - The editor's menus show over the card in Lemon's own look (`os_ui::kit::menu`), with their submenus; its "Type in
 //!   value" box is a text field there.
 //! - Issue #52: where the editor has no file dialog (Android, the browser), the app's sample picker opens its sample
@@ -97,9 +97,6 @@ pub(crate) struct LemonCard {
     size: (u32, u32),
     /// The button of the press the editor took: its moves and release are the editor's wherever they are.
     pressed: Option<Button>,
-    /// That press's long press went as a right click (PR #87), the left press released with it: its release, where
-    /// the right click opened no modal, pairs the right click with an up.
-    long_menu: bool,
     /// That press is a finger's other than the pointer's ([`other_finger`]): its id and the pass it was last seen in.
     finger: Option<(u64, u64)>,
     /// The pointer's last position, and whether it was over the editor.
@@ -219,7 +216,7 @@ pub(crate) fn show(
         if menu_shows && !card.pad.modal {
             // The press that asked is the modal's (its answer delivers it again, with its release): the finger still
             // down only moves the cursor now.
-            (card.pressed, card.finger, card.long_menu) = (None, None, false);
+            (card.pressed, card.finger) = (None, None);
             let p = &mut card.pad;
             p.sent = [false; 2];
             p.moved |= p.down.is_some();
@@ -237,12 +234,13 @@ pub(crate) fn show(
         });
     } else if modal.is_none() && card.size.0 > 0 {
         other_finger(ui, card, &response, rect, k);
+        // The pointer's left press the editor holds, before this frame's release lets go of it.
+        let left = card.pressed == Some(Button::Left) && card.finger.is_none();
         forward(ui, card, rect, k, response.hovered());
-        // PR #87: a long press on the editor is a right click at the press (a phone has no secondary button). The left
-        // press is released with it: where the right click opens a menu, its answer replays the right click only.
-        let long = gesture::long_press(ui, &mut response, m);
-        if long && card.pressed == Some(Button::Left) && card.finger.is_none() && !card.long_menu {
-            let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(card.last);
+        // PR #87: a long press on the editor let go where it went down is a right click there (a phone has no secondary
+        // button), as a knob's or slider's of Honeydew's own opens its menu: held, the press drags the knob at once. The
+        // left press has had its release; a right click that opens no menu has its own.
+        if let Some(origin) = gesture::control_menu(ui, &mut response, m).filter(|_| left) {
             let (x, y) = ((origin.x - rect.left()) * k, (origin.y - rect.top()) * k);
             let held = mods(ui.input(|i| i.modifiers));
             let btn = Button::Right;
@@ -256,12 +254,14 @@ pub(crate) fn show(
                 },
                 held,
             );
-            embed::input(editor, Input::Up { btn: Button::Left }, held);
-            card.long_menu = true;
+            embed::pump(editor);
+            if embed::modal(editor).is_none() {
+                embed::input(editor, Input::Up { btn }, held);
+            }
         }
     } else {
         // The press that asked is the modal's (its answer delivers it again, with its release): the next press is new.
-        (card.pressed, card.finger, card.long_menu) = (None, None, false);
+        (card.pressed, card.finger) = (None, None);
     }
     embed::pump(editor);
     // Issue #72: only what changed goes into the texture (a whole frame is megabytes, a knob turn a small patch of
@@ -643,11 +643,6 @@ fn forward(ui: &Ui, card: &mut LemonCard, rect: Rect, k: f32, hovered: bool) {
                 ..
             } if card.pressed.is_some() && card.pressed == button(b) => {
                 let btn = card.pressed.take().expect("held");
-                // A long press's right click that opened no modal ends with this release; the left up repeats the one
-                // sent with the right click, harmlessly.
-                if std::mem::take(&mut card.long_menu) {
-                    send(Input::Up { btn: Button::Right }, modifiers);
-                }
                 send(Input::Up { btn }, modifiers);
             }
             Event::MouseWheel {
@@ -1615,9 +1610,8 @@ mod tests {
         );
     }
 
-    /// PR #87: a long press on a knob is a right click: the editor's menu (Reset, …) opens at the knob, and a quick tap
-    /// does not. The lift of the press that opened it does not pick; a press outside cancels; a press that moves on
-    /// before its long press is a drag, never a menu.
+    /// PR #87: a long press on a knob let go in place is a right click: the editor's menu (Reset, …) opens at the knob,
+    /// and a quick tap does not. A press outside cancels; a press that moves is a drag, never a menu.
     #[test]
     fn a_long_press_on_a_knob_opens_its_menu_but_a_tap_does_not() {
         let mut rig = Rig::new("Lemon Sampler");
@@ -1634,21 +1628,23 @@ mod tests {
         for _ in 0..4 {
             rig.frame(vec![]);
         }
-        // A long press: down, then 0.4 s of frames with the finger unmoved.
+        // A long press: down, then 0.7 s of frames with the finger unmoved: no menu while held, one on the lift.
         rig.frame(finger(TouchPhase::Start, knob));
-        for _ in 0..4 {
+        for _ in 0..7 {
             rig.frame(vec![]);
         }
-        assert!(
-            matches!(embed::modal(editor), Some(Modal::Menu { .. })),
-            "the long press opened the knob's menu"
-        );
-        assert!(rig.card.menu.is_some(), "the card shows it");
+        assert!(embed::modal(editor).is_none(), "no menu while held");
         rig.frame(finger(TouchPhase::End, knob));
         rig.frame(vec![]);
         assert!(
             matches!(embed::modal(editor), Some(Modal::Menu { .. })),
-            "the lift left the menu open"
+            "the lift of the long press opened the knob's menu"
+        );
+        assert!(rig.card.menu.is_some(), "the card shows it");
+        rig.frame(vec![]);
+        assert!(
+            matches!(embed::modal(editor), Some(Modal::Menu { .. })),
+            "it stays open"
         );
         rig.tap(pos2(700.0, 550.0));
         rig.frame(vec![]);

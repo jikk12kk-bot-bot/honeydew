@@ -156,7 +156,8 @@ pub(super) fn forwarded(
     end_beat: f64,
     sample_rate: f32,
 ) -> Result<Vec<Vec<InputNoteEvent>>, EngineError> {
-    let mut forwarded = vec![Vec::new(); song.channels.len()];
+    // The pads' MIDI sends first: their notes come from the hits alone.
+    let mut forwarded = super::drums::pad_notes(song, end_beat);
     for &channel in &sends.order {
         if sends.targets[channel].is_empty() {
             continue;

@@ -339,6 +339,15 @@ const SPACER: &[P] = &[
 
 // ---- 35 Reverb 2 ----
 
+/// Reverb 2's pre-delay: 0…1000 ms, or with TEMPO (12) on 0…1 beat, as the engine plays it (`reverbs.rs`).
+fn reverb2_delay(v: f32, cx: TextCx) -> String {
+    if cx.param(12, 0.0) > 0.5 {
+        format!("{v:.2} beat")
+    } else {
+        Display::linear(0.0, 1000.0, 0, "ms").text(v)
+    }
+}
+
 /// High Cut and Damping: 510 + 21580·v Hz written in kHz ("0.5kHz", "11.3kHz"), OFF at v = 1.
 const REVERB2_CUT: Display = Display::Special {
     inner: &Display::linear(0.51, 0.51 + 21.58, 1, "kHz"),
@@ -380,7 +389,7 @@ const REVERB2: &[P] = &[
     P::cont("ER", 0.8, REVERB2_LEVEL),                       // 8
     P::cont("WET", 0.56, REVERB2_LEVEL),                     // 9
     P::toggle("SIDE INPUT", 0.0).with_automation(OFF_ON),    // 10
-    P::cont("DELAY", 0.0, Display::linear(0.0, 1000.0, 0, "ms")), // 11
+    P::cont("DELAY", 0.0, Display::CustomCx(reverb2_delay)),  // 11
     P::toggle("TEMPO", 0.0).with_automation(OFF_ON),         // 12
     P::cont("MOD", 0.0, PERCENT_TIGHT),                      // 13
     P::cont("BASS", 0.28, Display::linear(0.2, 3.0, 1, "")), // 14

@@ -15,11 +15,10 @@ use crate::ui::focus_lost;
 pub const LONG_PRESS_S: f64 = 0.3;
 /// The calm zone's radius (U).
 pub const CALM_U: f32 = 0.5;
-/// A knob's or slider's long press ([`control_long_press`]): held this long (s), as a finger resting on a fader before
-/// it slides must not open the menu.
+/// A knob's or slider's long press ([`control_menu`]): held this long (s).
 pub const CONTROL_LONG_PRESS_S: f64 = 0.5;
 /// A knob's or slider's drag this far (points) from its touch-down is a drag, not a long press: any slide of the
-/// value cancels it, well inside the calm zone.
+/// value, before or after its long press, cancels the menu, well inside the calm zone.
 pub const CONTROL_STILL_PT: f32 = 2.0;
 /// [`press`] fires this early: the frame a repaint wakes for can come a hair before it is due.
 const WAKE_EARLY_S: f64 = 1e-3;
@@ -52,15 +51,18 @@ pub fn long_press(ui: &Ui, response: &mut Response, m: &Metrics) -> bool {
     press(ui, response, m, Vec2::length).long
 }
 
-/// A knob's or slider's long press (its parameter menu): held more than [`CONTROL_LONG_PRESS_S`], and cancelled by a
-/// drag of more than [`CONTROL_STILL_PT`], so a finger that rests on a fader and then slides it changes the value
-/// instead of opening the menu.
-pub fn control_long_press(ui: &Ui, response: &mut Response, m: &Metrics) -> bool {
+/// A knob's or slider's menu press: its touch-down point, on the frame of the release of a press held more than
+/// [`CONTROL_LONG_PRESS_S`] that never went more than [`CONTROL_STILL_PT`] from its touch-down. The control drags from
+/// its touch-down, held or not: a finger that rests on a fader and then slides it changes the value, and no menu opens.
+/// A release after its long press is no click.
+pub fn control_menu(ui: &Ui, response: &mut Response, m: &Metrics) -> Option<Pos2> {
     let law = Law {
         long_s: CONTROL_LONG_PRESS_S,
         still: Some(CONTROL_STILL_PT),
     };
-    press_with(ui, response, m, Vec2::length, law).long
+    let p = press_with(ui, response, m, Vec2::length, law);
+    let origin = ui.data(|d| d.get_temp::<Hold>(response.id.with("long press")));
+    origin.filter(|_| p.long_released && !p.moved).map(|h| h.origin)
 }
 
 /// How long a press is held before it is long, and how far a drag goes before it cancels it (`None`: egui's click
@@ -91,6 +93,9 @@ pub struct Press {
     pub tap: bool,
     /// Released after its long press, wherever the pointer went.
     pub long_released: bool,
+    /// The press went past its law's still distance at some point (a control's [`CONTROL_STILL_PT`], else egui's drag
+    /// past its click distance), before or after its long press.
+    pub moved: bool,
 }
 
 /// [`long_press`] in full: the press on `response` with the calm zone's distance law `calm` (of the travel from
@@ -145,6 +150,7 @@ fn press_with(
                 origin,
                 cancelled: false,
                 fired: None,
+                moved: false,
                 seen: frame,
             });
     }
@@ -165,6 +171,7 @@ fn press_with(
             response.dragged() && pos.is_some_and(|p| p.distance(h.origin) > click)
         }
     };
+    h.moved |= dragged;
     h.cancelled |= h.fired.is_none()
         && (cancel || dragged || pos.is_some_and(|p| calm(p - h.origin) > m.u(CALM_U)));
     // Due a hair early ([`WAKE_EARLY_S`]). A release in the first frame after the hold came due (no frame in between)
@@ -189,6 +196,7 @@ fn press_with(
         held: down && fired,
         tap: !down && !h.cancelled && !fired,
         long_released: !down && fired,
+        moved: h.moved,
     }
 }
 
@@ -200,6 +208,7 @@ struct Hold {
     origin: Pos2,
     cancelled: bool,
     fired: Option<u64>,
+    moved: bool,
     seen: u64,
 }
 
