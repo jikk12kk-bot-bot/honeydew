@@ -62,7 +62,9 @@ pub fn control_menu(ui: &Ui, response: &mut Response, m: &Metrics) -> Option<Pos
     };
     let p = press_with(ui, response, m, Vec2::length, law);
     let origin = ui.data(|d| d.get_temp::<Hold>(response.id.with("long press")));
-    origin.filter(|_| p.long_released && !p.moved).map(|h| h.origin)
+    origin
+        .filter(|_| p.long_released && !p.moved)
+        .map(|h| h.origin)
 }
 
 /// How long a press is held before it is long, and how far a drag goes before it cancels it (`None`: egui's click

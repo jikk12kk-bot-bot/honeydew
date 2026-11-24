@@ -25,9 +25,7 @@ impl Rig {
 
 /// Toggles (bound: the `ParamMenu::Bound` items) and a bound button, whose menu opens at the long press.
 fn rigs() -> Vec<Rig> {
-    let mut rigs: Vec<Rig> = [Kind::Toggle]
-        .map(|kind| Rig::new(kind, 0.25))
-        .into();
+    let mut rigs: Vec<Rig> = [Kind::Toggle].map(|kind| Rig::new(kind, 0.25)).into();
     let mut button = Rig::new(Kind::Button, 0.0);
     button.style = |b| Button {
         menu: ParamMenu::Bound,
@@ -148,8 +146,15 @@ fn a_knob_or_slider_held_300_ms_opens_no_menu_and_a_slide_before_its_500_ms_neve
             rig.frame(vec![]);
         }
         assert!(!rig.popup_is_open(), "{kind:?}: a slide cancels it");
-        rig.button(RECT.center() + vec2(0.0, -3.0), PointerButton::Primary, false);
+        rig.button(
+            RECT.center() + vec2(0.0, -3.0),
+            PointerButton::Primary,
+            false,
+        );
         rig.frame(vec![]);
-        assert!(!rig.popup_is_open(), "{kind:?}: nor opens it on the release");
+        assert!(
+            !rig.popup_is_open(),
+            "{kind:?}: nor opens it on the release"
+        );
     }
 }

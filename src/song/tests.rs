@@ -2276,7 +2276,10 @@ fn a_cloned_pads_rack_is_a_copy_with_its_own_ids() {
         rack.modules.push(m);
     }
     rack.copy_pad(1, 9);
-    let copy: Vec<(u16, i32)> = rack.chain(Some(9)).map(|m| (m.type_id, m.instance_id)).collect();
+    let copy: Vec<(u16, i32)> = rack
+        .chain(Some(9))
+        .map(|m| (m.type_id, m.instance_id))
+        .collect();
     assert_eq!(copy, [(11, 6), (3, 7)]);
     assert_eq!(rack.last_instance_id, 7);
     assert_eq!(rack.chain(Some(1)).count(), 2, "the original keeps its own");

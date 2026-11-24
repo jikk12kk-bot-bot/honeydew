@@ -1124,7 +1124,8 @@ pub fn take_edited(song: &mut Song) -> Vec<(i32, i32, ModuleInstance)> {
         let mut out = Vec::new();
         for id in edited {
             let mut live = host.live.iter_mut();
-            let found = live.find(|(_, h)| h.embedded.is_some_and(|(e, _)| u64::from(e) == id as u64));
+            let found =
+                live.find(|(_, h)| h.embedded.is_some_and(|(e, _)| u64::from(e) == id as u64));
             let Some((&(channel_id, instance_id), hosted)) = found else {
                 continue;
             };

@@ -422,7 +422,12 @@ impl History {
     /// module as it left it, `before` as it found it. One undo step, although no undo step covers the rack: the step
     /// before it holds `before`, and an undo or redo of it restores that module ([`Self::take_plugin_step`]). A gesture
     /// still open becomes a step first. Whether it saved a step (the module changed).
-    pub fn plugin_edited(&mut self, song: &Song, step: PluginStep, before: &ModuleInstance) -> bool {
+    pub fn plugin_edited(
+        &mut self,
+        song: &Song,
+        step: PluginStep,
+        before: &ModuleInstance,
+    ) -> bool {
         if self.open {
             self.edited(song, true);
         }
@@ -634,8 +639,12 @@ impl History {
                     if !ids.contains(&slot.file.send_target) {
                         slot.file.send_target = -1;
                     }
-                    slot.file.sends.retain(|t| ids.contains(&t.target_channel_id));
-                    slot.file.midi_sends.retain(|t| ids.contains(&t.target_channel_id));
+                    slot.file
+                        .sends
+                        .retain(|t| ids.contains(&t.target_channel_id));
+                    slot.file
+                        .midi_sends
+                        .retain(|t| ids.contains(&t.target_channel_id));
                 }
             }
         }
@@ -750,7 +759,11 @@ mod tests {
             state: true,
         };
         assert!(history.plugin_edited(&song, step, &before));
-        assert!(!history.plugin_edited(&song, step, &song.channels[n].rack.get(id).unwrap().clone()));
+        assert!(!history.plugin_edited(
+            &song,
+            step,
+            &song.channels[n].rack.get(id).unwrap().clone()
+        ));
         let value = |song: &Song| song.channels[n].rack.get(id).unwrap().params[1];
         let undone = history.undo().unwrap();
         assert_eq!(value(&undone), before.params[1]);

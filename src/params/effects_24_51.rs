@@ -381,22 +381,22 @@ const REVERB2: &[P] = &[
             text: "OFF",
         },
     ), // 2
-    P::cont("SIZE", 0.5, PERCENT_TIGHT),                     // 3
-    P::cont("DECAY", 0.068, Display::Custom(reverb2_decay)), // 4
-    P::cont("DIFFUSION", 1.0, PERCENT_TIGHT),                // 5
-    P::cont("DAMPING", 0.16, REVERB2_CUT),                   // 6
-    P::cont("DRY", 0.8, REVERB2_LEVEL),                      // 7
-    P::cont("ER", 0.8, REVERB2_LEVEL),                       // 8
-    P::cont("WET", 0.56, REVERB2_LEVEL),                     // 9
-    P::toggle("SIDE INPUT", 0.0).with_automation(OFF_ON),    // 10
+    P::cont("SIZE", 0.5, PERCENT_TIGHT),                      // 3
+    P::cont("DECAY", 0.068, Display::Custom(reverb2_decay)),  // 4
+    P::cont("DIFFUSION", 1.0, PERCENT_TIGHT),                 // 5
+    P::cont("DAMPING", 0.16, REVERB2_CUT),                    // 6
+    P::cont("DRY", 0.8, REVERB2_LEVEL),                       // 7
+    P::cont("ER", 0.8, REVERB2_LEVEL),                        // 8
+    P::cont("WET", 0.56, REVERB2_LEVEL),                      // 9
+    P::toggle("SIDE INPUT", 0.0).with_automation(OFF_ON),     // 10
     P::cont("DELAY", 0.0, Display::CustomCx(reverb2_delay)),  // 11
-    P::toggle("TEMPO", 0.0).with_automation(OFF_ON),         // 12
-    P::cont("MOD", 0.0, PERCENT_TIGHT),                      // 13
-    P::cont("BASS", 0.28, Display::linear(0.2, 3.0, 1, "")), // 14
-    P::cont("SEPARATION", 0.5, SEPARATION_TIGHT),            // 15
-    P::cont("SPEED", 0.33, PERCENT_TIGHT),                   // 16
+    P::toggle("TEMPO", 0.0).with_automation(OFF_ON),          // 12
+    P::cont("MOD", 0.0, PERCENT_TIGHT),                       // 13
+    P::cont("BASS", 0.28, Display::linear(0.2, 3.0, 1, "")),  // 14
+    P::cont("SEPARATION", 0.5, SEPARATION_TIGHT),             // 15
+    P::cont("SPEED", 0.33, PERCENT_TIGHT),                    // 16
     P::cont("CROSS", 0.2405, Display::Custom(reverb2_cross)), // 17
-    P::cont("PAN", 0.5, SEPARATION_TIGHT),                   // 18
+    P::cont("PAN", 0.5, SEPARATION_TIGHT),                    // 18
 ];
 
 // ---- 36 Multiband Compressor ----

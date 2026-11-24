@@ -426,7 +426,9 @@ impl Song {
                     slot.file.send_target = -1;
                 }
                 slot.file.sends.retain(|s| s.target_channel_id != gone.id);
-                slot.file.midi_sends.retain(|s| s.target_channel_id != gone.id);
+                slot.file
+                    .midi_sends
+                    .retain(|s| s.target_channel_id != gone.id);
             }
             let routed = (gone.bus_id >= 1 && c.output_bus == gone.bus_id)
                 || c.file.sends.iter().any(|s| s.target_channel_id == gone.id);

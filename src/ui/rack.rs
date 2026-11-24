@@ -2159,7 +2159,11 @@ impl RackPanel {
             let [tag, swap, name, rest, x] = send_row(ui, cx, row / ppp);
             label(ui, tag, "OUT");
             let target = slot.file.send_target;
-            let out = if target >= 0 { name_of(target) } else { channel_name };
+            let out = if target >= 0 {
+                name_of(target)
+            } else {
+                channel_name
+            };
             label(ui, name.union(rest).union(x), &out);
             if icon_button(ui, cx, base.with("out"), swap, IconId::Swap, ink) {
                 self.out_menu = Some(swap.center());
@@ -2415,7 +2419,14 @@ impl RackPanel {
             })
             .collect();
         let ctx = ui.ctx();
-        let r = popup::show(ctx, ui.id().with("out menu"), at, ctx.content_rect(), &items, cx);
+        let r = popup::show(
+            ctx,
+            ui.id().with("out menu"),
+            at,
+            ctx.content_rect(),
+            &items,
+            cx,
+        );
         if r.close {
             self.out_menu = None;
             ctx.request_repaint();

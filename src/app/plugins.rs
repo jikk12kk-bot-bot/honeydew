@@ -112,7 +112,9 @@ impl HoneydewApp {
         for (channel_id, instance_id, before) in plugins::take_edited(&mut self.song) {
             let key = (channel_id, instance_id);
             let pending = self.plugin_edits.remove(&key).map(|(b, _)| b);
-            let recent = self.plugin_stepped.is_some_and(|(k, t)| k == key && now - t < 1.0);
+            let recent = self
+                .plugin_stepped
+                .is_some_and(|(k, t)| k == key && now - t < 1.0);
             if pending.is_none() && recent && self.history.plugin_amend(&self.song, key) {
                 continue;
             }
