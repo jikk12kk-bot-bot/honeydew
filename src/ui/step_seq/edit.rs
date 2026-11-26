@@ -314,17 +314,17 @@ fn drum_events(lanes: &mut [Lane]) -> impl Iterator<Item = &mut Vec<Event>> {
         .flat_map(|l| l.clips.iter_mut().map(|c| &mut c.events))
 }
 
-/// `Clone`: in every drum clip of the channel, a copy of `pad`'s hits becomes row `pad + 1` and the later rows
-/// move down one. The menu disables `Clone` once the rows fill the 22 pads; past pad 255 (pads are `u8`) nothing
-/// moves.
-pub fn clone_row(lanes: &mut [Lane], pad: u8) {
+/// `Clone`: in every drum clip of the channel, a copy of `pad`'s hits (with `steps`; `Clone (empty)` copies none)
+/// becomes row `pad + 1` and the later rows move down one. The menu disables `Clone` once the rows fill the 22 pads;
+/// past pad 255 (pads are `u8`) nothing moves.
+pub fn clone_row(lanes: &mut [Lane], pad: u8, steps: bool) {
     let Some(below) = pad.checked_add(1) else {
         return;
     };
     for events in drum_events(lanes) {
         let copies: Vec<Event> = events
             .iter()
-            .filter(|e| pad_of(e) == Some(pad))
+            .filter(|e| steps && pad_of(e) == Some(pad))
             .map(|e| with_pad(*e, below))
             .collect();
         for e in events.iter_mut() {

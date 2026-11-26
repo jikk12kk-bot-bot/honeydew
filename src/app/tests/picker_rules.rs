@@ -791,9 +791,9 @@ fn a_later_slicer_loop_replaces_one_still_loading() {
 }
 
 /// Issue #109: the DW Sampler's sample name is the quick way to swap its sample. Its `My Files` is the whole user
-/// folder, and its picker opens in `My Samples`, then at the sample it plays.
+/// folder, and its picker opens at its root, as 3x Osc's with no preset, then at the sample it plays.
 #[test]
-fn a_dw_samplers_picker_opens_in_my_samples_then_at_its_samples_folder() {
+fn a_dw_samplers_picker_opens_at_its_root_then_at_its_samples_folder() {
     let mut rig = with_dw_files();
     for path in [
         "My Samples/Clap.wav",
@@ -805,8 +805,24 @@ fn a_dw_samplers_picker_opens_in_my_samples_then_at_its_samples_folder() {
     let id = instance_id(&rig, DW, 0);
     rig.click_id(preset_button(DW, id));
     row(&mut rig, 0);
-    assert!(rig.painted("Clap") && rig.painted("Drums"), "in My Samples");
-    // `Drums` (folders first), then `Kick`, which loads.
+    let back = Id::new(PICKER).with("back");
+    assert!(rig.ctx.read_response(back).is_none(), "at the root");
+    assert!(rig.painted("My Files") && !rig.painted("Clap"));
+    // `My Files`, `My Samples`, `Drums` (folders first), then `Kick`, which loads.
+    picker_row(&mut rig, 0);
+    rig.frame(vec![]);
+    // The row `My Samples` is painted in.
+    let text = rig.out.shapes.iter().find_map(|s| match &s.shape {
+        egui::Shape::Text(t) if t.galley.text() == "My Samples" => Some(t.visual_bounding_rect()),
+        _ => None,
+    });
+    let text = text.expect("My Samples in My Files").center();
+    let samples = (0..16).find(|&i| {
+        let id = Id::new(PICKER).with(("row", i));
+        (rig.ctx.read_response(id)).is_some_and(|r| r.rect.contains(text))
+    });
+    let samples = samples.expect("its row");
+    picker_row(&mut rig, samples);
     picker_row(&mut rig, 0);
     picker_row(&mut rig, 0);
     worker_done(&mut rig);

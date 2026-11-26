@@ -222,7 +222,7 @@ fn set_midi_note_learns_a_typed_key() {
     rig.click_id(
         egui::Id::new("step_seq")
             .with("row menu")
-            .with((0_usize, 5_usize)),
+            .with((0_usize, 6_usize)),
     );
     rig.take();
     let note = |rig: &Rig| {

@@ -289,7 +289,7 @@ fn clone_and_delete_shift_the_rows_of_every_drum_clip() {
     }];
     channel.lanes.push(notes.clone());
 
-    clone_row(&mut channel.lanes, 1);
+    clone_row(&mut channel.lanes, 1, true);
     let clips = &channel.lanes[0].clips;
     assert_eq!(cells(&clips[0]), on(&[(0, 0), (1, 1), (2, 1), (3, 2)]));
     assert_eq!(cells(&clips[1]), on(&[(1, 3), (2, 3)]));
@@ -429,9 +429,10 @@ fn the_row_menu_is_the_spec_table() {
             (0, 1, "Load Drumset", false, false),
             (0, 2, "Save Drumset", false, false),
             (0, 3, "Clone", false, false),
-            (0, 4, "Delete", false, false),
-            (0, 5, "Reset MIDI Note", false, false),
-            (0, 6, "Set Name", false, false),
+            (0, 4, "Clone (empty)", false, false),
+            (0, 5, "Delete", false, false),
+            (0, 6, "Reset MIDI Note", false, false),
+            (0, 7, "Set Name", false, false),
             (1, 0, "Fill every step", false, false),
             (1, 1, "Fill each 2 step", false, false),
             (1, 2, "Fill each 4 step", false, false),
@@ -457,6 +458,7 @@ fn reset_midi_note_needs_a_note_and_delete_a_second_row() {
             "Load Drumset",
             "Save Drumset",
             "Clone",
+            "Clone (empty)",
             "Delete",
             "Set MIDI Note",
             "Set Name"
@@ -470,6 +472,7 @@ fn reset_midi_note_needs_a_note_and_delete_a_second_row() {
     // No pad for a copy once the 22 pads are in use.
     assert!(disabled(&row_menu(PAD_COUNT, None), "Clone"));
     assert!(!disabled(&row_menu(PAD_COUNT - 1, None), "Clone"));
+    assert!(disabled(&row_menu(PAD_COUNT, None), "Clone (empty)"));
 }
 
 // Layout.
@@ -1153,7 +1156,7 @@ fn a_long_press_selects_the_row_and_opens_its_menu() {
     rig.frame(vec![]);
     let at = rig.header(0);
     rig.click_with(at, PointerButton::Secondary);
-    let at = rig.item("row menu", 0, 4);
+    let at = rig.item("row menu", 0, 5);
     rig.click(at);
     assert!(rig.actions.is_empty());
     assert!(matches!(
@@ -1236,11 +1239,33 @@ fn the_rotate_items_keep_the_menu_open() {
 fn clone_copies_the_row_below_and_selects_it() {
     let mut rig = Rig::new(pattern());
     rig.menu(1, 0, 3);
-    assert_eq!(rig.actions, [StepAction::Clone { pad: 1 }]);
+    assert_eq!(
+        rig.actions,
+        [StepAction::Clone {
+            pad: 1,
+            steps: true
+        }]
+    );
     assert_eq!(
         rig.hits(),
         on(&[(0, 0), (3, 2), (1, 4), (2, 4), (1, 12), (2, 12)])
     );
+    assert_eq!(rig.view.selected, 2);
+}
+
+/// `Clone (empty)`, under `Clone`: the new row below has no hits; the later rows move down all the same.
+#[test]
+fn clone_empty_adds_an_empty_row_below_and_selects_it() {
+    let mut rig = Rig::new(pattern());
+    rig.menu(1, 0, 4);
+    assert_eq!(
+        rig.actions,
+        [StepAction::Clone {
+            pad: 1,
+            steps: false
+        }]
+    );
+    assert_eq!(rig.hits(), on(&[(0, 0), (3, 2), (1, 4), (1, 12)]));
     assert_eq!(rig.view.selected, 2);
 }
 
@@ -1300,7 +1325,7 @@ fn a_full_kit_has_no_pad_to_clone_into() {
 #[test]
 fn delete_asks_first() {
     let mut rig = Rig::new(pattern());
-    rig.menu(1, 0, 4);
+    rig.menu(1, 0, 5);
     assert!(rig.actions.is_empty());
     assert_eq!(rig.view.overlay, Some(Overlay::ConfirmDelete(1)));
     // `No` keeps the row.
@@ -1309,7 +1334,7 @@ fn delete_asks_first() {
     assert_eq!(rig.view.overlay, None);
     assert!(rig.actions.is_empty());
     // `Yes` deletes it; the rows below move up.
-    rig.menu(1, 0, 4);
+    rig.menu(1, 0, 5);
     let at = rig.item("delete", 0, 1);
     rig.click(at);
     assert_eq!(rig.actions, [StepAction::Delete { pad: 1 }]);
@@ -1322,7 +1347,7 @@ fn set_name_prompts_for_the_custom_name() {
     // `New sample name` is the audio-clip prompt, not this one.
     let mut rig = Rig::new(pattern());
     // `Set Name` is row 6 whether the pad has a MIDI note (Snare) or not: the note items share row 5.
-    rig.menu(1, 0, 6);
+    rig.menu(1, 0, 7);
     // No custom name: an empty field.
     assert!(matches!(&rig.view.overlay, Some(Overlay::Rename { row: 1, text }) if text.is_empty()));
     rig.frame(vec![]);
@@ -1340,7 +1365,7 @@ fn set_name_prompts_for_the_custom_name() {
     );
     assert_eq!(rig.view.overlay, None);
     // Escape cancels.
-    rig.menu(0, 0, 6);
+    rig.menu(0, 0, 7);
     assert!(matches!(
         rig.view.overlay,
         Some(Overlay::Rename { row: 0, .. })
@@ -1350,7 +1375,7 @@ fn set_name_prompts_for_the_custom_name() {
     assert_eq!(rig.actions.len(), 1);
     // A pad with a custom name: the field starts from it, and OK on an empty field removes it.
     rig.kit.0[0] = ("Mine", "", None);
-    rig.menu(0, 0, 6);
+    rig.menu(0, 0, 7);
     assert!(matches!(&rig.view.overlay, Some(Overlay::Rename { row: 0, text }) if text == "Mine"));
     rig.frame(vec![]);
     for _ in 0.."Mine".len() {
@@ -1370,7 +1395,7 @@ fn set_name_prompts_for_the_custom_name() {
 fn set_midi_note_waits_for_a_key_and_reset_clears_it() {
     let mut rig = Rig::new(pattern());
     assert_eq!(rig.view.midi_key(40), None, "not waiting");
-    rig.menu(2, 0, 5);
+    rig.menu(2, 0, 6);
     assert_eq!(rig.view.overlay, Some(Overlay::LearnMidi(2)));
     assert!(rig.area("midi").is_some());
     assert_eq!(
@@ -1382,13 +1407,13 @@ fn set_midi_note_waits_for_a_key_and_reset_clears_it() {
     );
     assert_eq!(rig.view.overlay, None);
     // Snare has a note: `Reset MIDI Note` is row 5.
-    rig.menu(1, 0, 5);
+    rig.menu(1, 0, 6);
     assert_eq!(
         rig.actions,
         [StepAction::SetMidiNote { pad: 1, note: None }]
     );
     // `Cancel` stops waiting.
-    rig.menu(2, 0, 5);
+    rig.menu(2, 0, 6);
     let at = rig.item("midi", 0, 1);
     rig.click(at);
     assert_eq!(rig.view.overlay, None);
@@ -2257,7 +2282,13 @@ fn a_drag_on_a_hit_moves_the_selection_by_whole_steps_and_rows_in_one_undo_step(
 fn a_rows_clone_or_delete_clears_the_selection() {
     // The Hat gets a hit on 4 too, so the shifted rows still hold a hit in the selected cell.
     let cases = [
-        (StepAction::Clone { pad: 1 }, (2, 4)),
+        (
+            StepAction::Clone {
+                pad: 1,
+                steps: true,
+            },
+            (2, 4),
+        ),
         (StepAction::Delete { pad: 1 }, (1, 4)),
     ];
     for (action, (row, step)) in cases {

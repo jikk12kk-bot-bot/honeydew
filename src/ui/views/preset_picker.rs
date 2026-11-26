@@ -37,9 +37,9 @@
 //!
 //! A Honeydew addition (#109): every picker's `My Files` is the whole user folder, as the Instruments picker's (only
 //! the files it loads listed), with the folders its files are saved in as default shortcuts ([`crate::ui::shortcuts`]).
-//! A module's picker first opens at the module's file: the DW Sampler's at the user sample (or program) it plays,
-//! picked, else in `My Samples`, where its `Import` keeps a file ([`dw_start`]); any other's at its preset
-//! ([`start_at`]). Later it opens where that module's picker was left.
+//! A module's picker first opens at the module's file, else at its root: the DW Sampler's at the user sample (or
+//! program) it plays, picked ([`dw_start`]), else at its preset as any other's ([`start_at`]). Later it opens where
+//! that module's picker was left.
 //!
 //! The Modules browser's `Instrument` and `Rack Preset` show their lists in the browser's panel
 //! ([`PresetPicker::in_modules`]), Back at their root going back to it ([`State::back_to_modules`]):
@@ -1367,12 +1367,15 @@ fn finish(
     Ok(0)
 }
 
-/// Where a module's picker first opens, the first of these the library has ([`State`]): a DW Sampler's sample or program
-/// ([`dw_start`]); any other module's preset file, by its preset path in our factory, the content folder or the user
-/// folder. Each with whether it is a file to pick (its folder open, its row in view); none for `Default`.
+/// Where a module's picker first opens, the first of these the library has ([`State`]): a DW Sampler's user sample or
+/// program ([`dw_start`]); else the module's preset file, by its preset path in our factory, the content folder or the
+/// user folder. Each with whether it is a file to pick (its folder open, its row in view); none for `Default`, which
+/// opens at the root.
 fn start_at(files: &ProjectFiles, module: &ModuleInstance) -> Vec<(PathBuf, bool)> {
-    if module.type_id == DW {
-        return dw_start(files, module).into_iter().collect();
+    if module.type_id == DW
+        && let Some(start) = dw_start(files, module)
+    {
+        return vec![start];
     }
     let file = Path::new(&module.file.preset_path);
     if file.as_os_str().is_empty() {
@@ -1388,9 +1391,8 @@ fn start_at(files: &ProjectFiles, module: &ModuleInstance) -> Vec<(PathBuf, bool
         .collect()
 }
 
-/// Where a DW Sampler's picker opens (#109: its sample name is the quick way to swap its sample),
-/// with whether it is a file to pick: the sample or program it plays from the user folder, its folder open and its row
-/// in view; else `My Samples`.
+/// Where a DW Sampler's picker opens (#109: its sample name is the quick way to swap its sample), as a file to pick: the
+/// sample or program it plays from the user folder, its folder open and its row in view; else none ([`start_at`]).
 fn dw_start(files: &ProjectFiles, module: &ModuleInstance) -> Option<(PathBuf, bool)> {
     let user = |p: &ContentPath| {
         matches!(
@@ -1401,13 +1403,10 @@ fn dw_start(files: &ProjectFiles, module: &ModuleInstance) -> Option<(PathBuf, b
             }
         )
     };
-    match dw_program(module)
+    let file = dw_program(module)
         .filter(user)
-        .and_then(|p| files.resolve(&p))
-    {
-        Some(file) => Some((file, true)),
-        None => Some((files.user_dir()?.join(SAMPLES_FOLDER), false)),
-    }
+        .and_then(|p| files.resolve(&p))?;
+    Some((file, true))
 }
 
 /// The file types the picker for `target` lists: a module's (`module_type`), drum kits or rack presets.
@@ -1560,8 +1559,8 @@ pub(crate) fn channel_limit_message() -> Overlay {
     }
 }
 
-/// Where `Import` keeps a file for module type `t`'s picker: the module's user folder (the DW Sampler's `My Samples`,
-/// where its picker opens), when the picker lists audio files (the DW Sampler's, the Slicer's, 3x Osc's) and `files`
+/// Where `Import` keeps a file for module type `t`'s picker: the module's user folder (the DW Sampler's `My Samples`),
+/// when the picker lists audio files (the DW Sampler's, the Slicer's, 3x Osc's) and `files`
 /// takes an import ([`ProjectFiles::imports_audio`]).
 fn import_dir(files: &ProjectFiles, t: u16) -> Option<PathBuf> {
     let audio = preset_exts(t).contains(&SAMPLE_EXTS[0]);

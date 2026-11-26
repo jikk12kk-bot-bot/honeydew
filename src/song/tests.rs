@@ -2266,6 +2266,29 @@ fn a_drum_pads_own_rack_splits_out_for_its_editor_and_joins_back_after_the_chann
     assert_eq!(types(&song), [(6, None), (3, None), (6, Some(2))]);
 }
 
+/// A module added to a pad's rack is the pad's although the channel's own rack is empty (nothing else to split off).
+#[test]
+fn a_pads_rack_takes_its_module_with_the_channels_rack_empty() {
+    let mut song = Song::default();
+    song.add_channel(ChannelKind::Instrument);
+    song.channels[1].rack.modules.clear();
+    for pad in [Some(1), None] {
+        let split = song.split_rack(1, pad);
+        let rack = &mut song.channels[1].rack;
+        rack.last_instance_id += 1;
+        let m = ModuleInstance::new(6, rack.last_instance_id);
+        rack.modules.push(m);
+        song.join_rack(split);
+    }
+    let pads: Vec<_> = song.channels[1]
+        .rack
+        .modules
+        .iter()
+        .map(|m| m.pad)
+        .collect();
+    assert_eq!(pads, [None, Some(1)]);
+}
+
 #[test]
 fn a_cloned_pads_rack_is_a_copy_with_its_own_ids() {
     let mut rack = Rack::default();
