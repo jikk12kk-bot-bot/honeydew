@@ -15,6 +15,14 @@
 //!
 //! The current row is the last pick of the session.
 //!
+//! PINNED and RECENT ([`Marks`], kept in the settings): under the three actions, before SYNTH (at the top in the other
+//! orderings, the rest under ALL), in every ordering and in a search, which filters them as any rows. A module row's
+//! long press let go where it went down, or its secondary tap, opens its menu: `Pin` (it goes last in PINNED) or
+//! `Unpin`. RECENT is the last [`RECENT_SHOWN`] modules added that are not pinned, newest first: a browse adds one
+//! module (each later pick replaces the last one's), so it counts as one, its last pick; the open browser shows RECENT
+//! as it opened, so a pick never moves the rows under the finger. Each shows only where the channel takes it, as in its
+//! own section.
+//!
 //! `Paste` is always listed and enabled: the clipboard holds the modules a card's `Copy` or the rack's `Copy Rack` put
 //! there, and what does not fit the channel is the caller's `Cannot paste module`.
 //!
@@ -112,6 +120,62 @@ fn plugin_sections() -> [(&'static str, Vec<Entry>); 2] {
         ("PLUGIN INSTRUMENTS", instruments),
         ("PLUGIN EFFECTS", effects),
     ]
+}
+
+impl Entry {
+    /// Its key in the stored PINNED and RECENT lists ([`Marks`]): `synth:<type id>`, `module:<type id>` or
+    /// `plugin:<uid>`; none for the actions, which are not pinned.
+    pub fn key(self) -> Option<String> {
+        match self {
+            Self::Synth(kind) => Some(format!("synth:{}", kind.type_id())),
+            Self::Module(id) => Some(format!("module:{id}")),
+            Self::Plugin(plugin) => Some(format!("plugin:{}", plugin.uid)),
+            Self::Paste | Self::RackPreset | Self::Instrument => None,
+        }
+    }
+}
+
+/// How many RECENT rows show at most.
+pub const RECENT_SHOWN: usize = 5;
+/// How many recent modules are kept: pinned ones among them do not show in RECENT, so more than it shows.
+const RECENT_KEPT: usize = 10;
+
+/// The pinned and recent modules, by [`Entry::key`]: the settings' `pinnedModules` and `recentModules`. A key the list
+/// no longer has (a plugin uninstalled) is kept, and shows nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Marks {
+    /// In the order they were pinned.
+    pub pinned: Vec<String>,
+    /// Newest first, at most [`RECENT_KEPT`].
+    pub recent: Vec<String>,
+}
+
+impl Marks {
+    /// `entry` added from the browser: it goes first in `before` (the recent list as the browse found it).
+    fn added(&mut self, before: &[String], entry: Entry) {
+        let Some(key) = entry.key() else {
+            return;
+        };
+        let rest: Vec<String> = before.iter().filter(|k| **k != key).cloned().collect();
+        self.recent = std::iter::once(key).chain(rest).take(RECENT_KEPT).collect();
+    }
+
+    /// Pins `entry` (last), or unpins it.
+    fn toggle_pin(&mut self, entry: Entry) {
+        let Some(key) = entry.key() else {
+            return;
+        };
+        match self.pinned.iter().position(|k| *k == key) {
+            Some(i) => {
+                self.pinned.remove(i);
+            }
+            None => self.pinned.push(key),
+        }
+    }
+
+    fn is_pinned(&self, entry: Entry) -> bool {
+        entry.key().is_some_and(|key| self.pinned.contains(&key))
+    }
 }
 
 /// A row of the list: a section header (upper case, on a darker band) or an entry.
@@ -320,6 +384,57 @@ pub fn rows(query: &str, sort: ModuleOrdering, takes: Takes) -> Vec<Row> {
     rows
 }
 
+/// [`rows`] with PINNED and RECENT ([`Marks`]) first: in `Category` under the actions (the rows before the first
+/// section), else at the top, the rest then under ALL. Each section holds the marked entries the channel takes and the
+/// query hits, RECENT those not pinned, at most [`RECENT_SHOWN`]; an empty one is left out.
+pub fn rows_with(query: &str, sort: ModuleOrdering, takes: Takes, marks: &Marks) -> Vec<Row> {
+    let mut rows = rows(query, sort, takes);
+    if marks.pinned.is_empty() && marks.recent.is_empty() {
+        return rows;
+    }
+    let lower = query.to_lowercase();
+    let hit = |e: &Entry| e.fits(takes) && e.name().to_lowercase().contains(&lower);
+    let plugins = plugin_sections();
+    let sections = sections();
+    let listed: Vec<Entry> = (sections.iter().flat_map(|(_, entries)| entries.iter()))
+        .chain(plugins.iter().flat_map(|(_, entries)| entries.iter()))
+        .copied()
+        .collect();
+    let entry = |key: &String| {
+        listed
+            .iter()
+            .copied()
+            .find(|e| e.key().as_ref() == Some(key))
+    };
+    let pinned: Vec<Entry> = marks.pinned.iter().filter_map(entry).filter(hit).collect();
+    let recent = (marks.recent.iter().filter_map(entry))
+        .filter(|e| !marks.is_pinned(*e) && hit(e))
+        .take(RECENT_SHOWN);
+    let mut marked = Vec::new();
+    for (header, entries) in [("PINNED", pinned), ("RECENT", recent.collect())] {
+        if !entries.is_empty() {
+            marked.push(Row::Section(header));
+            marked.extend(entries.into_iter().map(Row::Item));
+        }
+    }
+    if marked.is_empty() {
+        return rows;
+    }
+    let at = match sort {
+        ModuleOrdering::Category => (rows.iter())
+            .take_while(|r| !matches!(r, Row::Section(_)))
+            .count(),
+        _ => {
+            if !rows.is_empty() {
+                rows.insert(0, Row::Section("ALL"));
+            }
+            0
+        }
+    };
+    rows.splice(at..at, marked);
+    rows
+}
+
 /// Where a picked module goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InsertAt {
@@ -508,6 +623,15 @@ pub struct ModulesBrowser {
     sort_menu: Option<Pos2>,
     /// The last pick: the current row.
     picked: Option<Entry>,
+    /// PINNED and RECENT: set them from the settings as the browser opens; a `Pin`, `Unpin` or pick changes them and
+    /// sets [`Self::marks_changed`], for the caller to store.
+    pub marks: Marks,
+    /// [`Self::marks`] changed: take it and store them.
+    pub marks_changed: bool,
+    /// The recent list as this browse found it (its first pick): each pick of it replaces the last one's.
+    recent_before: Option<Vec<String>>,
+    /// A module row's menu (`Pin` / `Unpin`), open at this point.
+    row_menu: Option<(Entry, Pos2)>,
 }
 
 impl ModulesBrowser {
@@ -555,14 +679,36 @@ impl ModulesBrowser {
                 self.sort_menu = None;
             }
         }
+        // A module row's menu, before the panel as `Sort`'s.
+        if let Some((entry, at)) = self.row_menu {
+            let label = match self.marks.is_pinned(entry) {
+                true => "Unpin",
+                false => "Pin",
+            };
+            let items = [PopupItem::new((), 0, 0, label)];
+            let result = modal(ctx, cx, id.with("row menu"), at, &items);
+            if result.selected.is_some() {
+                self.marks.toggle_pin(entry);
+                self.marks_changed = true;
+            }
+            if result.close || result.selected.is_some() {
+                self.row_menu = None;
+            }
+        }
+        self.panel.row_menus = true;
         let chrome = Chrome {
             id,
             title: "Modules",
             back: false,
             buttons: &[SideButton::Search, SideButton::Plain("Sort", true)],
-            popup: self.sort_menu.is_some(),
+            popup: self.sort_menu.is_some() || self.row_menu.is_some(),
         };
-        let (sort, picked) = (self.sort, self.picked);
+        // RECENT as the browse found it: a pick does not move the rows.
+        let shown = Marks {
+            pinned: self.marks.pinned.clone(),
+            recent: (self.recent_before.clone()).unwrap_or_else(|| self.marks.recent.clone()),
+        };
+        let (sort, picked, marks) = (self.sort, self.picked, &shown);
         let click = self.panel.show(ctx, cx, &chrome, |query| {
             let row = |row: Row| PanelRow {
                 name: row.name(),
@@ -575,7 +721,10 @@ impl ModulesBrowser {
                 picked: matches!(row, Row::Item(e) if Some(e) == picked),
                 mark: None,
             };
-            rows(query, sort, takes).into_iter().map(row).collect()
+            rows_with(query, sort, takes, marks)
+                .into_iter()
+                .map(row)
+                .collect()
         })?;
         match click {
             PanelClick::Close => Some(BrowserAction::Close),
@@ -583,6 +732,11 @@ impl ModulesBrowser {
                 let action = entry.action();
                 if matches!(action, BrowserAction::Pick(_) | BrowserAction::Plugin(_)) {
                     self.picked = Some(entry);
+                    let before = (self.recent_before)
+                        .get_or_insert_with(|| self.marks.recent.clone())
+                        .clone();
+                    self.marks.added(&before, entry);
+                    self.marks_changed = true;
                 }
                 Some(action)
             }
@@ -591,11 +745,13 @@ impl ModulesBrowser {
                 self.sort_menu = Some(layout(ctx.content_rect(), 1.0, cx.m).button(i));
                 None
             }
+            // A module row's menu: `Pin` / `Unpin`; the actions have none.
+            PanelClick::Context(entry, at) => {
+                self.row_menu = entry.key().map(|_| (entry, at));
+                None
+            }
             // The browser asks for no name, has no folders and no select mode.
-            PanelClick::Enter
-            | PanelClick::Back
-            | PanelClick::Context(..)
-            | PanelClick::Drag(_) => None,
+            PanelClick::Enter | PanelClick::Back | PanelClick::Drag(_) => None,
         }
     }
 }
@@ -696,6 +852,8 @@ pub(crate) enum PanelClick<T> {
     Row(T),
     /// A secondary tap (right click) on an enabled row, where the panel offers select mode (an enabled
     /// [`SideButton::Toggle`]): the caller enters select mode, selects the row and opens its ≡ menu at this point.
+    /// With [`SidePanel::row_menus`], a secondary tap or a long press let go in place on an item row: the caller opens
+    /// the row's menu at this point.
     Context(T, Pos2),
     /// Enter in the name field [`SidePanel::ask`] opened: take the name with [`SidePanel::take_prompt`].
     Enter,
@@ -735,6 +893,9 @@ pub(crate) struct SidePanel {
     /// Row flash on pick: the item row last tapped, by index and name (a list read again may move another row to that
     /// index: the flash then shows on none), and when (input time, in seconds), while its flash runs.
     flash: Option<(usize, String, f64)>,
+    /// Item rows have a menu (the Modules browser's Pin / Unpin): a long press let go where it went down
+    /// ([`crate::ui::gesture::long_tap`]) or a secondary tap gives [`PanelClick::Context`].
+    pub row_menus: bool,
 }
 
 /// The name field over the list ([`SidePanel::ask`]).
@@ -1195,12 +1356,17 @@ impl SidePanel {
                         }
                         RowKind::Enabled(pick) | RowKind::Selected(pick) => {
                             let row_id = id.with(("row", i));
-                            let response = crate::ui::focus::interact(
+                            let mut response = crate::ui::focus::interact(
                                 ui,
                                 rect.intersect(list),
                                 row_id,
                                 Sense::click(),
                             );
+                            // Before the click, which a long press takes.
+                            let menu = match self.row_menus && !row.folder {
+                                true => crate::ui::gesture::long_tap(ui, &mut response, m),
+                                false => None,
+                            };
                             if !row.folder && crate::ui::file_drag::row_dragged(ui, &response, m) {
                                 click = Some(PanelClick::Drag(pick));
                             }
@@ -1212,8 +1378,11 @@ impl SidePanel {
                                     self.flash = Some((i, row.name.to_owned(), now));
                                 }
                             }
-                            if selectable && response.secondary_clicked() {
+                            if (selectable || self.row_menus) && response.secondary_clicked() {
                                 let at = response.interact_pointer_pos().unwrap_or(rect.center());
+                                click = Some(PanelClick::Context(pick, at));
+                            }
+                            if let Some(at) = menu {
                                 click = Some(PanelClick::Context(pick, at));
                             }
                             look.pressed = response.is_pointer_button_down_on();

@@ -67,6 +67,16 @@ pub fn control_menu(ui: &Ui, response: &mut Response, m: &Metrics) -> Option<Pos
         .map(|h| h.origin)
 }
 
+/// A browser row's menu press (the Modules browser's Pin): its touch-down point, on the frame of the release of a
+/// long press ([`LONG_PRESS_S`]) let go inside its calm zone. A long press that then slides away (a drag out, a
+/// change of mind) opens nothing. A release after its long press is no click.
+pub fn long_tap(ui: &Ui, response: &mut Response, m: &Metrics) -> Option<Pos2> {
+    let p = press(ui, response, m, Vec2::length);
+    let hold = ui.data(|d| d.get_temp::<Hold>(response.id.with("long press")))?;
+    let pos = ui.input(|i| i.pointer.latest_pos());
+    (p.long_released && !left_calm(hold.origin, pos, m.u(1.0))).then_some(hold.origin)
+}
+
 /// How long a press is held before it is long, and how far a drag goes before it cancels it (`None`: egui's click
 /// distance).
 #[derive(Clone, Copy)]

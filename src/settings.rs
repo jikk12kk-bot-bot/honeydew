@@ -477,6 +477,13 @@ pub struct Settings {
     /// ([`crate::ui::shortcuts::scoped`]). None by default.
     #[serde(rename = "hiddenShortcuts", skip_serializing_if = "Vec::is_empty")]
     pub hidden_shortcuts: Vec<String>,
+    /// The Modules browser's PINNED modules (our own key), in the order they were pinned, each a module's
+    /// [`crate::ui::modules_browser::Entry::key`]. None by default.
+    #[serde(rename = "pinnedModules", skip_serializing_if = "Vec::is_empty")]
+    pub pinned_modules: Vec<String>,
+    /// The modules last added from the Modules browser (our own key), newest first, for its RECENT. None by default.
+    #[serde(rename = "recentModules", skip_serializing_if = "Vec::is_empty")]
+    pub recent_modules: Vec<String>,
     /// The Displayer (our own key): its image or video, how it shows, and the MP4 render's options. It belongs to no
     /// song ([`crate::displayer`]).
     #[serde(
@@ -580,6 +587,8 @@ impl Default for Settings {
             analyzer_light_pitch: true,
             folder_shortcuts: Vec::new(),
             hidden_shortcuts: Vec::new(),
+            pinned_modules: Vec::new(),
+            recent_modules: Vec::new(),
             displayer: DisplayerSettings::default(),
         }
     }
@@ -1108,6 +1117,8 @@ mod tests {
             analyzer_light_pitch: !d.analyzer_light_pitch,
             folder_shortcuts: vec!["Songs|My Samples/Drums".into()],
             hidden_shortcuts: vec!["SuperSaw|My Presets/SuperSaw".into()],
+            pinned_modules: vec!["module:32".into()],
+            recent_modules: vec!["synth:4".into(), "module:8".into()],
             displayer: crate::displayer::DisplayerSettings {
                 source: crate::displayer::Source::Video,
                 video: "/videos/clip.mp4".into(),

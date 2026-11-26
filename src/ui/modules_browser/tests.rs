@@ -1546,3 +1546,147 @@ fn the_flash_skips_folders_starts_the_frame_after_the_tap_and_stays_on_its_rows_
     let shapes = frame(&mut panel, &moved, vec![]);
     assert!(!bare_flash(&ctx, &shapes, 1) && !bare_flash(&ctx, &shapes, 2));
 }
+
+// ---- PINNED and RECENT ----
+
+#[test]
+fn pinned_and_recent_sit_under_the_actions_in_every_ordering_and_a_search_filters_them() {
+    use ModuleOrdering::{AZ, Category};
+    let osc = Entry::Synth(S::ThreeXOsc);
+    let key = |e: Entry| e.key().expect("a module");
+    let recent = [M(29), M(8), osc, M(6), M(27), M(20), M(28), M(36)];
+    let marks = Marks {
+        pinned: vec![key(M(32)), key(osc), "plugin:gone".into()],
+        recent: recent.iter().map(|&e| key(e)).collect(),
+    };
+    let listed = rows_with("", Category, Takes::Instruments, &marks);
+    let mut want = vec![
+        Row::Item(Entry::Paste),
+        Row::Item(Entry::RackPreset),
+        Row::Item(Entry::Instrument),
+        Row::Section("PINNED"),
+        Row::Item(M(32)),
+        Row::Item(osc),
+        Row::Section("RECENT"),
+    ];
+    // RECENT leaves the pinned 3x Osc out and shows at most 5.
+    want.extend([M(29), M(8), M(6), M(27), M(20)].map(Row::Item));
+    assert_eq!(listed[..want.len()], want[..]);
+    // Then the whole list as before, each module in its own section too.
+    let plain = super::rows("", Category, Takes::Instruments);
+    assert_eq!(listed[want.len()..], plain[3..]);
+    // A-Z: at the top, the rest under ALL.
+    let az = rows_with("", AZ, Takes::Instruments, &marks);
+    assert_eq!(az[..2], [Row::Section("PINNED"), Row::Item(M(32))]);
+    let all = az
+        .iter()
+        .position(|r| *r == Row::Section("ALL"))
+        .expect("ALL");
+    assert_eq!(az[all + 1..], super::rows("", AZ, Takes::Instruments)[..]);
+    // Where no instrument goes, the pinned 3x Osc shows nowhere.
+    let fx = rows_with("", Category, Takes::Effects, &marks);
+    assert!(!fx.contains(&Row::Item(osc)));
+    // Under `Paste` and `Rack Preset`, with no `Instrument` there.
+    assert_eq!(fx[2..4], [Row::Section("PINNED"), Row::Item(M(32))]);
+    // A search filters them as any rows.
+    let hits = rows_with(M(32).name(), Category, Takes::Instruments, &marks);
+    assert_eq!(hits[..2], [Row::Section("PINNED"), Row::Item(M(32))]);
+    assert!(!hits.contains(&Row::Section("RECENT")));
+    // None marked: the list as before.
+    let none = Marks::default();
+    assert_eq!(rows_with("", Category, Takes::Instruments, &none), plain);
+}
+
+#[test]
+fn a_browse_counts_once_in_recent_its_last_pick() {
+    let mut marks = Marks {
+        pinned: Vec::new(),
+        recent: vec!["module:8".into(), "module:29".into()],
+    };
+    let before = marks.recent.clone();
+    marks.added(&before, M(29));
+    marks.added(&before, M(6));
+    assert_eq!(marks.recent, ["module:6", "module:8", "module:29"]);
+    // At most 10 kept.
+    let many: Vec<String> = (0..12).map(|i| format!("module:{i}")).collect();
+    marks.added(&many, M(40));
+    assert_eq!(marks.recent.len(), 10);
+    assert_eq!(marks.recent[0], "module:40");
+    // The actions are never recent.
+    marks.added(&before, Entry::Paste);
+    assert_eq!(marks.recent[0], "module:40");
+}
+
+impl Rig {
+    /// Holds the primary button on `pos` for `s` seconds of frames, then lets go there; returns what the release frame
+    /// returned, then lets a menu it opened settle.
+    fn long_press(&mut self, pos: Pos2, s: f64) -> Option<BrowserAction> {
+        self.frame(vec![Event::PointerMoved(pos)]);
+        self.button(pos, PointerButton::Primary, true);
+        let frames = (s * 60.0).ceil() as usize;
+        for _ in 0..frames {
+            self.frame(vec![]);
+        }
+        self.button(pos, PointerButton::Primary, false);
+        let action = self.action;
+        self.frame(vec![]);
+        self.frame(vec![]);
+        action
+    }
+}
+
+#[test]
+fn a_rows_long_press_or_secondary_tap_pins_and_unpins_it() {
+    let mut rig = Rig::new();
+    assert!(!rig.shows("PINNED"));
+    // A secondary tap on 3x Osc: its menu, `Pin`.
+    let osc = rig.text_at("3x Osc");
+    assert_eq!(rig.click_with(osc, PointerButton::Secondary), None);
+    rig.frame(vec![]);
+    rig.frame(vec![]);
+    let pin = rig.text_at("Pin");
+    assert_eq!(rig.click(pin), None);
+    rig.frame(vec![]);
+    assert!(rig.browser.marks_changed);
+    assert_eq!(rig.browser.marks.pinned, ["synth:39"]);
+    assert!(rig.shows("PINNED") && !rig.shows("Pin"));
+    // PINNED sits above SYNTH.
+    assert!(rig.text_at("PINNED").y < rig.text_at("SYNTH").y);
+    // A long press let go where it went down: `Unpin` now.
+    let osc = rig.text_at("3x Osc");
+    assert_eq!(rig.long_press(osc, 0.5), None, "a long press picks nothing");
+    let unpin = rig.text_at("Unpin");
+    rig.click(unpin);
+    rig.frame(vec![]);
+    assert!(rig.browser.marks.pinned.is_empty());
+    assert!(!rig.shows("PINNED"));
+    // A short tap still picks, and the actions have no menu.
+    let osc = rig.text_at("3x Osc");
+    assert_eq!(rig.click(osc), Some(BrowserAction::Pick(39)));
+    let paste = rig.text_at("Paste");
+    rig.click_with(paste, PointerButton::Secondary);
+    rig.frame(vec![]);
+    rig.frame(vec![]);
+    assert!(!rig.shows("Pin"));
+}
+
+#[test]
+fn a_pick_is_recent_next_time_without_moving_the_open_list() {
+    let mut rig = Rig::new();
+    let osc = rig.text_at("3x Osc");
+    assert_eq!(rig.click(osc), Some(BrowserAction::Pick(39)));
+    rig.frame(vec![]);
+    assert_eq!(rig.browser.marks.recent, ["synth:39"]);
+    assert!(!rig.shows("RECENT"), "not while this browse is open");
+    // The next opening (a fresh browser with the stored marks) shows it.
+    let marks = rig.browser.marks.clone();
+    rig.browser = ModulesBrowser {
+        marks,
+        ..ModulesBrowser::default()
+    };
+    for _ in 0..30 {
+        rig.frame(vec![]);
+    }
+    assert!(rig.shows("RECENT"));
+    assert!(rig.text_at("RECENT").y < rig.text_at("SYNTH").y);
+}
