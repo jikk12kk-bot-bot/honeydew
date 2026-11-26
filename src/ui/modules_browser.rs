@@ -156,7 +156,7 @@ impl Marks {
         let Some(key) = entry.key() else {
             return;
         };
-        let rest = before.iter().filter(|k| **k != key).cloned();
+        let rest: Vec<String> = before.iter().filter(|k| **k != key).cloned().collect();
         self.recent = std::iter::once(key).chain(rest).take(RECENT_KEPT).collect();
     }
 
