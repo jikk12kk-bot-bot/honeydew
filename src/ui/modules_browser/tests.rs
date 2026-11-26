@@ -1578,7 +1578,10 @@ fn pinned_and_recent_sit_under_the_actions_in_every_ordering_and_a_search_filter
     // A-Z: at the top, the rest under ALL.
     let az = rows_with("", AZ, Takes::Instruments, &marks);
     assert_eq!(az[..2], [Row::Section("PINNED"), Row::Item(M(32))]);
-    let all = az.iter().position(|r| *r == Row::Section("ALL")).expect("ALL");
+    let all = az
+        .iter()
+        .position(|r| *r == Row::Section("ALL"))
+        .expect("ALL");
     assert_eq!(az[all + 1..], super::rows("", AZ, Takes::Instruments)[..]);
     // Where no instrument goes, the pinned 3x Osc shows nowhere.
     let fx = rows_with("", Category, Takes::Effects, &marks);

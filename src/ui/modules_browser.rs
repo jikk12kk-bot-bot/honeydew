@@ -400,7 +400,12 @@ pub fn rows_with(query: &str, sort: ModuleOrdering, takes: Takes, marks: &Marks)
         .chain(plugins.iter().flat_map(|(_, entries)| entries.iter()))
         .copied()
         .collect();
-    let entry = |key: &String| listed.iter().copied().find(|e| e.key().as_ref() == Some(key));
+    let entry = |key: &String| {
+        listed
+            .iter()
+            .copied()
+            .find(|e| e.key().as_ref() == Some(key))
+    };
     let pinned: Vec<Entry> = marks.pinned.iter().filter_map(entry).filter(hit).collect();
     let recent = (marks.recent.iter().filter_map(entry))
         .filter(|e| !marks.is_pinned(*e) && hit(e))
@@ -716,7 +721,10 @@ impl ModulesBrowser {
                 picked: matches!(row, Row::Item(e) if Some(e) == picked),
                 mark: None,
             };
-            rows_with(query, sort, takes, marks).into_iter().map(row).collect()
+            rows_with(query, sort, takes, marks)
+                .into_iter()
+                .map(row)
+                .collect()
         })?;
         match click {
             PanelClick::Close => Some(BrowserAction::Close),
