@@ -940,7 +940,13 @@ mod tests {
     fn kit_actions_keep_slot_ids_and_store_midi_notes() {
         let mut kit = DrumKit::default_kit();
         let ids = |kit: &DrumKit| kit.slots.iter().map(|s| s.file.id).collect::<Vec<_>>();
-        edit_kit(&mut kit, &StepAction::Clone { pad: 1, steps: true });
+        edit_kit(
+            &mut kit,
+            &StepAction::Clone {
+                pad: 1,
+                steps: true,
+            },
+        );
         assert_eq!(ids(&kit), [1, 2, 9, 3, 4, 5, 6, 7, 8]);
         assert_eq!(kit.slots[2].name, kit.slots[1].name);
         edit_kit(&mut kit, &StepAction::Delete { pad: 0 });
@@ -985,7 +991,13 @@ mod tests {
         let identity: [u8; 22] = std::array::from_fn(|i| i as u8);
         let mut kit = DrumKit::default_kit();
         edit_kit(&mut kit, &StepAction::Delete { pad: 1 });
-        edit_kit(&mut kit, &StepAction::Clone { pad: 2, steps: true });
+        edit_kit(
+            &mut kit,
+            &StepAction::Clone {
+                pad: 2,
+                steps: true,
+            },
+        );
         assert_eq!(kit.file.pads, identity);
         // The kick (pad 0) and the closed hat (pad 3) swapped.
         let mut kit = DrumKit::default_kit();
@@ -1004,7 +1016,13 @@ mod tests {
             ["Closed Hat", "Clap", "Kick", "Open Hat", "Tom"]
         );
         // Cloning the hat (now slot 2) puts the copy on the pad after it.
-        edit_kit(&mut kit, &StepAction::Clone { pad: 2, steps: true });
+        edit_kit(
+            &mut kit,
+            &StepAction::Clone {
+                pad: 2,
+                steps: true,
+            },
+        );
         assert_eq!(kit.file.pads[..5], [2, 3, 1, 0, 4]);
         assert_eq!(
             shown(&kit),
@@ -1027,7 +1045,13 @@ mod tests {
         edit_kit(&mut kit, &rename("Mine"));
         assert_eq!(kit.slots[1].file.custom_pad_name, "Mine");
         assert_eq!(kit.slots[1].name, "Synth Snare");
-        edit_kit(&mut kit, &StepAction::Clone { pad: 1, steps: true });
+        edit_kit(
+            &mut kit,
+            &StepAction::Clone {
+                pad: 1,
+                steps: true,
+            },
+        );
         assert_eq!(kit.slots[1].file.custom_pad_name, "Mine");
         let copy = &kit.slots[2];
         assert_eq!(

@@ -1403,7 +1403,9 @@ fn dw_start(files: &ProjectFiles, module: &ModuleInstance) -> Option<(PathBuf, b
             }
         )
     };
-    let file = dw_program(module).filter(user).and_then(|p| files.resolve(&p))?;
+    let file = dw_program(module)
+        .filter(user)
+        .and_then(|p| files.resolve(&p))?;
     Some((file, true))
 }
 

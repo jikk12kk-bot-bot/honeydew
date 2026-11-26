@@ -2280,7 +2280,12 @@ fn a_pads_rack_takes_its_module_with_the_channels_rack_empty() {
         rack.modules.push(m);
         song.join_rack(split);
     }
-    let pads: Vec<_> = song.channels[1].rack.modules.iter().map(|m| m.pad).collect();
+    let pads: Vec<_> = song.channels[1]
+        .rack
+        .modules
+        .iter()
+        .map(|m| m.pad)
+        .collect();
     assert_eq!(pads, [None, Some(1)]);
 }
 

@@ -1239,7 +1239,13 @@ fn the_rotate_items_keep_the_menu_open() {
 fn clone_copies_the_row_below_and_selects_it() {
     let mut rig = Rig::new(pattern());
     rig.menu(1, 0, 3);
-    assert_eq!(rig.actions, [StepAction::Clone { pad: 1, steps: true }]);
+    assert_eq!(
+        rig.actions,
+        [StepAction::Clone {
+            pad: 1,
+            steps: true
+        }]
+    );
     assert_eq!(
         rig.hits(),
         on(&[(0, 0), (3, 2), (1, 4), (2, 4), (1, 12), (2, 12)])
@@ -1252,7 +1258,13 @@ fn clone_copies_the_row_below_and_selects_it() {
 fn clone_empty_adds_an_empty_row_below_and_selects_it() {
     let mut rig = Rig::new(pattern());
     rig.menu(1, 0, 4);
-    assert_eq!(rig.actions, [StepAction::Clone { pad: 1, steps: false }]);
+    assert_eq!(
+        rig.actions,
+        [StepAction::Clone {
+            pad: 1,
+            steps: false
+        }]
+    );
     assert_eq!(rig.hits(), on(&[(0, 0), (3, 2), (1, 4), (1, 12)]));
     assert_eq!(rig.view.selected, 2);
 }
@@ -2270,7 +2282,13 @@ fn a_drag_on_a_hit_moves_the_selection_by_whole_steps_and_rows_in_one_undo_step(
 fn a_rows_clone_or_delete_clears_the_selection() {
     // The Hat gets a hit on 4 too, so the shifted rows still hold a hit in the selected cell.
     let cases = [
-        (StepAction::Clone { pad: 1, steps: true }, (2, 4)),
+        (
+            StepAction::Clone {
+                pad: 1,
+                steps: true,
+            },
+            (2, 4),
+        ),
         (StepAction::Delete { pad: 1 }, (1, 4)),
     ];
     for (action, (row, step)) in cases {
