@@ -5,7 +5,9 @@ use eframe::egui;
 use super::{AppCtx, Nav, Overlay, preset_picker};
 use crate::plugins;
 use crate::song::ModuleInstance;
-use crate::ui::modules_browser::{BrowserAction, InsertAt, ModulesBrowser, add_module, add_plugin};
+use crate::ui::modules_browser::{
+    BrowserAction, InsertAt, Marks, ModulesBrowser, add_module, add_plugin,
+};
 use crate::ui::rack::{Held, Outcome, PresetTarget, hold_removal, paste, takes};
 
 /// The flash of a `Paste` with nothing on the clipboard that the channel takes.
@@ -40,7 +42,8 @@ pub struct State {
 /// (`PresetTarget::ModulesRack`, `PresetTarget::ModulesInstrument`), whose Back at their root brings the browser back
 /// in place, through `picker` ([`preset_picker::State::back_to_modules`]). The X, a click outside, Escape or the
 /// channel being gone close it. It opens in the ordering the stored `ModuleBrowserOrdering` names, else Category, and
-/// stores what its `Sort` menu picks there at once. A DW Sampler picked loads Close Grand, through `picker`
+/// stores what its `Sort` menu picks there at once; PINNED and RECENT come from the settings, which take their changes
+/// at once too. A DW Sampler picked loads Close Grand, through `picker`
 /// ([`preset_picker::load_close_grand`]).
 pub fn show(
     state: &mut State,
@@ -60,6 +63,10 @@ pub fn show(
             false => ModulesBrowser::default(),
         };
         state.browser.sort = app.settings.module_ordering();
+        state.browser.marks = Marks {
+            pinned: app.settings.pinned_modules.clone(),
+            recent: app.settings.recent_modules.clone(),
+        };
         state.browser.set_scroll(state.scroll);
         state.first = None;
         // An opening starts a browse; Back from a list goes on with it.
@@ -83,6 +90,12 @@ pub fn show(
             // nothing.
             if let Some(sort) = state.browser.sort_picked.take() {
                 app.settings.module_browser_ordering = sort.id();
+            }
+            // PINNED and RECENT are saved as they change.
+            if std::mem::take(&mut state.browser.marks_changed) {
+                let marks = &state.browser.marks;
+                app.settings.pinned_modules.clone_from(&marks.pinned);
+                app.settings.recent_modules.clone_from(&marks.recent);
             }
             action?
         }

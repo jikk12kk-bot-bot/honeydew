@@ -1439,7 +1439,7 @@ impl SettingsTab {
                 s.library_folders.remove(index);
             }
             // What the first run did stays done: the demos are not written over the user's copies at the next start,
-            // and What's New does not show again; the folder shortcuts stay.
+            // and What's New does not show again; the folder shortcuts and the pinned and recent modules stay.
             (Menu::Restore, Some(CONFIRM_YES)) => {
                 *s = Settings {
                     demo_songs_version: s.demo_songs_version,
@@ -1447,6 +1447,9 @@ impl SettingsTab {
                     // The folder shortcuts are the user's places, not settings.
                     folder_shortcuts: std::mem::take(&mut s.folder_shortcuts),
                     hidden_shortcuts: std::mem::take(&mut s.hidden_shortcuts),
+                    // As are the Modules browser's PINNED and RECENT.
+                    pinned_modules: std::mem::take(&mut s.pinned_modules),
+                    recent_modules: std::mem::take(&mut s.recent_modules),
                     ..Settings::default()
                 }
             }
