@@ -1394,8 +1394,8 @@ impl DrumGridView {
             return;
         };
         match *action {
-            StepAction::Clone { pad } => {
-                steps::clone_row(&mut ch.lanes, pad);
+            StepAction::Clone { pad, steps } => {
+                steps::clone_row(&mut ch.lanes, pad, steps);
                 self.current = usize::from(pad) + 1;
                 return;
             }

@@ -293,10 +293,12 @@ impl Song {
 
     /// Channel `channel`'s rack holding rack `pad` alone (a drum pad's own, `None` the channel's), for an editor of a
     /// whole rack ([`Rack::split`]). Returns what [`Self::join_rack`] puts back: the channel's id (an editor may move
-    /// it) and the other modules. `None` without such a channel, or with no other module.
+    /// it) and the other modules. `None` without such a channel, or for the channel's own rack with no other module. A
+    /// pad's rack always splits, even with nothing else in the channel's rack (an empty one): its join makes a module
+    /// added there the pad's.
     pub fn split_rack(&mut self, channel: usize, pad: Option<u32>) -> Option<SplitRack> {
         let ch = self.channels.get_mut(channel)?;
-        if ch.rack.modules.iter().all(|m| m.pad == pad) {
+        if pad.is_none() && ch.rack.modules.iter().all(|m| m.pad.is_none()) {
             return None;
         }
         Some(SplitRack {

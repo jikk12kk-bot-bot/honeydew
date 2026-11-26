@@ -270,10 +270,11 @@ pub enum StepAction {
         pad: u8,
         right: bool,
     },
-    /// Song: the row's hits are copied into a new row below, later rows move down. Kit: the host inserts a copy of
-    /// the pad at `pad + 1`.
+    /// Song: a new row below, with a copy of the row's hits when `steps` (`Clone`; `Clone (empty)` none), later rows
+    /// move down. Kit: the host inserts a copy of the pad at `pad + 1`, its own rack and sends with it.
     Clone {
         pad: u8,
+        steps: bool,
     },
     /// Confirmed. Song: the row's hits go, later rows move up. Kit: the host removes the pad.
     Delete {
@@ -1876,10 +1877,10 @@ impl StepSeqView {
 
     fn apply_to(&mut self, channel: &mut Channel, sig: TimeSig, action: &StepAction) {
         match *action {
-            StepAction::Clone { pad } => {
+            StepAction::Clone { pad, steps } => {
                 // Both row edits move rows, and the selection's cells with them: it goes.
                 self.selection.clear();
-                edit::clone_row(&mut channel.lanes, pad);
+                edit::clone_row(&mut channel.lanes, pad, steps);
                 self.selected = usize::from(pad) + 1;
                 return;
             }
@@ -2142,7 +2143,8 @@ fn pick(
         RowItem::LoadSample => return Some(StepAction::LoadSample { pad }),
         RowItem::LoadDrumset => return Some(StepAction::LoadDrumset),
         RowItem::SaveDrumset => return Some(StepAction::SaveDrumset),
-        RowItem::Clone => return Some(StepAction::Clone { pad }),
+        RowItem::Clone => return Some(StepAction::Clone { pad, steps: true }),
+        RowItem::CloneEmpty => return Some(StepAction::Clone { pad, steps: false }),
         RowItem::ResetMidiNote => return Some(StepAction::SetMidiNote { pad, note: None }),
         RowItem::Fill(every) => return Some(StepAction::Fill { pad, every }),
         RowItem::Clear => return Some(StepAction::Clear { pad }),
@@ -2170,6 +2172,8 @@ enum RowItem {
     LoadDrumset,
     SaveDrumset,
     Clone,
+    /// `Clone (empty)`: as [`Self::Clone`], without the row's hits.
+    CloneEmpty,
     Delete,
     /// Stores no note (−1): picking it returns `StepAction::SetMidiNote { note: None }`. Shows only for a pad with a
     /// stored note (`DrumPads::midi_note`, the kit's `SamplerSlot::midi_note` / `SlotFileState.midi_key`); a pad
@@ -2190,7 +2194,7 @@ enum RowItem {
 /// `Reset MIDI Note` (the pad has a note) and `Set MIDI Note` (it has none) share one row, and the rotations keep
 /// the menu open. The rotations always show: this view is the step-sequencer mode.
 ///
-/// `Clone` needs a free pad, so it is disabled once the rows (the kit's slots, or hits on higher pads) fill the
+/// `Clone` and `Clone (empty)` (the copy without its hits) need a free pad, so they are disabled once the rows (the kit's slots, or hits on higher pads) fill the
 /// [`PAD_COUNT`] pads: the copy goes on the next pad, and past the last one it would sit on no hexagon and could not be
 /// saved (`RSMP` holds 22 pads).
 fn row_menu(rows: usize, midi_note: Option<u8>) -> Vec<PopupItem<RowItem>> {
@@ -2205,6 +2209,7 @@ fn row_menu(rows: usize, midi_note: Option<u8>) -> Vec<PopupItem<RowItem>> {
         item(LoadDrumset, "Load Drumset"),
         item(SaveDrumset, "Save Drumset"),
         off(Clone, "Clone", rows >= PAD_COUNT),
+        off(CloneEmpty, "Clone (empty)", rows >= PAD_COUNT),
         off(Delete, "Delete", rows < 2),
     ];
     kit.extend([

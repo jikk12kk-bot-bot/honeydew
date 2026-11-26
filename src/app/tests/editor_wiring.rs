@@ -500,7 +500,7 @@ fn strip_params_address_their_slot_by_its_id_through_clone_and_delete() {
     let mut rig = drum_rig();
     // Clone the Snare (its copy is pad 2, id 5), then delete the Kick (yes): the others keep their ids.
     rig.row_menu(1, (0, 3));
-    rig.row_menu(0, (0, 4));
+    rig.row_menu(0, (0, 5));
     rig.frame(vec![]);
     rig.click_id(steps("delete").with((0_usize, 1_usize)));
     let ids: Vec<u32> = rig.kit().slots.iter().map(|s| s.file.id).collect();

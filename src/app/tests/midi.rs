@@ -359,11 +359,11 @@ fn set_midi_note_learns_the_next_key_as_one_undo_step_and_the_key_plays(grid: Dr
     let header = rig.ctx.read_response(row(1)).expect("drawn").rect;
     rig.secondary_click(header.center());
     rig.frame(vec![]);
-    // Pad 1 has no note: `Set MIDI Note` is row 5.
+    // Pad 1 has no note: `Set MIDI Note` is row 6.
     rig.click_id(
         egui::Id::new("step_seq")
             .with("row menu")
-            .with((0_usize, 5_usize)),
+            .with((0_usize, 6_usize)),
     );
     rig.take();
     let undos = undo_steps(&mut rig);
