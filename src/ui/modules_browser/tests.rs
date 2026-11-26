@@ -1586,7 +1586,8 @@ fn pinned_and_recent_sit_under_the_actions_in_every_ordering_and_a_search_filter
     // Where no instrument goes, the pinned 3x Osc shows nowhere.
     let fx = rows_with("", Category, Takes::Effects, &marks);
     assert!(!fx.contains(&Row::Item(osc)));
-    assert_eq!(fx[..2], [Row::Section("PINNED"), Row::Item(M(32))]);
+    // Under `Paste` and `Rack Preset`, with no `Instrument` there.
+    assert_eq!(fx[2..4], [Row::Section("PINNED"), Row::Item(M(32))]);
     // A search filters them as any rows.
     let hits = rows_with(M(32).name(), Category, Takes::Instruments, &marks);
     assert_eq!(hits[..2], [Row::Section("PINNED"), Row::Item(M(32))]);
